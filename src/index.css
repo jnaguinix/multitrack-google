@@ -4,12 +4,28 @@
 @layer base {
   :root {
     --font-display: 'Outfit', sans-serif;
-    --font-sans: 'Plus Jakarta Sans', sans-serif;
+    --font-sans: 'Instrument Sans', 'Plus Jakarta Sans', system-ui, sans-serif;
     --font-mono: 'JetBrains Mono', monospace;
+
+    /* LibreTracks Dark Studio Mixer Tokens */
+    --lt-bg: #0e1118;
+    --lt-panel: #151a24;
+    --lt-strip: #171d29;
+    --lt-line: #252d3c;
+    --lt-text: #e9ecf2;
+    --lt-mut: #7f8899;
+    --lt-track: #0a0d13;
+    --lt-meter-bg: #0a0d13;
+    --lt-accent: #2fd0c8;
+    --lt-solo: #ffc233;
+    --lt-mute: #ff5a50;
   }
 
   body {
     font-family: var(--font-sans);
+    background-color: var(--lt-bg);
+    color: var(--lt-text);
+    font-variant-numeric: tabular-nums;
     overflow-x: hidden;
   }
 
@@ -23,7 +39,7 @@
   }
 }
 
-/* Custom sleek studio scrollbars (Light & Dark adaptive) */
+/* Custom sleek studio scrollbars */
 ::-webkit-scrollbar {
   width: 6px;
   height: 6px;
@@ -34,12 +50,355 @@
 }
 
 ::-webkit-scrollbar-thumb {
-  background: rgba(148, 163, 184, 0.45);
+  background: #252d3c;
   border-radius: 3px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(100, 116, 139, 0.7);
+  background: #364156;
 }
 
+/* ============================================================================
+ * LIBRETRACKS REDESIGNED STUDIO MIXER (DARK MODE)
+ * ============================================================================ */
 
+.lt-mixer-surface {
+  background: var(--lt-bg);
+  color: var(--lt-text);
+  font-family: 'Instrument Sans', system-ui, sans-serif;
+  font-variant-numeric: tabular-nums;
+}
+
+.lt-console {
+  display: flex;
+  gap: 12px;
+  padding: 16px 20px 20px;
+  align-items: stretch;
+}
+
+.lt-console.lt-docked {
+  padding: 12px 16px 14px;
+}
+
+.lt-channels {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  padding-bottom: 6px;
+  flex: 1;
+  min-width: 0;
+  scrollbar-width: thin;
+}
+
+.lt-buses {
+  display: flex;
+  gap: 8px;
+  padding-left: 14px;
+  border-left: 2px solid var(--lt-line);
+  flex-shrink: 0;
+}
+
+.lt-strip {
+  width: 86px;
+  flex: none;
+  background: var(--lt-strip);
+  border: 1px solid var(--lt-line);
+  border-radius: 12px;
+  padding: 0 8px 10px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  transition: opacity 0.15s ease, border-color 0.15s ease;
+  user-select: none;
+}
+
+.lt-strip:hover {
+  border-color: #333e52;
+}
+
+.lt-strip.lt-dim {
+  opacity: 0.38;
+}
+
+.lt-strip .lt-cap {
+  height: 4px;
+  align-self: stretch;
+  margin: 0 -8px;
+  border-radius: 11px 11px 0 0;
+  background: var(--c, #2fd0c8);
+}
+
+.lt-strip .lt-name {
+  font-size: 12px;
+  font-weight: 600;
+  text-align: center;
+  width: 100%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-top: 2px;
+  color: var(--lt-text);
+}
+
+.lt-strip .lt-sub {
+  font-size: 10px;
+  color: var(--lt-mut);
+  margin-top: -6px;
+  white-space: nowrap;
+}
+
+/* Rotary Pan Knob */
+.lt-knob {
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  background: var(--lt-panel);
+  border: 1px solid var(--lt-line);
+  position: relative;
+  touch-action: none;
+  cursor: ns-resize;
+  flex-shrink: 0;
+}
+
+.lt-knob:focus-visible,
+.lt-fader:focus-visible {
+  outline: 2px solid var(--lt-accent);
+  outline-offset: 2px;
+}
+
+.lt-knob::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 4px;
+  width: 3px;
+  height: 12px;
+  margin-left: -1.5px;
+  border-radius: 2px;
+  background: var(--lt-text);
+  transform-origin: 50% 15px;
+  transform: rotate(var(--r, 0deg));
+}
+
+.lt-panval {
+  font-size: 11px;
+  color: var(--lt-mut);
+  margin-top: -4px;
+}
+
+/* Fader + Dual Stereo Meter Zone */
+.lt-fx {
+  display: flex;
+  gap: 5px;
+  height: 268px;
+  align-items: stretch;
+}
+
+.lt-docked .lt-fx {
+  height: 184px;
+}
+
+.lt-scale {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  font-size: 9px;
+  color: var(--lt-mut);
+  text-align: right;
+  width: 18px;
+  padding: 0;
+  pointer-events: none;
+}
+
+.lt-fader {
+  position: relative;
+  width: 30px;
+  touch-action: none;
+  cursor: ns-resize;
+}
+
+.lt-fader::before {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 0;
+  bottom: 0;
+  width: 6px;
+  margin-left: -3px;
+  border-radius: 3px;
+  background: var(--lt-track);
+}
+
+.lt-fill {
+  position: absolute;
+  left: 50%;
+  bottom: 0;
+  width: 6px;
+  margin-left: -3px;
+  border-radius: 3px;
+  background: var(--c, #2fd0c8);
+  opacity: 0.88;
+  pointer-events: none;
+}
+
+.lt-handle {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 26px;
+  margin-bottom: -13px;
+  border-radius: 6px;
+  background: var(--lt-panel);
+  border: 1px solid var(--lt-line);
+  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.38);
+  pointer-events: none;
+}
+
+.lt-handle::after {
+  content: "";
+  position: absolute;
+  left: 5px;
+  right: 5px;
+  top: 50%;
+  height: 3px;
+  margin-top: -1.5px;
+  border-radius: 2px;
+  background: var(--c, #2fd0c8);
+}
+
+.lt-meter {
+  position: relative;
+  width: 8px;
+  border-radius: 3px;
+  background: var(--lt-meter-bg);
+  overflow: hidden;
+}
+
+.lt-meter i {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    to top,
+    #2fd07a 0%,
+    #2fd07a 62%,
+    #ffc233 82%,
+    #ff5a50 100%
+  );
+}
+
+.lt-meter s {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  background: var(--lt-meter-bg);
+  height: 100%;
+  text-decoration: none;
+  transition: height 60ms linear;
+}
+
+.lt-db {
+  font-size: 12px;
+  font-weight: 600;
+  background: var(--lt-panel);
+  border: 1px solid var(--lt-line);
+  border-radius: 6px;
+  padding: 3px 0;
+  width: 100%;
+  text-align: center;
+  color: var(--lt-text);
+}
+
+/* Mute / Solo & Bus Route Buttons */
+.lt-ms {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+  width: 100%;
+}
+
+.lt-ms button {
+  border: 1px solid var(--lt-line);
+  background: var(--lt-panel);
+  border-radius: 6px;
+  height: 28px;
+  font-weight: 700;
+  font-size: 12px;
+  color: var(--lt-text);
+  transition: background-color 0.12s ease, border-color 0.12s ease, color 0.12s ease;
+}
+
+.lt-ms button:hover {
+  border-color: #364156;
+}
+
+.lt-ms .lt-m[aria-pressed="true"] {
+  background: var(--lt-mute);
+  border-color: var(--lt-mute);
+  color: #ffffff;
+}
+
+.lt-ms .lt-s[aria-pressed="true"] {
+  background: var(--lt-solo);
+  border-color: var(--lt-solo);
+  color: #241a00;
+}
+
+.lt-route {
+  width: 100%;
+  border: 1px solid var(--lt-line);
+  background: var(--lt-panel);
+  border-radius: 6px;
+  height: 28px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--lt-mut);
+  transition: all 0.12s ease;
+}
+
+.lt-route:hover {
+  color: var(--lt-text);
+  border-color: #364156;
+}
+
+.lt-route[data-bus="cue-click"] {
+  background: color-mix(in srgb, var(--lt-accent) 18%, var(--lt-panel));
+  border-color: var(--lt-accent);
+  color: var(--lt-text);
+}
+
+/* Output Master Buses (Main L/R & Click / Cue) */
+.lt-strip.lt-bus {
+  width: 106px;
+  background: var(--lt-panel);
+  border-width: 2px;
+}
+
+.lt-strip.lt-bus .lt-name {
+  font-size: 13px;
+}
+
+.lt-strip.lt-bus .lt-handle {
+  height: 32px;
+  margin-bottom: -16px;
+}
+
+@media (max-width: 640px) {
+  .lt-console {
+    flex-direction: column;
+    padding: 12px;
+  }
+  .lt-buses {
+    border-left: 0;
+    border-top: 2px solid var(--lt-line);
+    padding: 12px 0 0;
+    justify-content: center;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lt-meter s {
+    transition: none;
+  }
+}

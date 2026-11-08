@@ -6,6 +6,7 @@ import {
   Volume2,
   CornerDownRight,
   Wand2,
+  Sliders,
 } from 'lucide-react';
 import {
   OutputBus,
@@ -21,6 +22,8 @@ interface TimelineArrangerProps {
   transport: TransportState;
   meters: Record<string, TrackMeterReading>;
   isDarkMode: boolean;
+  isDockedMixerOpen?: boolean;
+  onToggleDockedMixer?: () => void;
   onJumpSection: (sectionId: string) => void;
   onSeekSeconds: (seconds: number) => void;
   onToggleTrackMute: (trackId: string) => void;
@@ -207,6 +210,8 @@ export const TimelineArranger: React.FC<TimelineArrangerProps> = ({
   transport,
   meters,
   isDarkMode,
+  isDockedMixerOpen = false,
+  onToggleDockedMixer,
   onJumpSection,
   onSeekSeconds,
   onToggleTrackMute,
@@ -581,6 +586,23 @@ export const TimelineArranger: React.FC<TimelineArrangerProps> = ({
         </div>
 
         <div className="flex items-center gap-3">
+          {onToggleDockedMixer && (
+            <>
+              <button
+                type="button"
+                onClick={onToggleDockedMixer}
+                className={`px-2.5 py-1 rounded-md text-xs font-semibold flex items-center gap-1.5 border transition-colors cursor-pointer ${
+                  isDockedMixerOpen
+                    ? 'bg-cyan-500/20 border-cyan-500/60 text-cyan-300'
+                    : 'bg-slate-900 border-slate-700 text-slate-300 hover:bg-slate-800'
+                }`}
+              >
+                <Sliders className="w-3.5 h-3.5 text-cyan-400" />
+                <span>{isDockedMixerOpen ? 'Ocultar Mixer Acoplado' : 'Acoplar Consola Mixer'}</span>
+              </button>
+              <span aria-hidden="true">·</span>
+            </>
+          )}
           <button
             type="button"
             onClick={onAutoDetectSections}

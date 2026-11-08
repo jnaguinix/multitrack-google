@@ -263,11 +263,25 @@ export class LibreTracksAudioEngine {
   }
 
   private applyMixerRouting() {
-    if (!this.project || !this.ctx || !this.masterGainNode || !this.mainBusPan || !this.cueBusPan) {
+    if (
+      !this.project ||
+      !this.ctx ||
+      !this.masterGainNode ||
+      !this.mainBusGain ||
+      !this.cueBusGain ||
+      !this.mainBusPan ||
+      !this.cueBusPan
+    ) {
       return;
     }
 
-    this.masterGainNode.gain.setTargetAtTime(this.project.masterGain, this.ctx.currentTime, 0.015);
+    this.masterGainNode.gain.setTargetAtTime(1.0, this.ctx.currentTime, 0.015);
+    this.mainBusGain.gain.setTargetAtTime(this.project.masterGain, this.ctx.currentTime, 0.015);
+    this.cueBusGain.gain.setTargetAtTime(
+      this.project.cueMasterGain ?? 0.708,
+      this.ctx.currentTime,
+      0.015
+    );
 
     // Split-Mono stage mode routes Click/Cue strictly Left (-1) and Main Tracks strictly Right (+1)
     if (this.project.splitRoutingMode === 'split-mono') {

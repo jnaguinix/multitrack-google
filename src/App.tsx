@@ -75,6 +75,7 @@ export default function App() {
 
   const [activeView, setActiveView] = useState<WorkspaceView>(getInitialViewFromHash);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState<boolean>(false);
+  const [isDockedMixerOpen, setIsDockedMixerOpen] = useState<boolean>(false);
   const [projects, setProjects] = useState<SongProject[]>(DEFAULT_DEMO_PROJECTS);
   const [currentProject, setCurrentProject] = useState<SongProject>(DEFAULT_DEMO_PROJECTS[0]);
   const [transport, setTransport] = useState<TransportState>(INITIAL_TRANSPORT);
@@ -549,10 +550,6 @@ export default function App() {
     updateCurrentProject((p) => ({ ...p, guideCuesEnabled: !p.guideCuesEnabled }));
   };
 
-  const handleToggleGuideVoice = () => {
-    updateCurrentProject((p) => ({ ...p, guideVoiceReadout: !p.guideVoiceReadout }));
-  };
-
   const handleToggleSplitRouting = () => {
     updateCurrentProject((p) => ({
       ...p,
@@ -607,18 +604,19 @@ export default function App() {
   const handleResetMixer = () => {
     updateCurrentProject((p) => ({
       ...p,
-      clickGain: 0.75,
-      guideGain: 0.85,
-      masterGain: 0.95,
+      clickGain: 1.0,
+      guideGain: 1.0,
+      masterGain: 1.0,
+      cueMasterGain: 1.0,
       tracks: p.tracks.map((t) => ({
         ...t,
-        gain: 0.85,
+        gain: 1.0,
         pan: 0,
         muted: false,
         soloed: false,
       })),
     }));
-    showToast('Mezcla restablecida a valores nominales');
+    showToast('Mezcla restablecida a 0.0 dB');
   };
 
   // Section Arrangement Save Handler
@@ -815,32 +813,67 @@ export default function App() {
         )}
 
         {activeView === 'arranger' && (
-          <TimelineArranger
-            project={currentProject}
-            transport={transport}
-            meters={meters.tracks}
-            isDarkMode={true}
-            onJumpSection={handleJumpSection}
-            onSeekSeconds={handleSeekSeconds}
-            onToggleTrackMute={handleToggleTrackMute}
-            onToggleTrackSolo={handleToggleTrackSolo}
-            onChangeTrackGain={handleChangeTrackGain}
-            onChangeTrackPan={handleChangeTrackPan}
-            onChangeTrackBus={handleChangeTrackBus}
-            onDeleteTrack={handleDeleteTrack}
-            onAddStemsToCurrentSong={(files) =>
-              handleInstantImportFiles(files, 'main', 'current-song')
-            }
-            onAutoDetectSections={handleAutoDetectSectionsNow}
-            onOpenImportModal={() => setIsImportModalOpen(true)}
-            onOpenSectionEditor={() => setIsSectionEditorOpen(true)}
-          />
+          <div className="flex-1 flex flex-col overflow-hidden">
+            <TimelineArranger
+              project={currentProject}
+              transport={transport}
+              meters={meters.tracks}
+              isDarkMode={true}
+              isDockedMixerOpen={isDockedMixerOpen}
+              onToggleDockedMixer={() => setIsDockedMixerOpen((prev) => !prev)}
+              onJumpSection={handleJumpSection}
+              onSeekSeconds={handleSeekSeconds}
+              onToggleTrackMute={handleToggleTrackMute}
+              onToggleTrackSolo={handleToggleTrackSolo}
+              onChangeTrackGain={handleChangeTrackGain}
+              onChangeTrackPan={handleChangeTrackPan}
+              onChangeTrackBus={handleChangeTrackBus}
+              onDeleteTrack={handleDeleteTrack}
+              onAddStemsToCurrentSong={(files) =>
+                handleInstantImportFiles(files, 'main', 'current-song')
+              }
+              onAutoDetectSections={handleAutoDetectSectionsNow}
+              onOpenImportModal={() => setIsImportModalOpen(true)}
+              onOpenSectionEditor={() => setIsSectionEditorOpen(true)}
+            />
+
+            {isDockedMixerOpen && (
+              <MultitrackMixer
+                project={currentProject}
+                transport={transport}
+                meters={meters}
+                docked={true}
+                onToggleTrackMute={handleToggleTrackMute}
+                onToggleTrackSolo={handleToggleTrackSolo}
+                onChangeTrackGain={handleChangeTrackGain}
+                onChangeTrackPan={handleChangeTrackPan}
+                onChangeTrackBus={handleChangeTrackBus}
+                onChangeClickGain={(gain) =>
+                  updateCurrentProject((p) => ({ ...p, clickGain: gain }))
+                }
+                onToggleClick={handleToggleClick}
+                onChangeGuideGain={(gain) =>
+                  updateCurrentProject((p) => ({ ...p, guideGain: gain }))
+                }
+                onToggleGuide={handleToggleGuide}
+                onChangeMasterGain={(gain) =>
+                  updateCurrentProject((p) => ({ ...p, masterGain: gain }))
+                }
+                onChangeCueMasterGain={(gain) =>
+                  updateCurrentProject((p) => ({ ...p, cueMasterGain: gain }))
+                }
+                onResetMixer={handleResetMixer}
+              />
+            )}
+          </div>
         )}
 
         {activeView === 'mixer' && (
           <MultitrackMixer
             project={currentProject}
+            transport={transport}
             meters={meters}
+            docked={false}
             onToggleTrackMute={handleToggleTrackMute}
             onToggleTrackSolo={handleToggleTrackSolo}
             onChangeTrackGain={handleChangeTrackGain}
@@ -849,17 +882,16 @@ export default function App() {
             onChangeClickGain={(gain) =>
               updateCurrentProject((p) => ({ ...p, clickGain: gain }))
             }
-            onChangeClickSubdivision={(clickSubdivision) =>
-              updateCurrentProject((p) => ({ ...p, clickSubdivision }))
-            }
             onToggleClick={handleToggleClick}
             onChangeGuideGain={(gain) =>
               updateCurrentProject((p) => ({ ...p, guideGain: gain }))
             }
             onToggleGuide={handleToggleGuide}
-            onToggleGuideVoice={handleToggleGuideVoice}
             onChangeMasterGain={(gain) =>
               updateCurrentProject((p) => ({ ...p, masterGain: gain }))
+            }
+            onChangeCueMasterGain={(gain) =>
+              updateCurrentProject((p) => ({ ...p, cueMasterGain: gain }))
             }
             onResetMixer={handleResetMixer}
           />

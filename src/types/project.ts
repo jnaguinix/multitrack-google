@@ -54,6 +54,7 @@ export interface SongProject {
   guideVoiceReadout: boolean; // Web Speech / Synth tone guide readout 1 bar before section change
   guideGain: number;
   masterGain: number;
+  cueMasterGain?: number; // Master output gain for the Click / Cue bus ("Auriculares banda")
   pitchSemitones: number; // -6 to +6 semitones detune for stems
   sections: SongSection[];
   tracks: TrackChannel[];

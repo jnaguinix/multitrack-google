@@ -1,418 +1,580 @@
-import React from 'react';
-import { Volume2, Mic, Sliders, RotateCcw } from 'lucide-react';
+import React, { useRef } from 'react';
 import {
   OutputBus,
   SongProject,
   TrackChannel,
   TrackMeterReading,
+  TransportState,
 } from '../types/project';
 
-interface MultitrackMixerProps {
+const MIN_DB = -60;
+const MAX_DB = 6;
+
+export function gainToDb(gain: number): number {
+  if (gain <= 0.001) return -Infinity;
+  const db = 20 * Math.log10(gain);
+  return Math.max(MIN_DB, Math.min(MAX_DB, Math.round(db * 10) / 10));
+}
+
+export function dbToGain(db: number): number {
+  if (!isFinite(db) || db <= MIN_DB) return 0;
+  const clamped = Math.max(MIN_DB, Math.min(MAX_DB, db));
+  return Number(Math.pow(10, clamped / 20).toFixed(4));
+}
+
+function posFromDb(db: number): number {
+  if (!isFinite(db) || db <= MIN_DB) return 0;
+  return Math.max(0, Math.min(1, (db - MIN_DB) / (MAX_DB - MIN_DB)));
+}
+
+function dbFromPos(pos: number): number {
+  if (pos <= 0.004) return -Infinity;
+  return MIN_DB + pos * (MAX_DB - MIN_DB);
+}
+
+function formatDb(db: number): string {
+  if (!isFinite(db)) return '-∞ dB';
+  return `${db > 0 ? '+' : ''}${db.toFixed(1)} dB`;
+}
+
+function formatPanLabel(panPercent: number): string {
+  const rounded = Math.round(panPercent);
+  if (rounded === 0) return 'C';
+  return rounded < 0 ? `L${-rounded}` : `R${rounded}`;
+}
+
+/* ============================================================================
+ * ROTARY PAN KNOB COMPONENT (.lt-knob)
+ * ============================================================================ */
+
+interface PanKnobProps {
+  name: string;
+  pan: number; // -1.0 to +1.0
+  onChangePan: (nextPan: number) => void;
+}
+
+const PanKnob: React.FC<PanKnobProps> = ({ name, pan, onChangePan }) => {
+  const dragRef = useRef<{ startY: number; startPanPct: number } | null>(null);
+  const panPct = Math.max(-100, Math.min(100, Math.round(pan * 100)));
+  const angleDeg = panPct * 1.35;
+
+  const setFromPct = (pct: number) => {
+    const clamped = Math.max(-100, Math.min(100, Math.round(pct)));
+    onChangePan(Number((clamped / 100).toFixed(2)));
+  };
+
+  return (
+    <>
+      <div
+        role="slider"
+        tabIndex={0}
+        aria-label={`Pan ${name}`}
+        aria-valuemin={-100}
+        aria-valuemax={100}
+        aria-valuenow={panPct}
+        style={{ '--r': `${angleDeg}deg` } as React.CSSProperties}
+        className="lt-knob"
+        onPointerDown={(e) => {
+          e.currentTarget.setPointerCapture(e.pointerId);
+          dragRef.current = { startY: e.clientY, startPanPct: panPct };
+        }}
+        onPointerMove={(e) => {
+          if (e.currentTarget.hasPointerCapture(e.pointerId) && dragRef.current) {
+            const deltaY = dragRef.current.startY - e.clientY;
+            setFromPct(dragRef.current.startPanPct + deltaY * 1.5);
+          }
+        }}
+        onPointerUp={(e) => {
+          if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+            e.currentTarget.releasePointerCapture(e.pointerId);
+          }
+          dragRef.current = null;
+        }}
+        onDoubleClick={() => onChangePan(0)}
+        onKeyDown={(e) => {
+          if (e.key === 'ArrowUp' || e.key === 'ArrowRight') {
+            e.preventDefault();
+            setFromPct(panPct + 5);
+          } else if (e.key === 'ArrowDown' || e.key === 'ArrowLeft') {
+            e.preventDefault();
+            setFromPct(panPct - 5);
+          }
+        }}
+        title="Arrastra verticalmente para panear · Doble clic para centrar (C)"
+      />
+      <div className="lt-panval">{formatPanLabel(panPct)}</div>
+    </>
+  );
+};
+
+/* ============================================================================
+ * VERTICAL STUDIO FADER + DUAL STEREO METERS (.lt-fx)
+ * ============================================================================ */
+
+interface StudioFaderProps {
+  name: string;
+  gain: number;
+  levelL: number; // 0..1
+  levelR: number; // 0..1
+  onChangeGain: (nextGain: number) => void;
+}
+
+const StudioFader: React.FC<StudioFaderProps> = ({
+  name,
+  gain,
+  levelL,
+  levelR,
+  onChangeGain,
+}) => {
+  const faderRef = useRef<HTMLDivElement | null>(null);
+  const db = gainToDb(gain);
+  const posPct = posFromDb(db) * 100;
+
+  const updateFromClientY = (clientY: number) => {
+    const el = faderRef.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    const rawPos = 1 - (clientY - rect.top) / rect.height;
+    const clampedPos = Math.max(0, Math.min(1, rawPos));
+    let nextDb = dbFromPos(clampedPos);
+    if (isFinite(nextDb) && Math.abs(nextDb) < 1.1) {
+      nextDb = 0;
+    }
+    const roundedDb = !isFinite(nextDb) ? -Infinity : Math.round(nextDb * 10) / 10;
+    onChangeGain(dbToGain(roundedDb));
+  };
+
+  const maskHeightL = `${Math.max(0, Math.min(100, (1 - levelL) * 100)).toFixed(1)}%`;
+  const maskHeightR = `${Math.max(0, Math.min(100, (1 - levelR) * 100)).toFixed(1)}%`;
+
+  return (
+    <>
+      <div className="lt-fx">
+        <div className="lt-scale" aria-hidden="true">
+          <span>+6</span>
+          <span>0</span>
+          <span>-10</span>
+          <span>-20</span>
+          <span>-40</span>
+          <span>-∞</span>
+        </div>
+
+        <div
+          ref={faderRef}
+          role="slider"
+          tabIndex={0}
+          aria-label={`Nivel ${name}`}
+          aria-valuetext={formatDb(db)}
+          className="lt-fader"
+          onPointerDown={(e) => {
+            e.currentTarget.setPointerCapture(e.pointerId);
+            updateFromClientY(e.clientY);
+          }}
+          onPointerMove={(e) => {
+            if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+              updateFromClientY(e.clientY);
+            }
+          }}
+          onPointerUp={(e) => {
+            if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+              e.currentTarget.releasePointerCapture(e.pointerId);
+            }
+          }}
+          onDoubleClick={() => onChangeGain(1.0)} // 0.0 dB
+          onKeyDown={(e) => {
+            const currentDb = isFinite(db) ? db : MIN_DB;
+            if (e.key === 'ArrowUp') {
+              e.preventDefault();
+              onChangeGain(dbToGain(Math.min(MAX_DB, currentDb + 0.5)));
+            } else if (e.key === 'ArrowDown') {
+              e.preventDefault();
+              onChangeGain(dbToGain(Math.max(MIN_DB, currentDb - 0.5)));
+            }
+          }}
+          title="Arrastra para ajustar dB · Doble clic para 0.0 dB"
+        >
+          <div className="lt-fill" style={{ height: `${posPct}%` }} />
+          <div className="lt-handle" style={{ bottom: `${posPct}%` }} />
+        </div>
+
+        <div className="lt-meter" aria-hidden="true">
+          <i />
+          <s style={{ height: maskHeightL }} />
+        </div>
+        <div className="lt-meter" aria-hidden="true">
+          <i />
+          <s style={{ height: maskHeightR }} />
+        </div>
+      </div>
+
+      <div className="lt-db">{formatDb(db)}</div>
+    </>
+  );
+};
+
+/* ============================================================================
+ * REDESIGNED STUDIO MIXER CONSOLE
+ * ============================================================================ */
+
+export interface MultitrackMixerProps {
   project: SongProject;
+  transport: TransportState;
   meters: {
     tracks: Record<string, TrackMeterReading>;
     master: TrackMeterReading;
   };
+  docked?: boolean;
   onToggleTrackMute: (trackId: string) => void;
   onToggleTrackSolo: (trackId: string) => void;
   onChangeTrackGain: (trackId: string, gain: number) => void;
   onChangeTrackPan: (trackId: string, pan: number) => void;
   onChangeTrackBus: (trackId: string, bus: OutputBus) => void;
   onChangeClickGain: (gain: number) => void;
-  onChangeClickSubdivision: (sub: 1 | 2) => void;
   onToggleClick: () => void;
   onChangeGuideGain: (gain: number) => void;
   onToggleGuide: () => void;
-  onToggleGuideVoice: () => void;
   onChangeMasterGain: (gain: number) => void;
+  onChangeCueMasterGain: (gain: number) => void;
   onResetMixer: () => void;
-}
-
-function gainToDbString(gain: number): string {
-  if (gain <= 0.001) return '-∞ dB';
-  const db = 20 * Math.log10(gain);
-  return `${db >= 0 ? '+' : ''}${db.toFixed(1)} dB`;
-}
-
-function formatPan(pan: number): string {
-  if (Math.abs(pan) < 0.03) return 'C';
-  if (pan < 0) return `L${Math.round(Math.abs(pan) * 100)}`;
-  return `R${Math.round(pan * 100)}`;
 }
 
 export const MultitrackMixer: React.FC<MultitrackMixerProps> = ({
   project,
+  transport,
   meters,
+  docked = false,
   onToggleTrackMute,
   onToggleTrackSolo,
   onChangeTrackGain,
   onChangeTrackPan,
   onChangeTrackBus,
   onChangeClickGain,
-  onChangeClickSubdivision,
   onToggleClick,
   onChangeGuideGain,
   onToggleGuide,
-  onToggleGuideVoice,
   onChangeMasterGain,
+  onChangeCueMasterGain,
   onResetMixer,
 }) => {
   const anySolo = project.tracks.some((t) => t.soloed);
+  const activeSection = project.sections.find((s) => s.id === transport.activeSectionId);
+
+  // Compute stereo L/R levels per track and bus
+  let maxMainBusLevel = 0;
+  let maxCueBusLevel = 0;
+
+  const computeStereoPair = (rms: number, pan: number) => {
+    const leftWeight = pan <= 0 ? 1 : Math.max(0.2, 1 - pan * 0.85);
+    const rightWeight = pan >= 0 ? 1 : Math.max(0.2, 1 + pan * 0.85);
+    const l = Math.min(1, rms * leftWeight);
+    const r = Math.min(1, rms * rightWeight);
+    return { l, r };
+  };
+
+  for (const trk of project.tracks) {
+    const isAudible = anySolo ? trk.soloed && !trk.muted : !trk.muted;
+    const rawRms = isAudible && transport.isPlaying ? meters.tracks[trk.id]?.rms || 0 : 0;
+    if (rawRms > 0) {
+      if (trk.bus === 'main' || trk.bus === 'both') {
+        maxMainBusLevel = Math.max(maxMainBusLevel, rawRms);
+      }
+      if (trk.bus === 'cue-click' || trk.bus === 'both') {
+        maxCueBusLevel = Math.max(maxCueBusLevel, rawRms);
+      }
+    }
+  }
+
+  // Synthesize realistic beat-synced meter pulse for the built-in Click & Cues strips when playing
+  const beatDecay = transport.isPlaying
+    ? Math.max(0, 1 - transport.beatProgress * 2.6)
+    : 0;
+  const clickStripLevel =
+    transport.isPlaying && project.clickEnabled && !anySolo
+      ? posFromDb(gainToDb(project.clickGain)) *
+        (transport.currentBeat === 1 ? 0.86 : 0.65) *
+        beatDecay
+      : 0;
+  const guideStripLevel =
+    transport.isPlaying && project.guideCuesEnabled && !anySolo
+      ? posFromDb(gainToDb(project.guideGain)) *
+        (transport.queuedSectionId ? 0.78 : 0.25) *
+        beatDecay
+      : 0;
+
+  maxCueBusLevel = Math.max(maxCueBusLevel, clickStripLevel, guideStripLevel);
+
+  const cueMasterGain = project.cueMasterGain ?? 0.708; // -3.0 dB default
+  const mainBusOutLevel = transport.isPlaying
+    ? Math.min(1, Math.max(maxMainBusLevel, meters.master.rms) * posFromDb(gainToDb(project.masterGain)) * 1.05)
+    : 0;
+  const cueBusOutLevel = transport.isPlaying
+    ? Math.min(1, maxCueBusLevel * posFromDb(gainToDb(cueMasterGain)) * 1.05)
+    : 0;
+
+  // Check if user already imported custom tracks named "Click" or "Cues"
+  const hasCustomClickTrack = project.tracks.some((t) => t.role === 'click');
+  const hasCustomGuideTrack = project.tracks.some((t) => t.role === 'guide');
 
   return (
-    <div className="flex-1 flex flex-col bg-slate-50 dark:bg-[#0B0F17] p-6 overflow-y-auto select-none">
-      {/* Mixer Console Header */}
-      <div className="flex flex-wrap items-center justify-between gap-4 mb-6">
-        <div>
-          <h1 className="font-display text-xl font-bold text-slate-900 dark:text-slate-100">
-            Consola Mezcladora Multipista y Buses de Escenario
-          </h1>
-          <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-            Ajusta niveles individuales, paneo estéreo y ruteo independiente hacia Main L/R o Bus de Monitoreo (Click & Cues).
-          </p>
+    <div
+      className={`lt-mixer-surface flex flex-col select-none ${
+        docked
+          ? 'border-t-2 border-[#252d3c]'
+          : 'flex-1 overflow-y-auto'
+      }`}
+    >
+      {/* Mixer Top Sub-bar (shown in full Mixer view, or compact header when docked) */}
+      <div className="flex items-center justify-between gap-4 px-5 py-2.5 border-b border-[#252d3c] bg-[#151a24]/70">
+        <div className="flex items-center gap-3">
+          <div className="text-xl font-semibold tracking-tight text-[#e9ecf2] font-mono tabular-nums">
+            {String(transport.currentBar).padStart(3, '0')}
+            <small className="text-xs font-medium text-[#7f8899] ml-2 font-sans">
+              {activeSection ? activeSection.name : 'Listo'}
+            </small>
+          </div>
+          {!docked && (
+            <span className="text-xs text-[#7f8899] hidden sm:inline">
+              · Doble clic en fader = 0.0 dB · Doble clic en knob = Centrar (C)
+            </span>
+          )}
         </div>
 
         <button
           type="button"
           onClick={onResetMixer}
-          className="px-3.5 py-2 rounded-lg bg-white dark:bg-slate-900 hover:bg-slate-100 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-800 text-xs font-medium text-slate-700 dark:text-slate-300 flex items-center gap-1.5 transition-colors cursor-pointer"
+          className="text-xs font-medium text-[#7f8899] hover:text-[#e9ecf2] underline underline-offset-3 cursor-pointer"
         >
-          <RotateCcw className="w-3.5 h-3.5" />
-          <span>Restablecer Mezcla Nominal (0 dB)</span>
+          Restablecer mezcla a 0 dB
         </button>
       </div>
 
-      {/* Horizontal Scrollable Console Strips */}
-      <div className="flex-1 flex items-stretch gap-3 overflow-x-auto pb-2">
-        {/* Track Channel Strips */}
-        {project.tracks.map((track: TrackChannel, idx: number) => {
-          const isAudible = anySolo ? track.soloed && !track.muted : !track.muted;
-          const meter = meters.tracks[track.id] || { rms: 0, peak: 0, clipping: false };
+      {/* Main Console Strip Container */}
+      <main className={`lt-console ${docked ? 'lt-docked' : ''}`}>
+        {/* Left: Scrollable Individual Channel Strips (#channels) */}
+        <section className="lt-channels" aria-label="Canales">
+          {project.tracks.map((track: TrackChannel) => {
+            const isDimmed = track.muted || (anySolo && !track.soloed);
+            const rawRms =
+              !isDimmed && transport.isPlaying
+                ? meters.tracks[track.id]?.rms || 0
+                : 0;
+            const stereo = computeStereoPair(rawRms, track.pan);
+            const isCueRoute = track.bus === 'cue-click';
 
-          return (
-            <div
-              key={track.id}
-              className="w-40 shrink-0 bg-white dark:bg-[#111827] border border-slate-200 dark:border-slate-800 rounded-xl p-3.5 flex flex-col justify-between"
-            >
-              {/* Strip Top: Channel Number & Name */}
-              <div>
-                <div className="flex items-center justify-between text-[11px] font-mono tabular-nums text-slate-400 mb-1">
-                  <span>CH {String(idx + 1).padStart(2, '0')}</span>
-                  <span
-                    style={{ backgroundColor: track.color }}
-                    className="w-2.5 h-2.5 rounded-xs"
-                  />
-                </div>
-                <div
-                  className="font-display text-sm font-semibold text-slate-900 dark:text-slate-100 truncate"
-                  title={track.name}
-                >
+            return (
+              <div
+                key={track.id}
+                style={{ '--c': track.color } as React.CSSProperties}
+                className={`lt-strip ${isDimmed ? 'lt-dim' : ''}`}
+              >
+                <div className="lt-cap" />
+                <div className="lt-name" title={track.name}>
                   {track.name}
                 </div>
-              </div>
 
-              {/* Pan Control */}
-              <div className="my-3 bg-slate-50 dark:bg-[#0B0F17] border border-slate-200 dark:border-slate-800/80 rounded-lg p-2">
-                <div className="flex items-center justify-between text-[11px] text-slate-500 dark:text-slate-400 mb-1">
-                  <span>Pan</span>
-                  <span className="font-mono tabular-nums text-slate-800 dark:text-slate-200 font-medium">
-                    {formatPan(track.pan)}
-                  </span>
-                </div>
-                <input
-                  type="range"
-                  aria-label={`Paneo ${track.name}`}
-                  min={-1}
-                  max={1}
-                  step={0.05}
-                  value={track.pan}
-                  onDoubleClick={() => onChangeTrackPan(track.id, 0)}
-                  onChange={(e) => onChangeTrackPan(track.id, Number(e.target.value))}
-                  className="w-full accent-sky-600 dark:accent-cyan-400 h-1.5 bg-slate-200 dark:bg-slate-800 rounded cursor-pointer"
+                <PanKnob
+                  name={track.name}
+                  pan={track.pan}
+                  onChangePan={(nextPan) => onChangeTrackPan(track.id, nextPan)}
                 />
-              </div>
 
-              {/* Vertical Fader + Dual VU Meter Area */}
-              <div className="flex-1 flex items-center justify-center gap-4 my-2 min-h-[180px] bg-slate-50 dark:bg-[#0B0F17] border border-slate-200 dark:border-slate-800/80 rounded-lg p-3">
-                {/* Range Fader */}
-                <div className="h-40 flex items-center justify-center">
-                  <input
-                    type="range"
-                    aria-label={`Fader ${track.name}`}
-                    min={0}
-                    max={1.25}
-                    step={0.01}
-                    value={track.gain}
-                    onChange={(e) => onChangeTrackGain(track.id, Number(e.target.value))}
-                    className="w-36 -rotate-90 accent-sky-600 dark:accent-cyan-400 bg-slate-200 dark:bg-slate-800 h-2 rounded-lg cursor-pointer"
-                  />
-                </div>
+                <StudioFader
+                  name={track.name}
+                  gain={track.gain}
+                  levelL={stereo.l}
+                  levelR={stereo.r}
+                  onChangeGain={(nextGain) => onChangeTrackGain(track.id, nextGain)}
+                />
 
-                {/* Vertical VU Meter Bar with dB Scale */}
-                <div className="h-40 flex items-center gap-1.5">
-                  <div className="w-3 h-full bg-slate-200 dark:bg-slate-900 rounded-xs overflow-hidden flex flex-col justify-end border border-slate-300 dark:border-slate-800">
-                    <div
-                      style={{
-                        height: `${isAudible ? Math.min(100, meter.rms * 100) : 0}%`,
-                      }}
-                      className={`w-full transition-all duration-75 ${
-                        meter.clipping
-                          ? 'bg-red-500'
-                          : meter.rms > 0.78
-                          ? 'bg-amber-500'
-                          : 'bg-emerald-500'
-                      }`}
-                    />
-                  </div>
-                  <div className="h-full flex flex-col justify-between text-[9px] font-mono tabular-nums text-slate-400 dark:text-slate-500">
-                    <span>+2</span>
-                    <span>0</span>
-                    <span>-6</span>
-                    <span>-18</span>
-                    <span>-∞</span>
-                  </div>
-                </div>
-              </div>
-
-              {/* dB Numeric Display */}
-              <div className="text-center font-mono tabular-nums text-xs font-semibold text-slate-800 dark:text-slate-200 bg-slate-50 dark:bg-[#0B0F17] border border-slate-200 dark:border-slate-800 py-1 rounded mb-2.5">
-                {gainToDbString(track.gain)}
-              </div>
-
-              {/* Mute / Solo / Output Bus Controls */}
-              <div className="space-y-2">
-                <div className="grid grid-cols-2 gap-1.5">
+                <div className="lt-ms">
                   <button
                     type="button"
+                    className="lt-m"
+                    aria-pressed={track.muted}
+                    aria-label={`Mute ${track.name}`}
                     onClick={() => onToggleTrackMute(track.id)}
-                    className={`py-1.5 rounded text-xs font-mono font-bold transition-colors cursor-pointer ${
-                      track.muted
-                        ? 'bg-red-600 text-white'
-                        : 'bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700'
-                    }`}
                   >
-                    MUTE
+                    M
                   </button>
                   <button
                     type="button"
+                    className="lt-s"
+                    aria-pressed={track.soloed}
+                    aria-label={`Solo ${track.name}`}
                     onClick={() => onToggleTrackSolo(track.id)}
-                    className={`py-1.5 rounded text-xs font-mono font-bold transition-colors cursor-pointer ${
-                      track.soloed
-                        ? 'bg-amber-400 text-slate-950'
-                        : 'bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700'
-                    }`}
                   >
-                    SOLO
+                    S
                   </button>
                 </div>
 
-                <div>
-                  <label className="block text-[10px] text-slate-500 dark:text-slate-400 mb-1">
-                    Bus de Salida
-                  </label>
-                  <select
-                    value={track.bus}
-                    onChange={(e) =>
-                      onChangeTrackBus(track.id, e.target.value as OutputBus)
-                    }
-                    className="w-full bg-slate-50 dark:bg-[#0B0F17] border border-slate-200 dark:border-slate-800 rounded px-2 py-1 text-xs text-slate-800 dark:text-slate-200 focus:outline-none focus:border-sky-500 cursor-pointer"
-                  >
-                    <option value="main">Main L/R</option>
-                    <option value="cue-click">Click / Cue Bus</option>
-                    <option value="both">Main + Cue</option>
-                  </select>
-                </div>
+                <button
+                  type="button"
+                  className="lt-route"
+                  data-bus={isCueRoute ? 'cue-click' : 'main'}
+                  onClick={() =>
+                    onChangeTrackBus(
+                      track.id,
+                      isCueRoute ? 'main' : 'cue-click'
+                    )
+                  }
+                  title="Alternar envío a Main L/R o Click / Cue"
+                >
+                  {isCueRoute ? 'Click / Cue' : 'Main L/R'}
+                </button>
               </div>
-            </div>
-          );
-        })}
+            );
+          })}
 
-        {/* Divider between Tracks and Dedicated Stage Buses */}
-        <div className="w-px bg-slate-200 dark:bg-slate-800 mx-1 shrink-0" />
-
-        {/* Dedicated CLICK & METRONOME Bus Strip */}
-        <div className="w-44 shrink-0 bg-white dark:bg-[#111827] border border-sky-300 dark:border-cyan-500/30 rounded-xl p-3.5 flex flex-col justify-between">
-          <div>
-            <div className="flex items-center justify-between text-[11px] font-mono text-sky-600 dark:text-cyan-400 mb-1">
-              <span>BUS AUX 01</span>
-              <Volume2 className="w-3.5 h-3.5" />
-            </div>
-            <div className="font-display text-sm font-semibold text-slate-900 dark:text-slate-100">
-              Click / Metrónomo
-            </div>
-          </div>
-
-          <div className="my-3 bg-slate-50 dark:bg-[#0B0F17] border border-slate-200 dark:border-slate-800 rounded-lg p-2">
-            <div className="text-[11px] text-slate-500 dark:text-slate-400 mb-1.5">Subdivisión</div>
-            <div className="grid grid-cols-2 gap-1">
-              <button
-                type="button"
-                onClick={() => onChangeClickSubdivision(1)}
-                className={`py-1 rounded text-xs font-mono font-medium cursor-pointer ${
-                  project.clickSubdivision === 1
-                    ? 'bg-sky-600 dark:bg-cyan-500/20 text-white dark:text-cyan-300'
-                    : 'bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-400 border border-slate-200 dark:border-transparent'
-                }`}
-              >
-                1/4 Negra
-              </button>
-              <button
-                type="button"
-                onClick={() => onChangeClickSubdivision(2)}
-                className={`py-1 rounded text-xs font-mono font-medium cursor-pointer ${
-                  project.clickSubdivision === 2
-                    ? 'bg-sky-600 dark:bg-cyan-500/20 text-white dark:text-cyan-300'
-                    : 'bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-400 border border-slate-200 dark:border-transparent'
-                }`}
-              >
-                1/8 Corchea
-              </button>
-            </div>
-          </div>
-
-          <div className="flex-1 flex items-center justify-center my-2 min-h-[180px] bg-slate-50 dark:bg-[#0B0F17] border border-slate-200 dark:border-slate-800 rounded-lg p-3">
-            <input
-              type="range"
-              aria-label="Volumen Click"
-              min={0}
-              max={1.25}
-              step={0.01}
-              value={project.clickGain}
-              onChange={(e) => onChangeClickGain(Number(e.target.value))}
-              className="w-36 -rotate-90 accent-sky-600 dark:accent-cyan-400 bg-slate-200 dark:bg-slate-800 h-2 rounded-lg cursor-pointer"
-            />
-          </div>
-
-          <div className="text-center font-mono tabular-nums text-xs font-semibold text-sky-700 dark:text-cyan-300 bg-slate-50 dark:bg-[#0B0F17] border border-slate-200 dark:border-slate-800 py-1 rounded mb-2.5">
-            {gainToDbString(project.clickGain)}
-          </div>
-
-          <button
-            type="button"
-            onClick={onToggleClick}
-            className={`w-full py-2 rounded-lg text-xs font-semibold transition-colors cursor-pointer ${
-              project.clickEnabled
-                ? 'bg-sky-600 dark:bg-cyan-400 text-white dark:text-slate-950'
-                : 'bg-slate-200 dark:bg-slate-800 text-slate-600 dark:text-slate-400'
-            }`}
-          >
-            {project.clickEnabled ? 'CLICK ACTIVO' : 'CLICK SILENCIADO'}
-          </button>
-        </div>
-
-        {/* Dedicated GUIDE CUES Bus Strip */}
-        <div className="w-44 shrink-0 bg-white dark:bg-[#111827] border border-sky-300 dark:border-cyan-500/30 rounded-xl p-3.5 flex flex-col justify-between">
-          <div>
-            <div className="flex items-center justify-between text-[11px] font-mono text-sky-600 dark:text-cyan-400 mb-1">
-              <span>BUS AUX 02</span>
-              <Mic className="w-3.5 h-3.5" />
-            </div>
-            <div className="font-display text-sm font-semibold text-slate-900 dark:text-slate-100">
-              Guía Vocal / Cues
-            </div>
-          </div>
-
-          <div className="my-3 bg-slate-50 dark:bg-[#0B0F17] border border-slate-200 dark:border-slate-800 rounded-lg p-2">
-            <div className="text-[11px] text-slate-500 dark:text-slate-400 mb-1.5">Anuncio Hablado</div>
-            <button
-              type="button"
-              onClick={onToggleGuideVoice}
-              className={`w-full py-1 rounded text-xs font-medium cursor-pointer border ${
-                project.guideVoiceReadout
-                  ? 'bg-sky-600 dark:bg-cyan-500/20 text-white dark:text-cyan-300 border-sky-600 dark:border-cyan-500/40'
-                  : 'bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-400 border-slate-200 dark:border-slate-800'
-              }`}
+          {/* Built-in Synthesized Click Strip (if no custom Click stem exists) */}
+          {!hasCustomClickTrack && (
+            <div
+              style={{ '--c': '#22d3ee' } as React.CSSProperties}
+              className={`lt-strip ${!project.clickEnabled || anySolo ? 'lt-dim' : ''}`}
             >
-              {project.guideVoiceReadout ? 'Voz + Tono Guía' : 'Solo Tono Estudio'}
-            </button>
-          </div>
+              <div className="lt-cap" />
+              <div className="lt-name" title="Click Metrónomo">
+                Click
+              </div>
 
-          <div className="flex-1 flex items-center justify-center my-2 min-h-[180px] bg-slate-50 dark:bg-[#0B0F17] border border-slate-200 dark:border-slate-800 rounded-lg p-3">
-            <input
-              type="range"
-              aria-label="Volumen Guía"
-              min={0}
-              max={1.25}
-              step={0.01}
-              value={project.guideGain}
-              onChange={(e) => onChangeGuideGain(Number(e.target.value))}
-              className="w-36 -rotate-90 accent-sky-600 dark:accent-cyan-400 bg-slate-200 dark:bg-slate-800 h-2 rounded-lg cursor-pointer"
+              <PanKnob name="Click" pan={0} onChangePan={() => {}} />
+
+              <StudioFader
+                name="Click"
+                gain={project.clickGain}
+                levelL={clickStripLevel}
+                levelR={clickStripLevel * 0.96}
+                onChangeGain={onChangeClickGain}
+              />
+
+              <div className="lt-ms">
+                <button
+                  type="button"
+                  className="lt-m"
+                  aria-pressed={!project.clickEnabled}
+                  aria-label="Mute Click"
+                  onClick={onToggleClick}
+                >
+                  M
+                </button>
+                <button
+                  type="button"
+                  className="lt-s"
+                  aria-pressed={false}
+                  aria-label="Solo Click"
+                  onClick={() => {
+                    if (!project.clickEnabled) onToggleClick();
+                  }}
+                >
+                  S
+                </button>
+              </div>
+
+              <button
+                type="button"
+                className="lt-route"
+                data-bus="cue-click"
+                title="Ruteado al bus Click / Cue"
+              >
+                Click / Cue
+              </button>
+            </div>
+          )}
+
+          {/* Built-in Voice / Tone Guide Cues Strip (if no custom Guide stem exists) */}
+          {!hasCustomGuideTrack && (
+            <div
+              style={{ '--c': '#22d3ee' } as React.CSSProperties}
+              className={`lt-strip ${!project.guideCuesEnabled || anySolo ? 'lt-dim' : ''}`}
+            >
+              <div className="lt-cap" />
+              <div className="lt-name" title="Cues de Guía Vocal">
+                Cues
+              </div>
+
+              <PanKnob name="Cues" pan={0} onChangePan={() => {}} />
+
+              <StudioFader
+                name="Cues"
+                gain={project.guideGain}
+                levelL={guideStripLevel}
+                levelR={guideStripLevel * 0.95}
+                onChangeGain={onChangeGuideGain}
+              />
+
+              <div className="lt-ms">
+                <button
+                  type="button"
+                  className="lt-m"
+                  aria-pressed={!project.guideCuesEnabled}
+                  aria-label="Mute Cues"
+                  onClick={onToggleGuide}
+                >
+                  M
+                </button>
+                <button
+                  type="button"
+                  className="lt-s"
+                  aria-pressed={false}
+                  aria-label="Solo Cues"
+                  onClick={() => {
+                    if (!project.guideCuesEnabled) onToggleGuide();
+                  }}
+                >
+                  S
+                </button>
+              </div>
+
+              <button
+                type="button"
+                className="lt-route"
+                data-bus="cue-click"
+                title="Ruteado al bus Click / Cue"
+              >
+                Click / Cue
+              </button>
+            </div>
+          )}
+        </section>
+
+        {/* Right: Master Output Buses (#buses — Main L/R & Click / Cue) */}
+        <section className="lt-buses" aria-label="Buses de salida">
+          {/* Bus 1: Main L/R ("Salida principal") */}
+          <div
+            style={{ '--c': '#f59e0b' } as React.CSSProperties}
+            className="lt-strip lt-bus"
+          >
+            <div className="lt-cap" />
+            <div className="lt-name">Main L/R</div>
+            <div className="lt-sub">Salida principal</div>
+
+            <StudioFader
+              name="Main L/R"
+              gain={project.masterGain}
+              levelL={mainBusOutLevel}
+              levelR={mainBusOutLevel * 0.95}
+              onChangeGain={onChangeMasterGain}
             />
           </div>
 
-          <div className="text-center font-mono tabular-nums text-xs font-semibold text-sky-700 dark:text-cyan-300 bg-slate-50 dark:bg-[#0B0F17] border border-slate-200 dark:border-slate-800 py-1 rounded mb-2.5">
-            {gainToDbString(project.guideGain)}
-          </div>
-
-          <button
-            type="button"
-            onClick={onToggleGuide}
-            className={`w-full py-2 rounded-lg text-xs font-semibold transition-colors cursor-pointer ${
-              project.guideCuesEnabled
-                ? 'bg-sky-600 dark:bg-cyan-400 text-white dark:text-slate-950'
-                : 'bg-slate-200 dark:bg-slate-800 text-slate-600 dark:text-slate-400'
-            }`}
+          {/* Bus 2: Click / Cue ("Auriculares banda") */}
+          <div
+            style={{ '--c': '#22d3ee' } as React.CSSProperties}
+            className="lt-strip lt-bus"
           >
-            {project.guideCuesEnabled ? 'CUES ACTIVOS' : 'CUES SILENCIADOS'}
-          </button>
-        </div>
+            <div className="lt-cap" />
+            <div className="lt-name">Click / Cue</div>
+            <div className="lt-sub">Auriculares banda</div>
 
-        {/* MASTER L/R Output Bus Strip */}
-        <div className="w-48 shrink-0 bg-white dark:bg-[#111827] border border-emerald-400 dark:border-emerald-500/40 rounded-xl p-3.5 flex flex-col justify-between">
-          <div>
-            <div className="flex items-center justify-between text-[11px] font-mono text-emerald-600 dark:text-emerald-400 mb-1">
-              <span>MASTER BUS</span>
-              <Sliders className="w-3.5 h-3.5" />
-            </div>
-            <div className="font-display text-sm font-bold text-slate-900 dark:text-slate-100">
-              Main Output L/R
-            </div>
+            <StudioFader
+              name="Click / Cue"
+              gain={cueMasterGain}
+              levelL={cueBusOutLevel}
+              levelR={cueBusOutLevel * 0.95}
+              onChangeGain={onChangeCueMasterGain}
+            />
           </div>
-
-          <div className="my-3 bg-slate-50 dark:bg-[#0B0F17] border border-slate-200 dark:border-slate-800 rounded-lg p-2 text-[11px] text-slate-500 dark:text-slate-400">
-            Modo:{' '}
-            <strong className="text-slate-800 dark:text-slate-200">
-              {project.splitRoutingMode === 'split-mono'
-                ? 'Split Mono (L:Cue / R:Main)'
-                : 'Estéreo Completo'}
-            </strong>
-          </div>
-
-          <div className="flex-1 flex items-center justify-center gap-4 my-2 min-h-[180px] bg-slate-50 dark:bg-[#0B0F17] border border-slate-200 dark:border-slate-800 rounded-lg p-3">
-            <div className="h-40 flex items-center justify-center">
-              <input
-                type="range"
-                aria-label="Volumen Master"
-                min={0}
-                max={1.25}
-                step={0.01}
-                value={project.masterGain}
-                onChange={(e) => onChangeMasterGain(Number(e.target.value))}
-                className="w-36 -rotate-90 accent-emerald-600 dark:accent-emerald-400 bg-slate-200 dark:bg-slate-800 h-2 rounded-lg cursor-pointer"
-              />
-            </div>
-
-            <div className="h-40 w-4 bg-slate-200 dark:bg-slate-900 rounded-xs overflow-hidden flex flex-col justify-end border border-slate-300 dark:border-slate-800">
-              <div
-                style={{
-                  height: `${Math.min(100, meters.master.rms * 100)}%`,
-                }}
-                className={`w-full transition-all duration-75 ${
-                  meters.master.clipping
-                    ? 'bg-red-500'
-                    : meters.master.rms > 0.8
-                    ? 'bg-amber-500'
-                    : 'bg-emerald-500'
-                }`}
-              />
-            </div>
-          </div>
-
-          <div className="text-center font-mono tabular-nums text-xs font-bold text-emerald-700 dark:text-emerald-400 bg-slate-50 dark:bg-[#0B0F17] border border-slate-200 dark:border-slate-800 py-1.5 rounded">
-            {gainToDbString(project.masterGain)}
-          </div>
-        </div>
-      </div>
+        </section>
+      </main>
     </div>
   );
 };
