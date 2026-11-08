@@ -10,14 +10,19 @@ import {
   CheckCircle2,
   Repeat,
   FolderPlus,
-  Wand2,
+  Flag,
+  Clock,
+  ListMusic,
+  Play,
 } from 'lucide-react';
 import { OutputBus, SongProject, SongSection, TrackChannel } from '../types/project';
+import { formatMmSs } from './TransportDeck';
 
 interface LibraryViewProps {
   projects: SongProject[];
-  currentProjectId: string;
+  currentProjectId: string | null;
   onSelectProject: (projectId: string) => void;
+  onAddToSetlist: (projectId: string) => void;
   onCreateNewProject: (title: string, artist: string, bpm: number, keySig: string) => void;
   onDeleteProject: (projectId: string) => void;
   onExportJson: (project: SongProject) => void;
@@ -29,6 +34,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
   projects,
   currentProjectId,
   onSelectProject,
+  onAddToSetlist,
   onCreateNewProject,
   onDeleteProject,
   onExportJson,
@@ -54,22 +60,22 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
   };
 
   return (
-    <div className="flex-1 bg-slate-50 dark:bg-[#0B0F17] p-6 overflow-y-auto">
+    <div className="flex-1 bg-[#0B0F17] p-6 overflow-y-auto">
       <div className="max-w-6xl mx-auto space-y-8">
         {/* Header & JSON Project Import/Export */}
-        <div className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-200 dark:border-slate-800 pb-5">
+        <div className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-800 pb-5">
           <div>
-            <h1 className="font-display text-2xl font-bold text-slate-900 dark:text-slate-100">
+            <h1 className="font-display text-2xl font-bold text-slate-100">
               Gestión de Repertorio y Copias de Seguridad
             </h1>
-            <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">
-              Todas tus canciones también están accesibles desde el árbol de repertorio lateral izquierdo.
+            <p className="text-sm text-slate-400 mt-1">
+              Puedes arrastrar tus canciones desde el panel lateral hacia el DAW o al Modo Setlist.
             </p>
           </div>
 
           <div className="flex items-center gap-3">
-            <label className="px-4 py-2 rounded-lg bg-white dark:bg-slate-900 hover:bg-slate-100 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-800 text-xs font-semibold text-slate-700 dark:text-slate-200 flex items-center gap-2 cursor-pointer transition-colors">
-              <Upload className="w-4 h-4 text-sky-600 dark:text-cyan-400" />
+            <label className="px-4 py-2 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 text-xs font-semibold text-slate-200 flex items-center gap-2 cursor-pointer transition-colors">
+              <Upload className="w-4 h-4 text-cyan-400" />
               <span>Importar .libretracks.json</span>
               <input
                 type="file"
@@ -86,7 +92,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
             <button
               type="button"
               onClick={onOpenStemImporter}
-              className="px-4 py-2 rounded-lg bg-sky-600 dark:bg-cyan-400 hover:bg-sky-500 dark:hover:bg-cyan-300 text-white dark:text-slate-950 text-xs font-semibold flex items-center gap-2 cursor-pointer transition-colors"
+              className="px-4 py-2 rounded-lg bg-cyan-400 hover:bg-cyan-300 text-slate-950 text-xs font-semibold flex items-center gap-2 cursor-pointer transition-colors"
             >
               <Music className="w-4 h-4" />
               <span>Importar Nueva Canción o Stems</span>
@@ -98,36 +104,40 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
           {/* Saved Songs List (8 cols) */}
           <div className="lg:col-span-8 space-y-3">
-            <h2 className="font-display text-base font-semibold text-slate-800 dark:text-slate-200">
+            <h2 className="font-display text-base font-semibold text-slate-200">
               Canciones en tu Biblioteca ({projects.length})
             </h2>
 
             <div className="space-y-3">
               {projects.map((proj) => {
                 const isCurrent = proj.id === currentProjectId;
+                const durSec =
+                  proj.durationSec || ((proj.totalBars || 24) * 4 * 60) / (proj.bpm || 120);
                 return (
                   <div
                     key={proj.id}
                     className={`p-4 rounded-xl border transition-colors flex flex-wrap items-center justify-between gap-4 ${
                       isCurrent
-                        ? 'bg-white dark:bg-[#111827] border-sky-500 dark:border-cyan-500/60'
-                        : 'bg-white/80 dark:bg-[#111827]/70 border-slate-200 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-700'
+                        ? 'bg-[#111827] border-cyan-500/60'
+                        : 'bg-[#111827]/70 border-slate-800 hover:border-slate-700'
                     }`}
                   >
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-2">
-                        <h3 className="font-display text-base font-bold text-slate-900 dark:text-slate-100 truncate">
+                        <h3 className="font-display text-base font-bold text-slate-100 truncate">
                           {proj.title}
                         </h3>
                         {isCurrent && (
-                          <span className="text-xs font-medium text-sky-600 dark:text-cyan-400 flex items-center gap-1">
-                            <CheckCircle2 className="w-3.5 h-3.5" /> Activo
+                          <span className="text-xs font-medium text-cyan-400 flex items-center gap-1">
+                            <CheckCircle2 className="w-3.5 h-3.5" /> En el DAW
                           </span>
                         )}
                       </div>
 
-                      <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500 dark:text-slate-400 mt-1">
+                      <div className="flex flex-wrap items-center gap-2 text-xs text-slate-400 mt-1">
                         <span>{proj.artist}</span>
+                        <span aria-hidden="true">·</span>
+                        <span className="font-mono tabular-nums">{formatMmSs(durSec)}</span>
                         <span aria-hidden="true">·</span>
                         <span className="font-mono tabular-nums">{proj.bpm} BPM</span>
                         <span aria-hidden="true">·</span>
@@ -138,7 +148,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                         </span>
                         <span aria-hidden="true">·</span>
                         <span className="font-mono tabular-nums">
-                          {proj.sections.length} secciones ({proj.totalBars} comp.)
+                          {proj.sections.length} marcadores
                         </span>
                       </div>
                     </div>
@@ -146,36 +156,43 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                     <div className="flex items-center gap-2 shrink-0">
                       <button
                         type="button"
+                        onClick={() => onAddToSetlist(proj.id)}
+                        className="px-3 py-2 rounded-lg bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 border border-amber-500/40 text-xs font-semibold flex items-center gap-1.5 cursor-pointer transition-colors"
+                      >
+                        <ListMusic className="w-3.5 h-3.5" />
+                        <span>+ Setlist</span>
+                      </button>
+
+                      <button
+                        type="button"
                         onClick={() => onSelectProject(proj.id)}
                         className={`px-3.5 py-2 rounded-lg text-xs font-semibold flex items-center gap-1.5 cursor-pointer transition-colors ${
                           isCurrent
-                            ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border border-emerald-500/40'
-                            : 'bg-sky-600 dark:bg-cyan-400 text-white dark:text-slate-950 hover:bg-sky-500'
+                            ? 'bg-emerald-500/15 text-emerald-300 border border-emerald-500/40'
+                            : 'bg-cyan-400 text-slate-950 hover:bg-cyan-300'
                         }`}
                       >
                         <FolderOpen className="w-3.5 h-3.5" />
-                        <span>{isCurrent ? 'Abierto en Consola' : 'Cargar Canción'}</span>
+                        <span>{isCurrent ? 'Abierto en Consola' : 'Cargar en DAW'}</span>
                       </button>
 
                       <button
                         type="button"
                         onClick={() => onExportJson(proj)}
                         title="Exportar configuración del proyecto en JSON"
-                        className="p-2 rounded-lg bg-slate-100 dark:bg-slate-900 hover:bg-slate-200 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-800 cursor-pointer"
+                        className="p-2 rounded-lg bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-800 cursor-pointer"
                       >
                         <Download className="w-4 h-4" />
                       </button>
 
-                      {projects.length > 1 && (
-                        <button
-                          type="button"
-                          onClick={() => onDeleteProject(proj.id)}
-                          title="Eliminar proyecto"
-                          className="p-2 rounded-lg bg-slate-100 dark:bg-slate-900 hover:bg-red-100 dark:hover:bg-red-500/20 text-slate-500 dark:text-slate-400 hover:text-red-600 dark:hover:text-red-400 border border-slate-200 dark:border-slate-800 cursor-pointer"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
-                      )}
+                      <button
+                        type="button"
+                        onClick={() => onDeleteProject(proj.id)}
+                        title="Eliminar proyecto de la biblioteca"
+                        className="p-2 rounded-lg bg-slate-900 hover:bg-red-500/20 text-slate-400 hover:text-red-400 border border-slate-800 cursor-pointer"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
                     </div>
                   </div>
                 );
@@ -186,17 +203,17 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
           {/* Create New Song Project Card (4 cols) */}
           <form
             onSubmit={handleCreate}
-            className="lg:col-span-4 bg-white dark:bg-[#111827] border border-slate-200 dark:border-slate-800 rounded-xl p-5 space-y-4"
+            className="lg:col-span-4 bg-[#111827] border border-slate-800 rounded-xl p-5 space-y-4"
           >
-            <h2 className="font-display text-base font-bold text-slate-900 dark:text-slate-100">
+            <h2 className="font-display text-base font-bold text-slate-100">
               Crear Nueva Canción Multipista
             </h2>
-            <p className="text-xs text-slate-500 dark:text-slate-400">
-              Inicia una sesión con estructura base o suelta directamente tus archivos de audio para crearla automáticamente.
+            <p className="text-xs text-slate-400">
+              Inicia una sesión vacía o suelta directamente tus archivos de audio para crearla.
             </p>
 
             <div>
-              <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
+              <label className="block text-xs font-medium text-slate-300 mb-1">
                 Título de la Canción
               </label>
               <input
@@ -205,12 +222,12 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                 placeholder="Ej. Amanecer Eléctrico (Live)"
                 value={newTitle}
                 onChange={(e) => setNewTitle(e.target.value)}
-                className="w-full bg-slate-50 dark:bg-[#0B0F17] border border-slate-200 dark:border-slate-800 rounded-lg px-3 py-2 text-sm text-slate-900 dark:text-slate-100 focus:outline-none focus:border-sky-500"
+                className="w-full bg-[#0B0F17] border border-slate-800 rounded-lg px-3 py-2 text-sm text-slate-100 focus:outline-none focus:border-cyan-500"
               />
             </div>
 
             <div>
-              <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
+              <label className="block text-xs font-medium text-slate-300 mb-1">
                 Artista / Ensamble
               </label>
               <input
@@ -218,13 +235,13 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                 placeholder="Ej. Banda Principal"
                 value={newArtist}
                 onChange={(e) => setNewArtist(e.target.value)}
-                className="w-full bg-slate-50 dark:bg-[#0B0F17] border border-slate-200 dark:border-slate-800 rounded-lg px-3 py-2 text-sm text-slate-900 dark:text-slate-100 focus:outline-none focus:border-sky-500"
+                className="w-full bg-[#0B0F17] border border-slate-800 rounded-lg px-3 py-2 text-sm text-slate-100 focus:outline-none focus:border-cyan-500"
               />
             </div>
 
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
+                <label className="block text-xs font-medium text-slate-300 mb-1">
                   Tempo (BPM)
                 </label>
                 <input
@@ -233,31 +250,144 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                   max={220}
                   value={newBpm}
                   onChange={(e) => setNewBpm(Number(e.target.value))}
-                  className="w-full bg-slate-50 dark:bg-[#0B0F17] border border-slate-200 dark:border-slate-800 rounded-lg px-3 py-2 text-sm font-mono tabular-nums text-slate-900 dark:text-slate-100 focus:outline-none focus:border-sky-500"
+                  className="w-full bg-[#0B0F17] border border-slate-800 rounded-lg px-3 py-2 text-sm font-mono tabular-nums text-slate-100 focus:outline-none focus:border-cyan-500"
                 />
               </div>
 
               <div>
-                <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
+                <label className="block text-xs font-medium text-slate-300 mb-1">
                   Tonalidad
                 </label>
                 <input
                   type="text"
                   value={newKey}
                   onChange={(e) => setNewKey(e.target.value)}
-                  className="w-full bg-slate-50 dark:bg-[#0B0F17] border border-slate-200 dark:border-slate-800 rounded-lg px-3 py-2 text-sm text-slate-900 dark:text-slate-100 focus:outline-none focus:border-sky-500"
+                  className="w-full bg-[#0B0F17] border border-slate-800 rounded-lg px-3 py-2 text-sm text-slate-100 focus:outline-none focus:border-cyan-500"
                 />
               </div>
             </div>
 
             <button
               type="submit"
-              className="w-full py-2.5 bg-sky-600 dark:bg-cyan-400 hover:bg-sky-500 dark:hover:bg-cyan-300 text-white dark:text-slate-950 font-semibold text-xs rounded-lg flex items-center justify-center gap-1.5 cursor-pointer transition-colors"
+              className="w-full py-2.5 bg-cyan-400 hover:bg-cyan-300 text-slate-950 font-semibold text-xs rounded-lg flex items-center justify-center gap-1.5 cursor-pointer transition-colors"
             >
               <Plus className="w-4 h-4" />
               <span>Crear Proyecto y Abrir Consola</span>
             </button>
           </form>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+/* ============================================================================
+ * REPERTOIRE SONG SELECTION CONFIRMATION MODAL
+ * ============================================================================ */
+
+interface ConfirmSongActionModalProps {
+  song: SongProject | null;
+  currentSongId: string | null;
+  isInSetlist: boolean;
+  onClose: () => void;
+  onConfirmLoadInDaw: (songId: string) => void;
+  onConfirmAddToSetlist: (songId: string) => void;
+}
+
+export const ConfirmSongActionModal: React.FC<ConfirmSongActionModalProps> = ({
+  song,
+  currentSongId,
+  isInSetlist,
+  onClose,
+  onConfirmLoadInDaw,
+  onConfirmAddToSetlist,
+}) => {
+  if (!song) return null;
+
+  const isAlreadyInDaw = song.id === currentSongId;
+  const durSec =
+    song.durationSec || ((song.totalBars || 24) * 4 * 60) / (song.bpm || 120);
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-xs flex items-center justify-center p-4">
+      <div className="bg-[#111827] border border-slate-800 rounded-2xl max-w-md w-full p-6 space-y-5 shadow-2xl">
+        <div className="flex items-start justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-cyan-500/15 border border-cyan-500/30 flex items-center justify-center shrink-0">
+              <Music className="w-5 h-5 text-cyan-400" />
+            </div>
+            <div>
+              <h2 className="font-display text-base font-bold text-slate-100">
+                {song.title}
+              </h2>
+              <p className="text-xs text-slate-400">
+                {song.artist} · {formatMmSs(durSec)} · {song.bpm} BPM · {song.keySignature}
+              </p>
+            </div>
+          </div>
+
+          <button
+            type="button"
+            onClick={onClose}
+            className="text-slate-400 hover:text-white p-1 cursor-pointer"
+          >
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        <div className="bg-[#0B0F17] border border-slate-800 rounded-xl p-3.5 text-xs text-slate-300 space-y-1">
+          <div className="flex items-center justify-between">
+            <span className="text-slate-400">Pistas multipista incluidas:</span>
+            <span className="font-mono font-bold text-cyan-300">
+              {song.tracks.length} stems
+            </span>
+          </div>
+          <div className="flex items-center justify-between">
+            <span className="text-slate-400">Marcadores de sección:</span>
+            <span className="font-mono font-bold text-slate-200">
+              {song.sections.length}
+            </span>
+          </div>
+        </div>
+
+        <p className="text-xs text-slate-400">
+          ¿Confirmas que deseas montar esta canción en el DAW ahora, o prefieres enviarla a la cola del Modo Setlist?
+        </p>
+
+        <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5 pt-1">
+          <button
+            type="button"
+            onClick={() => {
+              onConfirmLoadInDaw(song.id);
+              onClose();
+            }}
+            className="flex-1 py-2.5 px-4 rounded-xl bg-cyan-400 hover:bg-cyan-300 text-slate-950 font-bold text-xs flex items-center justify-center gap-2 cursor-pointer transition-colors"
+          >
+            <Play className="w-3.5 h-3.5 fill-current" />
+            <span>
+              {isAlreadyInDaw ? 'Reiniciar en el DAW' : 'Sí, Cargar en el DAW'}
+            </span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => {
+              onConfirmAddToSetlist(song.id);
+              onClose();
+            }}
+            className="py-2.5 px-4 rounded-xl bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/40 text-amber-300 font-semibold text-xs flex items-center justify-center gap-1.5 cursor-pointer transition-colors"
+          >
+            <ListMusic className="w-3.5 h-3.5" />
+            <span>{isInSetlist ? 'Ver en Setlist' : 'Añadir al Setlist'}</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={onClose}
+            className="py-2.5 px-3.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium cursor-pointer transition-colors"
+          >
+            Cancelar
+          </button>
         </div>
       </div>
     </div>
@@ -291,41 +421,41 @@ export const StemImporterModal: React.FC<StemImporterModalProps> = ({
 
   return (
     <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
-      <div className="bg-white dark:bg-[#111827] border border-slate-200 dark:border-slate-800 rounded-2xl max-w-lg w-full p-6 space-y-5 shadow-xl">
+      <div className="bg-[#111827] border border-slate-800 rounded-2xl max-w-lg w-full p-6 space-y-5 shadow-xl">
         <div className="flex items-center justify-between">
-          <h2 className="font-display text-lg font-bold text-slate-900 dark:text-slate-100">
+          <h2 className="font-display text-lg font-bold text-slate-100">
             Importación Instantánea de Canción o Stems
           </h2>
           <button
             type="button"
             onClick={onClose}
-            className="text-slate-400 hover:text-slate-800 dark:hover:text-white p-1 cursor-pointer"
+            className="text-slate-400 hover:text-white p-1 cursor-pointer"
           >
             <X className="w-5 h-5" />
           </button>
         </div>
 
-        {/* Mode Selection: Create New Song Automatically (Default) vs Add to Current */}
-        <div className="grid grid-cols-2 gap-2 bg-slate-100 dark:bg-[#0B0F17] p-1 rounded-xl border border-slate-200 dark:border-slate-800">
+        {/* Mode Selection: Create New Song vs Add to Current */}
+        <div className="grid grid-cols-2 gap-2 bg-[#0B0F17] p-1 rounded-xl border border-slate-800">
           <button
             type="button"
             onClick={() => setImportMode('new-song')}
             className={`py-2 px-3 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors cursor-pointer ${
               importMode === 'new-song'
-                ? 'bg-white dark:bg-slate-800 text-sky-700 dark:text-cyan-300 shadow-2xs'
-                : 'text-slate-600 dark:text-slate-400'
+                ? 'bg-slate-800 text-cyan-300 shadow-2xs'
+                : 'text-slate-400'
             }`}
           >
-            <Wand2 className="w-3.5 h-3.5" />
-            <span>Crear Canción Nueva (Auto)</span>
+            <Music className="w-3.5 h-3.5" />
+            <span>Crear Canción Nueva</span>
           </button>
           <button
             type="button"
             onClick={() => setImportMode('current-song')}
             className={`py-2 px-3 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors cursor-pointer ${
               importMode === 'current-song'
-                ? 'bg-white dark:bg-slate-800 text-sky-700 dark:text-cyan-300 shadow-2xs'
-                : 'text-slate-600 dark:text-slate-400'
+                ? 'bg-slate-800 text-cyan-300 shadow-2xs'
+                : 'text-slate-400'
             }`}
           >
             <Plus className="w-3.5 h-3.5" />
@@ -333,23 +463,22 @@ export const StemImporterModal: React.FC<StemImporterModalProps> = ({
           </button>
         </div>
 
-        <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed">
-          Selecciona tus pistas (<code className="text-slate-800 dark:text-slate-200">.wav</code>,{' '}
-          <code className="text-slate-800 dark:text-slate-200">.mp3</code>,{' '}
-          <code className="text-slate-800 dark:text-slate-200">.ogg</code>,{' '}
-          <code className="text-slate-800 dark:text-slate-200">.flac</code>,{' '}
-          <code className="text-slate-800 dark:text-slate-200">.m4a</code>). La canción se abrirá{' '}
-          <strong className="text-slate-800 dark:text-slate-200">de inmediato</strong> calculando automáticamente los compases y las secciones musicales.
+        <p className="text-xs text-slate-400 leading-relaxed">
+          Selecciona tus pistas (<code className="text-slate-200">.wav</code>,{' '}
+          <code className="text-slate-200">.mp3</code>,{' '}
+          <code className="text-slate-200">.ogg</code>,{' '}
+          <code className="text-slate-200">.flac</code>,{' '}
+          <code className="text-slate-200">.m4a</code>). La canción se cargará limpia con su duración real en minutos y segundos.
         </p>
 
         <div>
-          <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1.5">
+          <label className="block text-xs font-medium text-slate-300 mb-1.5">
             Bus de Salida Predeterminado
           </label>
           <select
             value={defaultBus}
             onChange={(e) => setDefaultBus(e.target.value as OutputBus)}
-            className="w-full bg-slate-50 dark:bg-[#0B0F17] border border-slate-200 dark:border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-900 dark:text-slate-100 focus:outline-none focus:border-sky-500"
+            className="w-full bg-[#0B0F17] border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-100 focus:outline-none focus:border-cyan-500"
           >
             <option value="main">Main L/R (Pistas Click/Guide van a Cue automáticamente)</option>
             <option value="cue-click">Click / Cue Bus (Solo Monitoreo)</option>
@@ -359,12 +488,12 @@ export const StemImporterModal: React.FC<StemImporterModalProps> = ({
 
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           {/* Multi-file Picker */}
-          <label className="border-2 border-dashed border-slate-300 dark:border-slate-700 hover:border-sky-500 dark:hover:border-cyan-400 rounded-xl p-6 flex flex-col items-center justify-center text-center cursor-pointer transition-colors bg-slate-50 dark:bg-[#0B0F17]/60">
-            <Upload className="w-7 h-7 text-sky-600 dark:text-cyan-400 mb-2" />
-            <span className="text-xs font-bold text-slate-800 dark:text-slate-200">
+          <label className="border-2 border-dashed border-slate-700 hover:border-cyan-400 rounded-xl p-6 flex flex-col items-center justify-center text-center cursor-pointer transition-colors bg-[#0B0F17]/60">
+            <Upload className="w-7 h-7 text-cyan-400 mb-2" />
+            <span className="text-xs font-bold text-slate-200">
               Elegir Archivos de Audio
             </span>
-            <span className="text-[11px] text-slate-500 dark:text-slate-400 mt-1">
+            <span className="text-[11px] text-slate-400 mt-1">
               Selección múltiple (.wav, .mp3...)
             </span>
             <input
@@ -386,13 +515,13 @@ export const StemImporterModal: React.FC<StemImporterModalProps> = ({
           <button
             type="button"
             onClick={() => folderInputRef.current?.click()}
-            className="border-2 border-dashed border-slate-300 dark:border-slate-700 hover:border-sky-500 dark:hover:border-cyan-400 rounded-xl p-6 flex flex-col items-center justify-center text-center cursor-pointer transition-colors bg-slate-50 dark:bg-[#0B0F17]/60"
+            className="border-2 border-dashed border-slate-700 hover:border-cyan-400 rounded-xl p-6 flex flex-col items-center justify-center text-center cursor-pointer transition-colors bg-[#0B0F17]/60"
           >
-            <FolderPlus className="w-7 h-7 text-emerald-600 dark:text-emerald-400 mb-2" />
-            <span className="text-xs font-bold text-slate-800 dark:text-slate-200">
+            <FolderPlus className="w-7 h-7 text-emerald-400 mb-2" />
+            <span className="text-xs font-bold text-slate-200">
               Importar Carpeta Completa
             </span>
-            <span className="text-[11px] text-slate-500 dark:text-slate-400 mt-1">
+            <span className="text-[11px] text-slate-400 mt-1">
               Detecta título y todos los stems
             </span>
           </button>
@@ -419,7 +548,7 @@ export const StemImporterModal: React.FC<StemImporterModalProps> = ({
           <button
             type="button"
             onClick={onClose}
-            className="px-4 py-2 rounded-lg bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-xs font-medium text-slate-700 dark:text-slate-200 cursor-pointer"
+            className="px-4 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs font-medium text-slate-200 cursor-pointer"
           >
             Cerrar
           </button>
@@ -430,58 +559,114 @@ export const StemImporterModal: React.FC<StemImporterModalProps> = ({
 };
 
 /* ============================================================================
- * SECTION ARRANGEMENT EDITOR MODAL
+ * TIME-BASED SECTION MARKER EDITOR MODAL (MM:SS)
  * ============================================================================ */
 
 interface SectionEditorModalProps {
   isOpen: boolean;
   project: SongProject;
+  currentTimeSec: number;
+  totalDurationSec: number;
   onClose: () => void;
-  onSaveSections: (sections: SongSection[], totalBars: number) => void;
+  onSaveSections: (sections: SongSection[]) => void;
 }
 
 const SECTION_COLORS = [
-  '#0891B2',
-  '#2563EB',
-  '#059669',
-  '#D97706',
-  '#7C3AED',
-  '#DB2777',
-  '#DC2626',
+  '#06B6D4',
+  '#3B82F6',
+  '#10B981',
+  '#F59E0B',
+  '#8B5CF6',
+  '#EC4899',
+  '#EF4444',
 ];
+
+const QUICK_SECTION_PRESETS = [
+  { name: 'Intro', code: 'IN', color: '#06B6D4' },
+  { name: 'Verso 1', code: 'V1', color: '#3B82F6' },
+  { name: 'Verso 2', code: 'V2', color: '#3B82F6' },
+  { name: 'Pre-Coro', code: 'PC', color: '#8B5CF6' },
+  { name: 'Coro', code: 'CO', color: '#10B981' },
+  { name: 'Puente', code: 'PU', color: '#F59E0B' },
+  { name: 'Instrumental', code: 'IS', color: '#EC4899' },
+  { name: 'Final', code: 'FI', color: '#EF4444' },
+];
+
+function parseMmSsInput(text: string, fallbackSec: number): number {
+  const clean = text.trim();
+  if (!clean) return fallbackSec;
+  if (clean.includes(':')) {
+    const [mStr, sStr] = clean.split(':');
+    const mins = Number(mStr) || 0;
+    const secs = Number(sStr) || 0;
+    return Math.max(0, mins * 60 + secs);
+  }
+  const num = Number(clean);
+  return Number.isNaN(num) ? fallbackSec : Math.max(0, num);
+}
 
 export const SectionEditorModal: React.FC<SectionEditorModalProps> = ({
   isOpen,
   project,
+  currentTimeSec,
+  totalDurationSec,
   onClose,
   onSaveSections,
 }) => {
+  const safeDuration = Math.max(10, Math.round(totalDurationSec || project.durationSec || 60));
   const [sections, setSections] = useState<SongSection[]>(project.sections);
 
   if (!isOpen) return null;
 
-  const recalculateStartBars = (list: SongSection[]) => {
-    let runningBar = 1;
-    return list.map((sec) => {
-      const updated = { ...sec, startBar: runningBar };
-      runningBar += Math.max(1, sec.lengthBars);
-      return updated;
+  /**
+   * Sorts sections by startTimeSec and ensures each section's endTimeSec connects cleanly
+   * if overlapping or beyond totalDurationSec.
+   */
+  const sortAndRecalculateEndTimes = (list: SongSection[]): SongSection[] => {
+    const sorted = [...list].sort((a, b) => a.startTimeSec - b.startTimeSec);
+    return sorted.map((sec, idx) => {
+      const nextSec = sorted[idx + 1];
+      const defaultEnd = nextSec ? nextSec.startTimeSec : safeDuration;
+      const validEnd =
+        sec.endTimeSec > sec.startTimeSec && sec.endTimeSec <= safeDuration
+          ? sec.endTimeSec
+          : Math.max(sec.startTimeSec + 1, defaultEnd);
+      return {
+        ...sec,
+        startTimeSec: Math.max(0, Math.min(safeDuration - 1, Math.round(sec.startTimeSec))),
+        endTimeSec: Math.max(
+          Math.round(sec.startTimeSec) + 1,
+          Math.min(safeDuration, Math.round(validEnd))
+        ),
+      };
     });
   };
 
-  const handleAddSection = () => {
-    const nextIdx = sections.length + 1;
+  const handleAddPresetAtTime = (
+    preset: { name: string; code: string; color: string },
+    atTimeSec: number
+  ) => {
+    const startSec = Math.max(0, Math.min(safeDuration - 2, Math.round(atTimeSec)));
     const newSec: SongSection = {
-      id: `sec-${Date.now()}`,
-      name: `Sección ${nextIdx}`,
-      code: `S${nextIdx}`,
-      color: SECTION_COLORS[sections.length % SECTION_COLORS.length],
-      startBar: 1,
-      lengthBars: 4,
+      id: `sec-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      name: preset.name,
+      code: preset.code,
+      color: preset.color,
+      startTimeSec: startSec,
+      endTimeSec: Math.min(safeDuration, startSec + 15),
       vampByDefault: false,
-      cueName: `Section ${nextIdx}`,
+      cueName: preset.name,
     };
-    setSections(recalculateStartBars([...sections, newSec]));
+
+    // Update previous section's endTimeSec if it covered this split point
+    const adjusted = sections.map((s) => {
+      if (s.startTimeSec < startSec && s.endTimeSec > startSec) {
+        return { ...s, endTimeSec: startSec };
+      }
+      return s;
+    });
+
+    setSections(sortAndRecalculateEndTimes([...adjusted, newSec]));
   };
 
   const handleUpdateField = (
@@ -489,137 +674,242 @@ export const SectionEditorModal: React.FC<SectionEditorModalProps> = ({
     field: keyof SongSection,
     value: string | number | boolean
   ) => {
-    const updated = sections.map((s) => (s.id === id ? { ...s, [field]: value } : s));
-    setSections(recalculateStartBars(updated));
+    setSections((prev) =>
+       prev.map((s) => (s.id === id ? { ...s, [field]: value } : s))
+    );
   };
 
   const handleRemoveSection = (id: string) => {
-    if (sections.length <= 1) return;
-    setSections(recalculateStartBars(sections.filter((s) => s.id !== id)));
+    setSections((prev) => prev.filter((s) => s.id !== id));
   };
 
   const handleSave = () => {
-    const normalized = recalculateStartBars(sections);
-    const last = normalized[normalized.length - 1];
-    const totalBars = last ? last.startBar + last.lengthBars - 1 : 16;
-    onSaveSections(normalized, totalBars);
+    const clean = sortAndRecalculateEndTimes(sections);
+    onSaveSections(clean);
     onClose();
   };
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
-      <div className="bg-white dark:bg-[#111827] border border-slate-200 dark:border-slate-800 rounded-2xl max-w-2xl w-full p-6 space-y-5 max-h-[88vh] flex flex-col shadow-xl">
+    <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-xs flex items-center justify-center p-4">
+      <div className="bg-[#111827] border border-slate-800 rounded-2xl max-w-3xl w-full p-6 space-y-5 max-h-[90vh] flex flex-col shadow-2xl">
         <div className="flex items-center justify-between">
           <div>
-            <h2 className="font-display text-lg font-bold text-slate-900 dark:text-slate-100">
-              Editor de Estructura de Secciones y Vamps
+            <h2 className="font-display text-lg font-bold text-slate-100">
+              Marcadores de Sección por Tiempo (Minutos y Segundos)
             </h2>
-            <p className="text-xs text-slate-500 dark:text-slate-400">
-              Define los compases de cada sección y cuáles entran en bucle automático (Vamp).
+            <p className="text-xs text-slate-400">
+              Define en qué minuto y segundo (<code className="text-cyan-300">mm:ss</code>) empieza y termina cada parte de la canción.
             </p>
           </div>
           <button
             type="button"
             onClick={onClose}
-            className="text-slate-400 hover:text-slate-800 dark:hover:text-white p-1 cursor-pointer"
+            className="text-slate-400 hover:text-white p-1 cursor-pointer"
           >
             <X className="w-5 h-5" />
           </button>
         </div>
 
-        <div className="flex-1 overflow-y-auto space-y-2.5 pr-1">
-          {sections.map((sec) => (
-            <div
-              key={sec.id}
-              className="bg-slate-50 dark:bg-[#0B0F17] border border-slate-200 dark:border-slate-800 rounded-xl p-3 flex flex-wrap items-center gap-3"
-            >
-              <input
-                type="color"
-                value={sec.color}
-                onChange={(e) => handleUpdateField(sec.id, 'color', e.target.value)}
-                className="w-7 h-7 rounded bg-transparent border-0 cursor-pointer"
-              />
-
-              <input
-                type="text"
-                value={sec.code}
-                maxLength={3}
-                onChange={(e) => handleUpdateField(sec.id, 'code', e.target.value.toUpperCase())}
-                className="w-12 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded px-2 py-1 text-xs font-mono font-bold text-slate-900 dark:text-slate-100 text-center"
-                title="Código corto (ej. IN, V1, CH)"
-              />
-
-              <input
-                type="text"
-                value={sec.name}
-                onChange={(e) => handleUpdateField(sec.id, 'name', e.target.value)}
-                className="flex-1 min-w-[140px] bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded px-2.5 py-1 text-xs text-slate-900 dark:text-slate-100"
-                placeholder="Nombre de sección"
-              />
-
-              <div className="flex items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400">
-                <span>Compases:</span>
-                <input
-                  type="number"
-                  min={1}
-                  max={128}
-                  value={sec.lengthBars}
-                  onChange={(e) =>
-                    handleUpdateField(sec.id, 'lengthBars', Math.max(1, Number(e.target.value)))
-                  }
-                  className="w-14 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded px-2 py-1 text-xs font-mono tabular-nums text-slate-900 dark:text-slate-100 text-right"
-                />
-              </div>
-
-              <button
-                type="button"
-                onClick={() => handleUpdateField(sec.id, 'vampByDefault', !sec.vampByDefault)}
-                className={`px-2.5 py-1 rounded text-xs font-medium flex items-center gap-1 border cursor-pointer ${
-                  sec.vampByDefault
-                    ? 'bg-amber-500/20 border-amber-500 text-amber-800 dark:text-amber-300'
-                    : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 text-slate-500 dark:text-slate-400'
-                }`}
-              >
-                <Repeat className="w-3 h-3" />
-                <span>Auto-Vamp</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => handleRemoveSection(sec.id)}
-                disabled={sections.length <= 1}
-                className="p-1.5 rounded bg-white dark:bg-slate-900 hover:bg-red-100 dark:hover:bg-red-500/20 text-slate-500 hover:text-red-600 dark:hover:text-red-400 disabled:opacity-30 cursor-pointer"
-              >
-                <Trash2 className="w-3.5 h-3.5" />
-              </button>
+        {/* Playhead Quick Insert Box */}
+        <div className="bg-[#0B0F17] border border-slate-800 rounded-xl p-3.5 space-y-2.5">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-2 text-xs text-slate-300">
+              <Flag className="w-4 h-4 text-cyan-400" />
+              <span>
+                Insertar sección en la posición actual del cabezal:{' '}
+                <strong className="font-mono text-cyan-300">
+                  {formatMmSs(currentTimeSec)}
+                </strong>{' '}
+                <span className="text-slate-500">
+                  (Duración total: {formatMmSs(safeDuration)})
+                </span>
+              </span>
             </div>
-          ))}
+          </div>
+
+          <div className="flex flex-wrap items-center gap-1.5">
+            {QUICK_SECTION_PRESETS.map((preset) => (
+              <button
+                key={preset.name}
+                type="button"
+                onClick={() => handleAddPresetAtTime(preset, currentTimeSec)}
+                className="px-2.5 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-700 text-xs font-medium text-slate-200 flex items-center gap-1.5 cursor-pointer transition-colors"
+              >
+                <span
+                  style={{ backgroundColor: preset.color }}
+                  className="w-2 h-2 rounded-full"
+                />
+                <span>+ {preset.name}</span>
+              </button>
+            ))}
+          </div>
         </div>
 
-        <div className="flex items-center justify-between pt-3 border-t border-slate-200 dark:border-slate-800">
-          <button
-            type="button"
-            onClick={handleAddSection}
-            className="px-3.5 py-2 rounded-lg bg-slate-100 dark:bg-slate-900 hover:bg-slate-200 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-800 text-xs font-semibold text-sky-600 dark:text-cyan-400 flex items-center gap-1.5 cursor-pointer"
-          >
-            <Plus className="w-4 h-4" />
-            <span>Añadir Sección</span>
-          </button>
+        {/* Section List in MM:SS */}
+        <div className="flex-1 overflow-y-auto space-y-2 pr-1">
+          {sections.length === 0 ? (
+            <div className="p-8 text-center border border-dashed border-slate-800 rounded-xl text-xs text-slate-400">
+              Esta canción no tiene marcadores de sección. Usa los botones de arriba para añadir un marcador en el segundo actual del cabezal.
+            </div>
+          ) : (
+            sections.map((sec) => (
+              <div
+                key={sec.id}
+                className="bg-[#0B0F17] border border-slate-800 rounded-xl p-3 flex flex-wrap items-center gap-2.5"
+              >
+                <input
+                  type="color"
+                  value={sec.color}
+                  onChange={(e) => handleUpdateField(sec.id, 'color', e.target.value)}
+                  className="w-7 h-7 rounded bg-transparent border-0 cursor-pointer shrink-0"
+                />
+
+                <input
+                  type="text"
+                  value={sec.code}
+                  maxLength={3}
+                  onChange={(e) =>
+                    handleUpdateField(sec.id, 'code', e.target.value.toUpperCase())
+                  }
+                  className="w-12 bg-slate-900 border border-slate-800 rounded px-2 py-1 text-xs font-mono font-bold text-slate-100 text-center"
+                  title="Código corto (ej. IN, V1, CO)"
+                />
+
+                <input
+                  type="text"
+                  value={sec.name}
+                  onChange={(e) => handleUpdateField(sec.id, 'name', e.target.value)}
+                  className="flex-1 min-w-[130px] bg-slate-900 border border-slate-800 rounded px-2.5 py-1 text-xs text-slate-100"
+                  placeholder="Nombre de sección"
+                />
+
+                {/* Start Time MM:SS + Capture Playhead */}
+                <div className="flex items-center gap-1 text-xs text-slate-400">
+                  <span>Inicio:</span>
+                  <input
+                    type="text"
+                    defaultValue={formatMmSs(sec.startTimeSec)}
+                    key={`start-${sec.id}-${sec.startTimeSec}`}
+                    onBlur={(e) => {
+                      const parsed = parseMmSsInput(e.target.value, sec.startTimeSec);
+                      handleUpdateField(sec.id, 'startTimeSec', parsed);
+                    }}
+                    placeholder="00:00"
+                    className="w-15 bg-slate-900 border border-slate-800 rounded px-2 py-1 text-xs font-mono tabular-nums text-cyan-300 text-center"
+                    title="Formato mm:ss (ej. 01:15)"
+                  />
+                  <button
+                    type="button"
+                    onClick={() =>
+                      handleUpdateField(
+                        sec.id,
+                        'startTimeSec',
+                        Math.round(currentTimeSec)
+                      )
+                    }
+                    title={`Fijar inicio en el cabezal actual (${formatMmSs(currentTimeSec)})`}
+                    className="px-1.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-[10px] text-cyan-300 flex items-center gap-1 cursor-pointer"
+                  >
+                    <Clock className="w-3 h-3" />
+                    <span>Cabezal</span>
+                  </button>
+                </div>
+
+                {/* End Time MM:SS */}
+                <div className="flex items-center gap-1 text-xs text-slate-400">
+                  <span>Fin:</span>
+                  <input
+                    type="text"
+                    defaultValue={formatMmSs(sec.endTimeSec)}
+                    key={`end-${sec.id}-${sec.endTimeSec}`}
+                    onBlur={(e) => {
+                      const parsed = parseMmSsInput(e.target.value, sec.endTimeSec);
+                      handleUpdateField(
+                        sec.id,
+                        'endTimeSec',
+                        Math.max(sec.startTimeSec + 1, parsed)
+                      );
+                    }}
+                    placeholder="00:30"
+                    className="w-15 bg-slate-900 border border-slate-800 rounded px-2 py-1 text-xs font-mono tabular-nums text-slate-200 text-center"
+                    title="Formato mm:ss (ej. 01:45)"
+                  />
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() =>
+                    handleUpdateField(sec.id, 'vampByDefault', !sec.vampByDefault)
+                  }
+                  title="Repetir esta sección en bucle automáticamente"
+                  className={`px-2 py-1 rounded text-xs font-medium flex items-center gap-1 border cursor-pointer ${
+                    sec.vampByDefault
+                      ? 'bg-amber-500/20 border-amber-500 text-amber-300'
+                      : 'bg-slate-900 border-slate-800 text-slate-400'
+                  }`}
+                >
+                  <Repeat className="w-3 h-3" />
+                  <span>Loop</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => handleRemoveSection(sec.id)}
+                  title="Eliminar este marcador de sección"
+                  className="p-1.5 rounded bg-slate-900 hover:bg-red-500/20 text-slate-400 hover:text-red-400 cursor-pointer"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            ))
+          )}
+        </div>
+
+        <div className="flex flex-wrap items-center justify-between gap-2 pt-3 border-t border-slate-800">
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() =>
+                handleAddPresetAtTime(
+                  {
+                    name: `Sección ${sections.length + 1}`,
+                    code: `S${sections.length + 1}`,
+                    color: SECTION_COLORS[sections.length % SECTION_COLORS.length],
+                  },
+                  currentTimeSec
+                )
+              }
+              className="px-3.5 py-2 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 text-xs font-semibold text-cyan-400 flex items-center gap-1.5 cursor-pointer"
+            >
+              <Plus className="w-4 h-4" />
+              <span>Añadir en {formatMmSs(currentTimeSec)}</span>
+            </button>
+
+            {sections.length > 0 && (
+              <button
+                type="button"
+                onClick={() => setSections([])}
+                className="px-3 py-2 rounded-lg bg-slate-900 hover:bg-red-500/15 border border-slate-800 text-xs font-medium text-slate-400 hover:text-red-300 cursor-pointer"
+              >
+                Borrar todas
+              </button>
+            )}
+          </div>
 
           <div className="flex items-center gap-2">
             <button
               type="button"
               onClick={onClose}
-              className="px-4 py-2 rounded-lg bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-xs font-medium text-slate-700 dark:text-slate-300 cursor-pointer"
+              className="px-4 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs font-medium text-slate-300 cursor-pointer"
             >
               Cancelar
             </button>
             <button
               type="button"
               onClick={handleSave}
-              className="px-4 py-2 rounded-lg bg-sky-600 dark:bg-cyan-400 hover:bg-sky-500 dark:hover:bg-cyan-300 text-white dark:text-slate-950 text-xs font-semibold cursor-pointer"
+              className="px-4 py-2 rounded-lg bg-cyan-400 hover:bg-cyan-300 text-slate-950 text-xs font-semibold cursor-pointer"
             >
-              Guardar Estructura
+              Guardar Secciones (mm:ss)
             </button>
           </div>
         </div>

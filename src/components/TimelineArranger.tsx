@@ -5,8 +5,8 @@ import {
   Plus,
   Volume2,
   CornerDownRight,
-  Wand2,
   Sliders,
+  Flag,
 } from 'lucide-react';
 import {
   OutputBus,
@@ -16,6 +16,7 @@ import {
   TrackMeterReading,
   TransportState,
 } from '../types/project';
+import { formatMmSs } from './TransportDeck';
 
 interface TimelineArrangerProps {
   project: SongProject;
@@ -33,7 +34,7 @@ interface TimelineArrangerProps {
   onChangeTrackBus: (trackId: string, bus: OutputBus) => void;
   onDeleteTrack: (trackId: string) => void;
   onAddStemsToCurrentSong: (files: FileList) => void;
-  onAutoDetectSections: () => void;
+  onAddMarkerAtPlayhead: () => void;
   onOpenImportModal: () => void;
   onOpenSectionEditor: () => void;
 }
@@ -48,9 +49,8 @@ interface WaveformCanvasProps {
   peaks: number[];
   color: string;
   muted: boolean;
-  isDarkMode: boolean;
   sections: SongSection[];
-  totalBars: number;
+  totalDurationSec: number;
   activeSectionId: string | null;
   queuedSectionId: string | null;
   isVamping: boolean;
@@ -62,9 +62,8 @@ const WaveformCanvas: React.FC<WaveformCanvasProps> = ({
   peaks,
   color,
   muted,
-  isDarkMode,
   sections,
-  totalBars,
+  totalDurationSec,
   activeSectionId,
   queuedSectionId,
   isVamping,
@@ -90,43 +89,42 @@ const WaveformCanvas: React.FC<WaveformCanvasProps> = ({
     ctx.scale(dpr, dpr);
     ctx.clearRect(0, 0, width, height);
 
-    // 1. Draw subtle section region backgrounds
+    const safeTotalSec = Math.max(1, totalDurationSec);
+
+    // 1. Draw time-based section region backgrounds & divider lines
     for (const sec of sections) {
-      const startX = ((sec.startBar - 1) / totalBars) * width;
-      const secW = (sec.lengthBars / totalBars) * width;
+      const startX = (sec.startTimeSec / safeTotalSec) * width;
+      const endX = (sec.endTimeSec / safeTotalSec) * width;
+      const secW = Math.max(2, endX - startX);
       const isActive = sec.id === activeSectionId;
       const isQueued = sec.id === queuedSectionId;
 
       if (isActive && isVamping) {
-        ctx.fillStyle = isDarkMode
-          ? 'rgba(245, 158, 11, 0.11)'
-          : 'rgba(245, 158, 11, 0.14)';
+        ctx.fillStyle = 'rgba(245, 158, 11, 0.12)';
         ctx.fillRect(startX, 0, secW, height);
       } else if (isActive) {
-        ctx.fillStyle = isDarkMode
-          ? 'rgba(16, 185, 129, 0.06)'
-          : 'rgba(16, 185, 129, 0.09)';
+        ctx.fillStyle = 'rgba(16, 185, 129, 0.07)';
         ctx.fillRect(startX, 0, secW, height);
       } else if (isQueued) {
-        ctx.fillStyle = isDarkMode
-          ? 'rgba(245, 158, 11, 0.08)'
-          : 'rgba(245, 158, 11, 0.11)';
+        ctx.fillStyle = 'rgba(245, 158, 11, 0.08)';
         ctx.fillRect(startX, 0, secW, height);
       }
+
+      // Section boundary vertical line
+      ctx.strokeStyle = `${sec.color}66`;
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(startX, 0);
+      ctx.lineTo(startX, height);
+      ctx.stroke();
     }
 
-    // Bar vertical grid lines
-    const barStride = totalBars > 64 ? 4 : 1;
-    for (let b = 1; b <= totalBars; b += barStride) {
-      const x = ((b - 1) / totalBars) * width;
-      const isPhraseBoundary = b % 4 === 1;
-      ctx.strokeStyle = isDarkMode
-        ? isPhraseBoundary
-          ? 'rgba(148, 163, 184, 0.16)'
-          : 'rgba(148, 163, 184, 0.06)'
-        : isPhraseBoundary
-        ? 'rgba(100, 116, 139, 0.22)'
-        : 'rgba(148, 163, 184, 0.12)';
+    // Time grid vertical ticks every 5 or 15 seconds
+    const tickStepSec = safeTotalSec > 180 ? 15 : safeTotalSec > 60 ? 10 : 5;
+    for (let t = tickStepSec; t < safeTotalSec; t += tickStepSec) {
+      const x = (t / safeTotalSec) * width;
+      ctx.strokeStyle =
+        t % 30 === 0 ? 'rgba(148, 163, 184, 0.14)' : 'rgba(148, 163, 184, 0.05)';
       ctx.lineWidth = 1;
       ctx.beginPath();
       ctx.moveTo(x, 0);
@@ -136,9 +134,7 @@ const WaveformCanvas: React.FC<WaveformCanvasProps> = ({
 
     // Center zero-crossing hairline
     const midY = height / 2;
-    ctx.strokeStyle = isDarkMode
-      ? 'rgba(148, 163, 184, 0.12)'
-      : 'rgba(148, 163, 184, 0.25)';
+    ctx.strokeStyle = 'rgba(148, 163, 184, 0.12)';
     ctx.beginPath();
     ctx.moveTo(0, midY);
     ctx.lineTo(width, midY);
@@ -156,20 +152,18 @@ const WaveformCanvas: React.FC<WaveformCanvasProps> = ({
       const halfH = amp * (height * 0.42);
 
       if (muted) {
-        ctx.fillStyle = isDarkMode
-          ? 'rgba(100, 116, 139, 0.30)'
-          : 'rgba(148, 163, 184, 0.45)';
+        ctx.fillStyle = 'rgba(100, 116, 139, 0.30)';
       } else if (x <= playheadX) {
         ctx.fillStyle = color;
       } else {
-        ctx.fillStyle = isDarkMode ? `${color}88` : `${color}99`;
+        ctx.fillStyle = `${color}88`;
       }
 
       ctx.fillRect(x, midY - halfH, barWidth, halfH * 2);
     }
 
     // 3. Draw Playhead Cursor
-    ctx.strokeStyle = isDarkMode ? '#22D3EE' : '#0284C7';
+    ctx.strokeStyle = '#22D3EE';
     ctx.lineWidth = 2;
     ctx.beginPath();
     ctx.moveTo(playheadX, 0);
@@ -181,9 +175,8 @@ const WaveformCanvas: React.FC<WaveformCanvasProps> = ({
     peaks,
     color,
     muted,
-    isDarkMode,
     sections,
-    totalBars,
+    totalDurationSec,
     activeSectionId,
     queuedSectionId,
     isVamping,
@@ -209,7 +202,6 @@ export const TimelineArranger: React.FC<TimelineArrangerProps> = ({
   project,
   transport,
   meters,
-  isDarkMode,
   isDockedMixerOpen = false,
   onToggleDockedMixer,
   onJumpSection,
@@ -220,18 +212,21 @@ export const TimelineArranger: React.FC<TimelineArrangerProps> = ({
   onChangeTrackBus,
   onDeleteTrack,
   onAddStemsToCurrentSong,
-  onAutoDetectSections,
+  onAddMarkerAtPlayhead,
   onOpenImportModal,
   onOpenSectionEditor,
 }) => {
   const addStemInputRef = useRef<HTMLInputElement | null>(null);
 
-  const secPerBar = (60 / project.bpm) * project.beatsPerBar;
+  const secPerBar = (60 / (project.bpm || 120)) * (project.beatsPerBar || 4);
   const totalDurationSec = Math.max(
     1,
-    project.durationSec || project.totalBars * secPerBar
+    transport.totalDurationSec || project.durationSec || project.totalBars * secPerBar
   );
-  const progressRatio = Math.max(0, Math.min(1, transport.currentTimeSec / totalDurationSec));
+  const progressRatio = Math.max(
+    0,
+    Math.min(1, transport.currentTimeSec / totalDurationSec)
+  );
 
   const anySolo = project.tracks.some((t) => t.soloed);
 
@@ -239,85 +234,109 @@ export const TimelineArranger: React.FC<TimelineArrangerProps> = ({
     onSeekSeconds(ratio * totalDurationSec);
   };
 
-  // Determine readable bar ruler step when songs have many bars (e.g. 80+ bars)
-  const barLabelStep = project.totalBars > 80 ? 4 : project.totalBars > 40 ? 2 : 1;
+  // Generate time ruler marks in seconds (mm:ss)
+  const timeRulerStepSec =
+    totalDurationSec > 240
+      ? 30
+      : totalDurationSec > 120
+      ? 15
+      : totalDurationSec > 45
+      ? 10
+      : 5;
+
+  const timeMarks: number[] = [];
+  for (let t = 0; t <= totalDurationSec; t += timeRulerStepSec) {
+    timeMarks.push(t);
+  }
 
   return (
-    <div className="flex-1 flex flex-col bg-slate-50 dark:bg-[#0B0F17] overflow-hidden select-none">
-      {/* Section Jump Matrix Strip (Quick Stage Bar with Keyboard Numbers 1..9) */}
-      <div className="bg-white dark:bg-[#0F1623] border-b border-slate-200 dark:border-slate-800 px-5 py-2 flex items-center justify-between gap-4 overflow-x-auto">
+    <div className="flex-1 flex flex-col bg-[#0B0F17] overflow-hidden select-none">
+      {/* Top Section Markers Bar (Time-based mm:ss + Quick Marker Creation at Playhead) */}
+      <div className="bg-[#0F1623] border-b border-slate-800 px-4 py-2 flex items-center justify-between gap-4 overflow-x-auto">
         <div className="flex items-center gap-2 shrink-0">
-          <span className="text-xs font-medium text-slate-500 dark:text-slate-400">
-            Secciones (1–{Math.min(9, project.sections.length)}):
+          <span className="text-xs font-medium text-slate-400">
+            Marcadores de Sección:
           </span>
-          <div className="flex items-center gap-1.5">
-            {project.sections.map((sec, idx) => {
-              const isActive = sec.id === transport.activeSectionId;
-              const isQueued = sec.id === transport.queuedSectionId;
-              const isVampHere = isActive && transport.isVamping;
 
-              return (
-                <button
-                  key={sec.id}
-                  type="button"
-                  onClick={() => onJumpSection(sec.id)}
-                  className={`min-h-[34px] px-2.5 py-1 rounded-lg text-xs font-medium flex items-center gap-1.5 border transition-all whitespace-nowrap shrink-0 cursor-pointer ${
-                    isQueued
-                      ? 'bg-amber-500/20 border-amber-500 text-amber-800 dark:text-amber-200 font-semibold'
-                      : isVampHere
-                      ? 'bg-amber-500/15 border-amber-500/70 text-amber-800 dark:text-amber-300 font-semibold'
-                      : isActive
-                      ? 'bg-emerald-500/15 border-emerald-500/70 text-emerald-800 dark:text-emerald-300 font-semibold'
-                      : 'bg-slate-100 dark:bg-slate-900/90 border-slate-200 dark:border-slate-800 text-slate-700 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-800'
-                  }`}
-                >
-                  <span className="font-mono tabular-nums text-[10px] text-slate-400">
-                    {idx + 1}.
-                  </span>
-                  <span
-                    style={{ backgroundColor: sec.color }}
-                    className="w-2 h-2 rounded-xs shrink-0"
-                  />
-                  <span>{sec.name}</span>
-                  <span className="font-mono tabular-nums text-[10px] text-slate-400">
-                    c.{sec.startBar}
-                  </span>
-                  {isVampHere && <Repeat className="w-3 h-3 text-amber-600 dark:text-amber-400" />}
-                  {isQueued && (
-                    <span className="font-mono tabular-nums text-[10px] text-amber-700 dark:text-amber-300 font-bold">
-                      ({transport.countdownBeats}p)
+          {project.sections.length === 0 ? (
+            <span className="text-xs text-slate-500 italic">
+              Sin secciones definidas — usa «+ Marcar aquí» mientras reproduces para dividir tu canción en minutos y segundos.
+            </span>
+          ) : (
+            <div className="flex items-center gap-1.5">
+              {project.sections.map((sec, idx) => {
+                const isActive = sec.id === transport.activeSectionId;
+                const isQueued = sec.id === transport.queuedSectionId;
+                const isVampHere = isActive && transport.isVamping;
+
+                return (
+                  <button
+                    key={sec.id}
+                    type="button"
+                    onClick={() => onJumpSection(sec.id)}
+                    className={`min-h-[32px] px-2.5 py-1 rounded-lg text-xs font-medium flex items-center gap-1.5 border transition-all whitespace-nowrap shrink-0 cursor-pointer ${
+                      isQueued
+                        ? 'bg-amber-500/20 border-amber-500 text-amber-200 font-semibold'
+                        : isVampHere
+                        ? 'bg-amber-500/15 border-amber-500/70 text-amber-300 font-semibold'
+                        : isActive
+                        ? 'bg-emerald-500/15 border-emerald-500/70 text-emerald-300 font-semibold'
+                        : 'bg-slate-900/90 border-slate-800 text-slate-300 hover:bg-slate-800'
+                    }`}
+                  >
+                    <span className="font-mono tabular-nums text-[10px] text-slate-400">
+                      {idx + 1}.
                     </span>
-                  )}
-                </button>
-              );
-            })}
-          </div>
+                    <span
+                      style={{ backgroundColor: sec.color }}
+                      className="w-2 h-2 rounded-xs shrink-0"
+                    />
+                    <span>{sec.name}</span>
+                    <span className="font-mono tabular-nums text-[10px] text-slate-400">
+                      {formatMmSs(sec.startTimeSec)}
+                    </span>
+                    {isVampHere && <Repeat className="w-3 h-3 text-amber-400" />}
+                  </button>
+                );
+              })}
+            </div>
+          )}
         </div>
 
-        {/* Live Guide Cue Readout Banner */}
+        {/* Right: Quick Playhead Marker Button + Live Guide Cue Readout */}
         <div className="flex items-center gap-2 shrink-0">
           {transport.lastCueMessage && (
-            <div className="text-xs font-mono tabular-nums text-sky-700 dark:text-cyan-300 bg-sky-50 dark:bg-slate-900 border border-sky-200 dark:border-slate-800 px-2.5 py-1 rounded-md font-semibold">
+            <div className="text-xs font-mono tabular-nums text-cyan-300 bg-slate-900 border border-slate-800 px-2.5 py-1 rounded-md font-semibold">
               {transport.lastCueMessage}
             </div>
           )}
+
+          <button
+            type="button"
+            onClick={onAddMarkerAtPlayhead}
+            title="Añadir una sección en la posición actual del cabezal"
+            className="px-2.5 py-1 rounded-lg bg-cyan-500/15 hover:bg-cyan-500/25 border border-cyan-500/40 text-cyan-300 text-xs font-semibold flex items-center gap-1.5 cursor-pointer"
+          >
+            <Flag className="w-3 h-3 text-cyan-400" />
+            <span>+ Marcar en {formatMmSs(transport.currentTimeSec)}</span>
+          </button>
         </div>
       </div>
 
       {/* Main Multitrack Timeline Viewport */}
       <div className="flex-1 flex flex-col overflow-y-auto">
-        {/* Sticky Timeline Header Row (Track Column Header + Section Blocks + Bar Ruler) */}
-        <div className="sticky top-0 z-20 flex bg-white dark:bg-[#111827] border-b border-slate-200 dark:border-slate-800">
+        {/* Sticky Timeline Header Row (Track Column Header + Section Time Blocks + MM:SS Time Ruler) */}
+        <div className="sticky top-0 z-20 flex bg-[#111827] border-b border-slate-800">
           {/* Left Header matching Track Controls width */}
-          <div className="w-68 shrink-0 px-3.5 py-2 border-r border-slate-200 dark:border-slate-800 flex items-center justify-between">
-            <span className="text-xs font-bold text-slate-700 dark:text-slate-300">
+          <div className="w-68 shrink-0 px-3.5 py-2 border-r border-slate-800 flex items-center justify-between">
+            <span className="text-xs font-bold text-slate-300">
               Pistas ({project.tracks.length})
             </span>
             <div className="flex items-center gap-2">
               <button
                 type="button"
                 onClick={() => addStemInputRef.current?.click()}
-                className="text-xs font-semibold text-sky-600 dark:text-cyan-400 hover:text-sky-500 flex items-center gap-1 cursor-pointer whitespace-nowrap shrink-0"
+                className="text-xs font-semibold text-cyan-400 hover:text-cyan-300 flex items-center gap-1 cursor-pointer whitespace-nowrap shrink-0"
                 title="Añadir archivo de audio a esta canción actual"
               >
                 <Plus className="w-3.5 h-3.5" />
@@ -339,80 +358,96 @@ export const TimelineArranger: React.FC<TimelineArrangerProps> = ({
             </div>
           </div>
 
-          {/* Right Timeline Ruler & Section Arrangement Blocks */}
+          {/* Right Timeline Time Ruler & Section Markers Lane */}
           <div className="flex-1 flex flex-col min-w-[600px]">
-            {/* Section Regions Lane */}
-            <div className="relative h-7 border-b border-slate-200 dark:border-slate-800/80 bg-slate-100 dark:bg-[#0B0F17]">
-              {project.sections.map((sec) => {
-                const leftPct = ((sec.startBar - 1) / project.totalBars) * 100;
-                const widthPct = (sec.lengthBars / project.totalBars) * 100;
-                const isActive = sec.id === transport.activeSectionId;
-                const isQueued = sec.id === transport.queuedSectionId;
+            {/* Section Regions Lane (Positioned by startTimeSec and endTimeSec) */}
+            <div className="relative h-7 border-b border-slate-800/80 bg-[#0B0F17]">
+              {project.sections.length === 0 ? (
+                <div className="h-full px-3 flex items-center justify-between text-[11px] text-slate-500">
+                  <span>
+                    Haz clic en la regla de tiempo para mover el cabezal y pulsa «+ Marcar aquí» para crear secciones en minutos y segundos.
+                  </span>
+                </div>
+              ) : (
+                project.sections.map((sec) => {
+                  const leftPct = Math.max(
+                    0,
+                    Math.min(100, (sec.startTimeSec / totalDurationSec) * 100)
+                  );
+                  const widthPct = Math.max(
+                    1,
+                    Math.min(
+                      100 - leftPct,
+                      ((sec.endTimeSec - sec.startTimeSec) / totalDurationSec) * 100
+                    )
+                  );
+                  const isActive = sec.id === transport.activeSectionId;
+                  const isQueued = sec.id === transport.queuedSectionId;
 
-                return (
-                  <button
-                    key={sec.id}
-                    type="button"
-                    onClick={() => onJumpSection(sec.id)}
-                    title={`Saltar a ${sec.name} (Compás ${sec.startBar}–${sec.startBar + sec.lengthBars - 1})`}
-                    style={{
-                      left: `${leftPct}%`,
-                      width: `${widthPct}%`,
-                    }}
-                    className={`absolute top-0 bottom-0 px-2 border-r border-slate-300 dark:border-slate-800 flex items-center justify-between text-xs font-medium transition-colors overflow-hidden cursor-pointer ${
-                      isQueued
-                        ? 'bg-amber-500/25 text-amber-900 dark:text-amber-200 font-semibold'
-                        : isActive
-                        ? 'bg-emerald-500/20 text-emerald-900 dark:text-emerald-200 font-semibold'
-                        : 'bg-white/90 dark:bg-slate-900/80 text-slate-700 dark:text-slate-300 hover:bg-slate-200/80 dark:hover:bg-slate-800/90'
-                    }`}
-                  >
-                    <span className="truncate font-semibold">{sec.name}</span>
-                    <span className="font-mono tabular-nums text-[10px] opacity-75 shrink-0 ml-1">
-                      {sec.lengthBars}c
-                    </span>
-                  </button>
-                );
-              })}
+                  return (
+                    <button
+                      key={sec.id}
+                      type="button"
+                      onClick={() => onJumpSection(sec.id)}
+                      title={`Saltar a ${sec.name} (${formatMmSs(sec.startTimeSec)} – ${formatMmSs(sec.endTimeSec)})`}
+                      style={{
+                        left: `${leftPct}%`,
+                        width: `${widthPct}%`,
+                      }}
+                      className={`absolute top-0 bottom-0 px-2 border-r border-slate-800 flex items-center justify-between text-xs font-medium transition-colors overflow-hidden cursor-pointer ${
+                        isQueued
+                          ? 'bg-amber-500/25 text-amber-200 font-semibold'
+                          : isActive
+                          ? 'bg-emerald-500/20 text-emerald-200 font-semibold'
+                          : 'bg-slate-900/80 text-slate-300 hover:bg-slate-800/90'
+                      }`}
+                    >
+                      <span className="flex items-center gap-1.5 truncate">
+                        <span
+                          style={{ backgroundColor: sec.color }}
+                          className="w-2 h-2 rounded-xs shrink-0"
+                        />
+                        <span className="truncate font-semibold">{sec.name}</span>
+                      </span>
+                      <span className="font-mono tabular-nums text-[10px] opacity-75 shrink-0 ml-1">
+                        {formatMmSs(sec.startTimeSec)}
+                      </span>
+                    </button>
+                  );
+                })
+              )}
             </div>
 
-            {/* Bar Number Ruler */}
+            {/* Time Ruler (MM:SS) */}
             <div
               onClick={(e) => {
                 const rect = e.currentTarget.getBoundingClientRect();
-                const ratio = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+                const ratio = Math.max(
+                  0,
+                  Math.min(1, (e.clientX - rect.left) / rect.width)
+                );
                 handleSeekByRatio(ratio);
               }}
-              className="relative h-6 bg-white dark:bg-[#111827] cursor-pointer overflow-hidden"
+              title="Haz clic en cualquier punto para mover el cabezal de reproducción"
+              className="relative h-6 bg-[#111827] cursor-pointer overflow-hidden"
             >
-              {Array.from({ length: project.totalBars }).map((_, idx) => {
-                const barNum = idx + 1;
-                if (barNum % barLabelStep !== 1 && barLabelStep > 1 && barNum !== 1) {
-                  return null;
-                }
-                const leftPct = (idx / project.totalBars) * 100;
-                const isCurrentBar = transport.currentBar === barNum;
+              {timeMarks.map((secMark) => {
+                const leftPct = (secMark / totalDurationSec) * 100;
                 return (
                   <div
-                    key={barNum}
+                    key={secMark}
                     style={{ left: `${leftPct}%` }}
-                    className={`absolute top-0 bottom-0 border-l pl-1 flex items-center text-[10px] font-mono tabular-nums ${
-                      isCurrentBar
-                        ? 'border-sky-600 dark:border-cyan-400 text-sky-700 dark:text-cyan-300 font-bold'
-                        : barNum % 4 === 1
-                        ? 'border-slate-300 dark:border-slate-700 text-slate-600 dark:text-slate-300'
-                        : 'border-slate-200 dark:border-slate-800/70 text-slate-400 dark:text-slate-500'
-                    }`}
+                    className="absolute top-0 bottom-0 border-l border-slate-700/80 pl-1 flex items-center text-[10px] font-mono tabular-nums text-slate-400"
                   >
-                    {barNum}
+                    {formatMmSs(secMark)}
                   </div>
                 );
               })}
 
-              {/* Playhead Line on Ruler */}
+              {/* Playhead Line on Time Ruler */}
               <div
                 style={{ left: `${progressRatio * 100}%` }}
-                className="absolute top-0 bottom-0 w-0.5 bg-sky-600 dark:bg-cyan-400 pointer-events-none"
+                className="absolute top-0 bottom-0 w-0.5 bg-cyan-400 pointer-events-none"
               />
             </div>
           </div>
@@ -422,22 +457,22 @@ export const TimelineArranger: React.FC<TimelineArrangerProps> = ({
         {project.tracks.length === 0 ? (
           <div className="flex-1 flex flex-col items-center justify-center p-12 text-center">
             <Volume2 className="w-10 h-10 text-slate-400 mb-3" />
-            <h3 className="font-display text-base font-semibold text-slate-800 dark:text-slate-200 mb-1">
+            <h3 className="font-display text-base font-semibold text-slate-200 mb-1">
               No hay pistas en este proyecto
             </h3>
-            <p className="text-sm text-slate-500 dark:text-slate-400 max-w-md mb-4">
-              Arrastra y suelta tus archivos de audio (.wav, .mp3, .ogg) en cualquier parte de la pantalla o usa el botón de importación.
+            <p className="text-sm text-slate-400 max-w-md mb-4">
+              Arrastra una canción desde el Repertorio izquierdo hacia aquí, o suelta tus archivos de audio (.wav, .mp3, .ogg) desde tu carpeta.
             </p>
             <button
               type="button"
               onClick={onOpenImportModal}
-              className="px-4 py-2 bg-sky-600 dark:bg-cyan-400 hover:bg-sky-500 text-white dark:text-slate-950 font-semibold text-xs rounded-lg cursor-pointer"
+              className="px-4 py-2 bg-cyan-400 hover:bg-cyan-300 text-slate-950 font-semibold text-xs rounded-lg cursor-pointer"
             >
               Importar Archivos de Audio
             </button>
           </div>
         ) : (
-          <div className="divide-y divide-slate-200 dark:divide-slate-800/90">
+          <div className="divide-y divide-slate-800/90">
             {project.tracks.map((track: TrackChannel) => {
               const isAudible = anySolo ? track.soloed && !track.muted : !track.muted;
               const meter = meters[track.id] || { rms: 0, peak: 0, clipping: false };
@@ -445,10 +480,10 @@ export const TimelineArranger: React.FC<TimelineArrangerProps> = ({
               return (
                 <div
                   key={track.id}
-                  className="flex h-19 bg-slate-50/70 dark:bg-[#0B0F17] hover:bg-slate-100/60 dark:hover:bg-[#0E1420] transition-colors"
+                  className="flex h-19 bg-[#0B0F17] hover:bg-[#0E1420] transition-colors"
                 >
                   {/* Left Track Control Strip (272px) */}
-                  <div className="w-68 shrink-0 px-3.5 py-2 border-r border-slate-200 dark:border-slate-800 bg-white dark:bg-[#111827]/95 flex flex-col justify-between">
+                  <div className="w-68 shrink-0 px-3.5 py-2 border-r border-slate-800 bg-[#111827]/95 flex flex-col justify-between">
                     {/* Top Row: Track Name, Mute, Solo, Delete */}
                     <div className="flex items-center justify-between gap-2">
                       <div className="flex items-center gap-2 min-w-0">
@@ -459,8 +494,8 @@ export const TimelineArranger: React.FC<TimelineArrangerProps> = ({
                         <span
                           className={`text-xs font-semibold truncate ${
                             isAudible
-                              ? 'text-slate-900 dark:text-slate-100'
-                              : 'text-slate-400 dark:text-slate-500 line-through'
+                              ? 'text-slate-100'
+                              : 'text-slate-500 line-through'
                           }`}
                           title={track.name}
                         >
@@ -476,7 +511,7 @@ export const TimelineArranger: React.FC<TimelineArrangerProps> = ({
                           className={`w-6 h-5.5 rounded text-[10px] font-mono font-bold transition-colors cursor-pointer ${
                             track.muted
                               ? 'bg-red-600 text-white'
-                              : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100 border border-slate-200 dark:border-transparent'
+                              : 'bg-slate-800 text-slate-400 hover:text-slate-100'
                           }`}
                         >
                           M
@@ -488,7 +523,7 @@ export const TimelineArranger: React.FC<TimelineArrangerProps> = ({
                           className={`w-6 h-5.5 rounded text-[10px] font-mono font-bold transition-colors cursor-pointer ${
                             track.soloed
                               ? 'bg-amber-400 text-slate-950'
-                              : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100 border border-slate-200 dark:border-transparent'
+                              : 'bg-slate-800 text-slate-400 hover:text-slate-100'
                           }`}
                         >
                           S
@@ -497,7 +532,7 @@ export const TimelineArranger: React.FC<TimelineArrangerProps> = ({
                           type="button"
                           onClick={() => onDeleteTrack(track.id)}
                           title="Quitar pista de esta canción"
-                          className="w-6 h-5.5 rounded bg-slate-100 dark:bg-slate-900 hover:bg-red-100 dark:hover:bg-red-500/20 text-slate-400 hover:text-red-600 dark:hover:text-red-400 flex items-center justify-center transition-colors cursor-pointer"
+                          className="w-6 h-5.5 rounded bg-slate-900 hover:bg-red-500/20 text-slate-400 hover:text-red-400 flex items-center justify-center transition-colors cursor-pointer"
                         >
                           <Trash2 className="w-3 h-3" />
                         </button>
@@ -513,10 +548,12 @@ export const TimelineArranger: React.FC<TimelineArrangerProps> = ({
                         max={1.25}
                         step={0.01}
                         value={track.gain}
-                        onChange={(e) => onChangeTrackGain(track.id, Number(e.target.value))}
-                        className="w-22 accent-sky-600 dark:accent-cyan-400 h-1.5 bg-slate-200 dark:bg-slate-800 rounded-lg cursor-pointer"
+                        onChange={(e) =>
+                          onChangeTrackGain(track.id, Number(e.target.value))
+                        }
+                        className="w-22 accent-cyan-400 h-1.5 bg-slate-800 rounded-lg cursor-pointer"
                       />
-                      <span className="font-mono tabular-nums text-[10px] text-slate-500 dark:text-slate-400 w-13 text-right shrink-0">
+                      <span className="font-mono tabular-nums text-[10px] text-slate-400 w-13 text-right shrink-0">
                         {gainToDbText(track.gain)}
                       </span>
 
@@ -526,7 +563,7 @@ export const TimelineArranger: React.FC<TimelineArrangerProps> = ({
                         onChange={(e) =>
                           onChangeTrackBus(track.id, e.target.value as OutputBus)
                         }
-                        className="bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded px-1.5 py-0.5 text-[10px] font-medium text-slate-700 dark:text-slate-300 focus:outline-none focus:border-sky-500 cursor-pointer ml-auto"
+                        className="bg-slate-900 border border-slate-800 rounded px-1.5 py-0.5 text-[10px] font-medium text-slate-300 focus:outline-none focus:border-cyan-500 cursor-pointer ml-auto"
                       >
                         <option value="main">Main</option>
                         <option value="cue-click">Cue</option>
@@ -535,7 +572,7 @@ export const TimelineArranger: React.FC<TimelineArrangerProps> = ({
                     </div>
 
                     {/* Horizontal Mini VU Meter */}
-                    <div className="w-full h-1 bg-slate-200 dark:bg-slate-900 rounded-full overflow-hidden">
+                    <div className="w-full h-1 bg-slate-900 rounded-full overflow-hidden">
                       <div
                         style={{
                           width: `${Math.min(100, meter.rms * 100)}%`,
@@ -557,9 +594,8 @@ export const TimelineArranger: React.FC<TimelineArrangerProps> = ({
                       peaks={track.peaks}
                       color={track.color}
                       muted={!isAudible}
-                      isDarkMode={isDarkMode}
                       sections={project.sections}
-                      totalBars={project.totalBars}
+                      totalDurationSec={totalDurationSec}
                       activeSectionId={transport.activeSectionId}
                       queuedSectionId={transport.queuedSectionId}
                       isVamping={transport.isVamping}
@@ -575,12 +611,12 @@ export const TimelineArranger: React.FC<TimelineArrangerProps> = ({
       </div>
 
       {/* Bottom Compact Live Bus & Arrangement Summary Footer */}
-      <div className="bg-white dark:bg-[#111827] border-t border-slate-200 dark:border-slate-800 px-5 py-2 flex flex-wrap items-center justify-between gap-4 text-xs text-slate-500 dark:text-slate-400">
+      <div className="bg-[#111827] border-t border-slate-800 px-5 py-2 flex flex-wrap items-center justify-between gap-4 text-xs text-slate-400">
         <div className="flex items-center gap-3">
           <span className="flex items-center gap-1.5">
-            <CornerDownRight className="w-3.5 h-3.5 text-sky-600 dark:text-cyan-400" />
+            <CornerDownRight className="w-3.5 h-3.5 text-cyan-400" />
             <span>
-              Suelta una carpeta o grupo de stems en cualquier parte para crear una canción nueva con secciones automáticas.
+              Arrastra canciones desde el Repertorio hacia este DAW para cargarlas, o marca secciones en tiempo real (mm:ss).
             </span>
           </span>
         </div>
@@ -598,26 +634,28 @@ export const TimelineArranger: React.FC<TimelineArrangerProps> = ({
                 }`}
               >
                 <Sliders className="w-3.5 h-3.5 text-cyan-400" />
-                <span>{isDockedMixerOpen ? 'Ocultar Mixer Acoplado' : 'Acoplar Consola Mixer'}</span>
+                <span>
+                  {isDockedMixerOpen ? 'Ocultar Mixer Acoplado' : 'Acoplar Consola Mixer'}
+                </span>
               </button>
               <span aria-hidden="true">·</span>
             </>
           )}
           <button
             type="button"
-            onClick={onAutoDetectSections}
-            className="text-sky-600 dark:text-cyan-400 hover:underline font-medium flex items-center gap-1 cursor-pointer"
+            onClick={onAddMarkerAtPlayhead}
+            className="text-cyan-400 hover:underline font-medium flex items-center gap-1 cursor-pointer"
           >
-            <Wand2 className="w-3.5 h-3.5" />
-            <span>Recalcular Auto-Secciones</span>
+            <Flag className="w-3.5 h-3.5" />
+            <span>+ Marcar Sección ({formatMmSs(transport.currentTimeSec)})</span>
           </button>
           <span aria-hidden="true">·</span>
           <button
             type="button"
             onClick={onOpenSectionEditor}
-            className="text-slate-700 dark:text-slate-300 hover:underline font-medium cursor-pointer"
+            className="text-slate-300 hover:underline font-medium cursor-pointer"
           >
-            Editar Secciones ({project.sections.length})
+            Editar Secciones en mm:ss ({project.sections.length})
           </button>
         </div>
       </div>

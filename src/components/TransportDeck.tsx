@@ -7,82 +7,176 @@ import {
   Volume2,
   Mic,
   Sliders,
-  Plus,
-  Wand2,
+  Flag,
+  SkipBack,
+  SkipForward,
+  ListMusic,
 } from 'lucide-react';
-import { QuantizeMode, SongProject, TransportState } from '../types/project';
+import {
+  QuantizeMode,
+  SetlistTransitionMode,
+  SongProject,
+  TransportState,
+} from '../types/project';
 
 interface TransportDeckProps {
   project: SongProject;
   transport: TransportState;
+  setlistQueue: SongProject[];
+  setlistTransitionMode: SetlistTransitionMode;
   importStatusText: string | null;
   onPlayPause: () => void;
   onStop: () => void;
   onToggleVamp: () => void;
+  onPrevSetlistSong: () => void;
+  onNextSetlistSong: () => void;
+  onChangeSetlistTransitionMode: (mode: SetlistTransitionMode) => void;
   onChangeBpm: (bpm: number) => void;
   onChangePitch: (semitones: number) => void;
   onChangeQuantize: (mode: QuantizeMode) => void;
   onToggleClick: () => void;
   onToggleGuide: () => void;
   onToggleSplitRouting: () => void;
-  onAutoDetectSections: () => void;
+  onAddMarkerAtPlayhead: () => void;
   onOpenSectionEditor: () => void;
 }
 
-function formatTimecode(sec: number): string {
-  const mins = Math.floor(sec / 60);
-  const remSec = Math.floor(sec % 60);
-  const tenths = Math.floor((sec % 1) * 10);
+export function formatTimecode(sec: number): string {
+  const safe = Math.max(0, sec || 0);
+  const mins = Math.floor(safe / 60);
+  const remSec = Math.floor(safe % 60);
+  const tenths = Math.floor((safe % 1) * 10);
   return `${String(mins).padStart(2, '0')}:${String(remSec).padStart(2, '0')}.${tenths}`;
+}
+
+export function formatMmSs(sec: number): string {
+  const safe = Math.max(0, sec || 0);
+  const mins = Math.floor(safe / 60);
+  const remSec = Math.floor(safe % 60);
+  return `${String(mins).padStart(2, '0')}:${String(remSec).padStart(2, '0')}`;
 }
 
 export const TransportDeck: React.FC<TransportDeckProps> = ({
   project,
   transport,
+  setlistQueue,
+  setlistTransitionMode,
   importStatusText,
   onPlayPause,
   onStop,
   onToggleVamp,
+  onPrevSetlistSong,
+  onNextSetlistSong,
+  onChangeSetlistTransitionMode,
   onChangeBpm,
   onChangePitch,
   onChangeQuantize,
   onToggleClick,
   onToggleGuide,
   onToggleSplitRouting,
-  onAutoDetectSections,
+  onAddMarkerAtPlayhead,
   onOpenSectionEditor,
 }) => {
   const activeSection = project.sections.find((s) => s.id === transport.activeSectionId);
   const queuedSection = project.sections.find((s) => s.id === transport.queuedSectionId);
 
+  const currentSetlistIdx = setlistQueue.findIndex((s) => s.id === project.id);
+  const nextSetlistSong =
+    currentSetlistIdx >= 0 && currentSetlistIdx < setlistQueue.length - 1
+      ? setlistQueue[currentSetlistIdx + 1]
+      : null;
+
   const quantizeOptions: { value: QuantizeMode; label: string }[] = [
-    { value: '1-bar', label: '1 Bar' },
-    { value: '2-bars', label: '2 Bars' },
-    { value: 'section-end', label: 'End' },
-    { value: 'immediate', label: 'Now' },
+    { value: 'immediate', label: 'Inmediato' },
+    { value: '1-bar', label: '1 Compás' },
+    { value: 'section-end', label: 'Fin Sec.' },
   ];
 
   return (
     <section
-      aria-label="Controles de Transporte y Compás"
-      className="bg-[#111827] border-b border-slate-800 px-5 py-2.5 flex flex-wrap items-center justify-between gap-3 select-none"
+      aria-label="Controles de Transporte y Setlist"
+      className="bg-[#111827] border-b border-slate-800 px-4 py-2 flex flex-wrap items-center justify-between gap-2.5 select-none"
     >
-      {/* Left: Project identity & Primary Transport Triggers */}
-      <div className="flex items-center gap-3.5">
-        <div className="min-w-[160px] max-w-[220px]">
+      {/* Left: Project identity + Setlist Prev/Next + Transport */}
+      <div className="flex items-center gap-3">
+        <div className="min-w-[145px] max-w-[200px]">
           <div className="font-display text-sm font-bold text-slate-100 truncate">
             {project.title}
           </div>
-          <div className="flex items-center gap-1.5 text-xs text-slate-400 truncate">
+          <div className="flex items-center gap-1.5 text-[11px] text-slate-400 truncate">
             <span>{project.keySignature}</span>
             <span aria-hidden="true">·</span>
-            <span className="font-mono tabular-nums">{project.beatsPerBar}/{project.beatUnit}</span>
+            <span className="font-mono tabular-nums">{project.bpm} BPM</span>
             <span aria-hidden="true">·</span>
-            <span className="font-mono tabular-nums">{project.totalBars} comp.</span>
+            <span className="font-mono tabular-nums">
+              {formatMmSs(transport.totalDurationSec)}
+            </span>
           </div>
         </div>
 
-        <div className="h-7 w-px bg-slate-800 hidden sm:block" />
+        {/* Setlist Live Mini-Controller */}
+        {setlistQueue.length > 0 && (
+          <div className="flex items-center gap-1 bg-[#0B0F17] border border-slate-800 rounded-lg px-2 py-1">
+            <button
+              type="button"
+              onClick={onPrevSetlistSong}
+              disabled={currentSetlistIdx <= 0}
+              title="Canción anterior en el Setlist"
+              className="p-1 rounded hover:bg-slate-800 text-slate-300 disabled:opacity-30 cursor-pointer"
+            >
+              <SkipBack className="w-3.5 h-3.5" />
+            </button>
+
+            <div className="px-1.5 text-center">
+              <div className="text-[10px] font-mono font-bold text-amber-400 flex items-center gap-1">
+                <ListMusic className="w-3 h-3" />
+                <span>
+                  {currentSetlistIdx >= 0
+                    ? `${currentSetlistIdx + 1}/${setlistQueue.length}`
+                    : `Setlist (${setlistQueue.length})`}
+                </span>
+              </div>
+              {nextSetlistSong && (
+                <div
+                  className="text-[9px] text-slate-400 max-w-[95px] truncate"
+                  title={`Siguiente: ${nextSetlistSong.title}`}
+                >
+                  Sig: {nextSetlistSong.title}
+                </div>
+              )}
+            </div>
+
+            <button
+              type="button"
+              onClick={onNextSetlistSong}
+              disabled={
+                currentSetlistIdx === -1
+                  ? setlistQueue.length === 0
+                  : currentSetlistIdx >= setlistQueue.length - 1
+              }
+              title="Siguiente canción en el Setlist"
+              className="p-1 rounded hover:bg-amber-500/20 text-amber-300 disabled:opacity-30 cursor-pointer"
+            >
+              <SkipForward className="w-3.5 h-3.5" />
+            </button>
+
+            <select
+              aria-label="Modo de transición del Setlist"
+              value={setlistTransitionMode}
+              onChange={(e) =>
+                onChangeSetlistTransitionMode(
+                  e.target.value as SetlistTransitionMode
+                )
+              }
+              title="Acción al terminar la canción en el Setlist"
+              className="bg-slate-900 border border-slate-800 rounded px-1.5 py-0.5 text-[10px] text-slate-300 focus:outline-none focus:border-amber-400 cursor-pointer ml-0.5"
+            >
+              <option value="stop">Fin: Parar</option>
+              <option value="cue-next">Fin: Preparar Sig.</option>
+              <option value="auto-play">Fin: Auto-Play Sig.</option>
+            </select>
+          </div>
+        )}
 
         {/* Play/Pause, Stop, Vamp */}
         <div className="flex items-center gap-1.5">
@@ -90,21 +184,25 @@ export const TransportDeck: React.FC<TransportDeckProps> = ({
             type="button"
             onClick={onPlayPause}
             title="Reproducir / Pausar (Barra Espaciadora)"
-            className={`min-h-[38px] px-3.5 py-1.5 rounded-lg font-semibold text-xs flex items-center gap-1.5 transition-all whitespace-nowrap shrink-0 cursor-pointer ${
+            className={`min-h-[36px] px-3.5 py-1.5 rounded-lg font-semibold text-xs flex items-center gap-1.5 transition-all whitespace-nowrap shrink-0 cursor-pointer ${
               transport.isPlaying
                 ? 'bg-emerald-500 text-slate-950 hover:bg-emerald-400'
                 : 'bg-slate-800 text-slate-100 hover:bg-slate-700 border border-slate-700'
             }`}
           >
-            {transport.isPlaying ? <Pause className="w-3.5 h-3.5 fill-current" /> : <Play className="w-3.5 h-3.5 fill-current" />}
+            {transport.isPlaying ? (
+              <Pause className="w-3.5 h-3.5 fill-current" />
+            ) : (
+              <Play className="w-3.5 h-3.5 fill-current" />
+            )}
             <span>{transport.isPlaying ? 'Pause' : 'Play'}</span>
           </button>
 
           <button
             type="button"
             onClick={onStop}
-            title="Detener y volver al inicio"
-            className="min-h-[38px] px-3 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-800 text-xs font-medium flex items-center gap-1.5 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+            title="Detener y volver a 00:00"
+            className="min-h-[36px] px-2.5 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-800 text-xs font-medium flex items-center gap-1.5 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
           >
             <Square className="w-3 h-3 fill-current" />
             <span>Stop</span>
@@ -113,8 +211,8 @@ export const TransportDeck: React.FC<TransportDeckProps> = ({
           <button
             type="button"
             onClick={onToggleVamp}
-            title="Activar/Liberar Bucle de Sección (Tecla V)"
-            className={`min-h-[38px] px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all whitespace-nowrap shrink-0 cursor-pointer border ${
+            title="Activar/Liberar Bucle en la Sección Actual (Tecla V)"
+            className={`min-h-[36px] px-2.5 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all whitespace-nowrap shrink-0 cursor-pointer border ${
               transport.isVamping
                 ? 'bg-amber-500 text-slate-950 border-amber-400'
                 : 'bg-slate-900 text-slate-300 border-slate-800 hover:bg-slate-800'
@@ -126,22 +224,26 @@ export const TransportDeck: React.FC<TransportDeckProps> = ({
         </div>
       </div>
 
-      {/* Center: Studio Digital Clock (BAR : BEAT | Timecode | Section Telemetry) */}
-      <div className="flex items-center gap-3.5 bg-[#0B0F17] border border-slate-800 rounded-lg px-3.5 py-1.5">
-        {/* Bar : Beat Counter */}
-        <div className="flex items-baseline gap-1">
-          <span className="text-[11px] font-medium text-slate-500">Bar</span>
-          <span className="font-mono tabular-nums text-lg font-bold text-slate-100 tracking-tight">
-            {String(transport.currentBar).padStart(3, '0')}
+      {/* Center: Studio Digital Clock (MM:SS.d / Duration | Beat Pulse | Active Section) */}
+      <div className="flex items-center gap-3 bg-[#0B0F17] border border-slate-800 rounded-lg px-3.5 py-1.5">
+        {/* Primary Timecode MM:SS.d */}
+        <div className="flex items-baseline gap-1.5">
+          <span className="font-mono tabular-nums text-lg font-bold text-cyan-400 tracking-tight">
+            {formatTimecode(transport.currentTimeSec)}
           </span>
-          <span className="font-mono text-slate-600">:</span>
-          <span className="font-mono tabular-nums text-lg font-bold text-cyan-400">
-            {transport.currentBeat}
+          <span className="font-mono text-xs text-slate-600">/</span>
+          <span className="font-mono tabular-nums text-xs font-semibold text-slate-400">
+            {formatMmSs(transport.totalDurationSec)}
           </span>
         </div>
 
+        <div className="h-5 w-px bg-slate-800" />
+
         {/* Visual Beat Pulse Bars */}
-        <div className="flex items-center gap-1" aria-label={`Pulso ${transport.currentBeat} de ${project.beatsPerBar}`}>
+        <div
+          className="flex items-center gap-1"
+          aria-label={`Pulso ${transport.currentBeat} de ${project.beatsPerBar}`}
+        >
           {Array.from({ length: project.beatsPerBar }).map((_, idx) => {
             const beatNum = idx + 1;
             const isCurrent = transport.isPlaying && transport.currentBeat === beatNum;
@@ -161,17 +263,10 @@ export const TransportDeck: React.FC<TransportDeckProps> = ({
           })}
         </div>
 
-        <div className="h-5 w-px bg-slate-800" />
-
-        {/* Timecode MM:SS.d */}
-        <div className="font-mono tabular-nums text-xs font-semibold text-slate-300">
-          {formatTimecode(transport.currentTimeSec)}
-        </div>
-
         <div className="h-5 w-px bg-slate-800 hidden xl:block" />
 
         {/* Active & Queued Section Readout or Live Import Progress */}
-        <div className="hidden xl:flex items-center gap-2 min-w-[165px]">
+        <div className="hidden xl:flex items-center gap-2 min-w-[140px]">
           {importStatusText ? (
             <span className="text-xs font-semibold text-cyan-400 truncate">
               {importStatusText}
@@ -181,12 +276,12 @@ export const TransportDeck: React.FC<TransportDeckProps> = ({
               <div className="text-xs truncate">
                 <span className="text-slate-500 mr-1">Sec:</span>
                 <span className="font-semibold text-emerald-400">
-                  {activeSection ? activeSection.name : '—'}
+                  {activeSection ? activeSection.name : 'Sin marcador'}
                 </span>
               </div>
               {queuedSection && (
                 <div className="text-xs font-mono tabular-nums text-amber-400 font-bold">
-                  → {queuedSection.code} ({transport.countdownBeats}p)
+                  → {queuedSection.code}
                 </div>
               )}
             </>
@@ -194,12 +289,36 @@ export const TransportDeck: React.FC<TransportDeckProps> = ({
         </div>
       </div>
 
-      {/* Right: Quantize, Tempo/Pitch, Click/Cues, Auto-Detect */}
+      {/* Right: Playhead Section Marker, Quantize, Tempo/Pitch, Click/Cues */}
       <div className="flex flex-wrap items-center gap-2">
+        {/* Playhead Marker Creation & Section Time Editor */}
+        <div className="flex items-center gap-1.5">
+          <button
+            type="button"
+            onClick={onAddMarkerAtPlayhead}
+            title="Crear marcador de sección exactamente en el segundo actual del cabezal"
+            className="min-h-[34px] px-2.5 py-1 rounded-lg bg-cyan-500/15 hover:bg-cyan-500/25 text-cyan-300 border border-cyan-500/40 text-xs font-semibold flex items-center gap-1.5 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+          >
+            <Flag className="w-3.5 h-3.5 text-cyan-400" />
+            <span>
+              + Marcar aquí ({formatMmSs(transport.currentTimeSec)})
+            </span>
+          </button>
+
+          <button
+            type="button"
+            onClick={onOpenSectionEditor}
+            title="Abrir editor de secciones por minutos y segundos (mm:ss)"
+            className="min-h-[34px] px-2.5 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-800 text-xs font-medium flex items-center gap-1 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+          >
+            <span>Secciones ({project.sections.length})</span>
+          </button>
+        </div>
+
         {/* Quantize Mode Selector */}
         <div className="flex items-center bg-[#0B0F17] p-0.5 rounded-lg border border-slate-800">
           <span className="text-[11px] text-slate-400 px-2 whitespace-nowrap shrink-0">
-            Sync:
+            Salto:
           </span>
           {quantizeOptions.map((opt) => (
             <button
@@ -252,7 +371,7 @@ export const TransportDeck: React.FC<TransportDeckProps> = ({
           </select>
         </div>
 
-        {/* Click, Voice Cues, Split-Mono & Auto-Detect Sections */}
+        {/* Click, Voice Cues, Split-Mono */}
         <div className="flex items-center gap-1.5">
           <button
             type="button"
@@ -294,26 +413,6 @@ export const TransportDeck: React.FC<TransportDeckProps> = ({
           >
             <Sliders className="w-3.5 h-3.5" />
             <span>{project.splitRoutingMode === 'split-mono' ? 'Split L/R' : 'Stereo'}</span>
-          </button>
-
-          <button
-            type="button"
-            onClick={onAutoDetectSections}
-            title="Auto-detectar secciones y compases a partir de la energía del audio"
-            className="min-h-[34px] px-2.5 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-800 text-xs font-medium flex items-center gap-1 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
-          >
-            <Wand2 className="w-3.5 h-3.5 text-cyan-400" />
-            <span>Auto-Secciones</span>
-          </button>
-
-          <button
-            type="button"
-            onClick={onOpenSectionEditor}
-            title="Editar manualmente las secciones y compases"
-            className="min-h-[34px] px-2.5 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-800 text-xs font-medium flex items-center gap-1 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
-          >
-            <Plus className="w-3.5 h-3.5" />
-            <span>Secciones</span>
           </button>
         </div>
       </div>

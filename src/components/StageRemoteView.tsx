@@ -9,14 +9,21 @@ import {
   Radio,
   Check,
   Copy,
+  SkipBack,
+  SkipForward,
+  ListMusic,
 } from 'lucide-react';
 import { QuantizeMode, SongProject, TransportState } from '../types/project';
+import { formatMmSs, formatTimecode } from './TransportDeck';
 
 interface StageRemoteViewProps {
   project: SongProject;
   transport: TransportState;
+  setlistQueue: SongProject[];
   onPlayPause: () => void;
   onStop: () => void;
+  onPrevSetlistSong: () => void;
+  onNextSetlistSong: () => void;
   onJumpSection: (sectionId: string) => void;
   onToggleVamp: () => void;
   onToggleClick: () => void;
@@ -31,8 +38,11 @@ interface StageRemoteViewProps {
 export const StageRemoteView: React.FC<StageRemoteViewProps> = ({
   project,
   transport,
+  setlistQueue,
   onPlayPause,
   onStop,
+  onPrevSetlistSong,
+  onNextSetlistSong,
   onJumpSection,
   onToggleVamp,
   onToggleClick,
@@ -47,6 +57,7 @@ export const StageRemoteView: React.FC<StageRemoteViewProps> = ({
 
   const activeSection = project.sections.find((s) => s.id === transport.activeSectionId);
   const queuedSection = project.sections.find((s) => s.id === transport.queuedSectionId);
+  const currentSetlistIdx = setlistQueue.findIndex((s) => s.id === project.id);
 
   const handleCopyRemoteUrl = () => {
     const url = new URL(window.location.href);
@@ -57,29 +68,28 @@ export const StageRemoteView: React.FC<StageRemoteViewProps> = ({
   };
 
   return (
-    <div className="flex-1 bg-slate-50 dark:bg-[#0B0F17] p-4 md:p-6 overflow-y-auto select-none">
+    <div className="flex-1 bg-[#0B0F17] p-4 md:p-6 overflow-y-auto select-none">
       <div className="max-w-7xl mx-auto flex flex-col gap-5">
-        {/* Top Stage HUD: Giant Bar:Beat Clock + Active/Queued Section Banner */}
+        {/* Top Stage HUD: Giant Timecode Clock + Active/Queued Section & Setlist Banner */}
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 items-stretch">
-          {/* Giant Bar : Beat Telemetry Card (5 cols) */}
-          <div className="lg:col-span-5 bg-white dark:bg-[#111827] border border-slate-200 dark:border-slate-800 rounded-2xl p-5 flex flex-col justify-between">
-            <div className="flex items-center justify-between text-xs text-slate-500 dark:text-slate-400">
-              <span className="font-semibold text-slate-900 dark:text-slate-200 truncate">
+          {/* Giant Timecode Telemetry Card (5 cols) */}
+          <div className="lg:col-span-5 bg-[#111827] border border-slate-800 rounded-2xl p-5 flex flex-col justify-between">
+            <div className="flex items-center justify-between text-xs text-slate-400">
+              <span className="font-semibold text-slate-200 truncate">
                 {project.title}
               </span>
               <span className="font-mono tabular-nums">
-                {project.bpm} BPM · {project.beatsPerBar}/{project.beatUnit}
+                {project.bpm} BPM · {project.keySignature}
               </span>
             </div>
 
             <div className="my-4 flex items-center justify-between gap-4">
               <div className="flex items-baseline gap-2">
-                <span className="font-mono tabular-nums text-5xl sm:text-6xl font-bold text-slate-900 dark:text-slate-100 tracking-tight">
-                  {String(transport.currentBar).padStart(3, '0')}
+                <span className="font-mono tabular-nums text-4xl sm:text-5xl font-bold text-cyan-400 tracking-tight">
+                  {formatTimecode(transport.currentTimeSec)}
                 </span>
-                <span className="font-mono text-4xl text-slate-400 dark:text-slate-600">:</span>
-                <span className="font-mono tabular-nums text-5xl sm:text-6xl font-bold text-sky-600 dark:text-cyan-400">
-                  {transport.currentBeat}
+                <span className="font-mono text-xl text-slate-600">
+                  / {formatMmSs(transport.totalDurationSec)}
                 </span>
               </div>
 
@@ -95,8 +105,8 @@ export const StageRemoteView: React.FC<StageRemoteViewProps> = ({
                         isCurrent
                           ? beatNum === 1
                             ? 'bg-amber-500 opacity-100'
-                            : 'bg-sky-600 dark:bg-cyan-400 opacity-100'
-                          : 'bg-slate-200 dark:bg-slate-800/80 opacity-40'
+                            : 'bg-cyan-400 opacity-100'
+                          : 'bg-slate-800/80 opacity-40'
                       }`}
                     />
                   );
@@ -104,20 +114,20 @@ export const StageRemoteView: React.FC<StageRemoteViewProps> = ({
               </div>
             </div>
 
-            <div className="flex items-center justify-between text-xs text-slate-500 dark:text-slate-400 pt-2 border-t border-slate-200 dark:border-slate-800/80">
-              <span className="flex items-center gap-1.5 text-sky-600 dark:text-cyan-300 font-medium">
+            <div className="flex items-center justify-between text-xs text-slate-400 pt-2 border-t border-slate-800/80">
+              <span className="flex items-center gap-1.5 text-cyan-300 font-medium">
                 <Radio className="w-3.5 h-3.5" />
                 <span>Sync multi-ventana activo</span>
               </span>
               <button
                 type="button"
                 onClick={handleCopyRemoteUrl}
-                className="text-slate-700 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white flex items-center gap-1 cursor-pointer"
+                className="text-slate-300 hover:text-white flex items-center gap-1 cursor-pointer"
               >
                 {copiedLink ? (
                   <>
-                    <Check className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
-                    <span className="text-emerald-600 dark:text-emerald-400">Enlace copiado</span>
+                    <Check className="w-3.5 h-3.5 text-emerald-400" />
+                    <span className="text-emerald-400">Enlace copiado</span>
                   </>
                 ) : (
                   <>
@@ -129,78 +139,107 @@ export const StageRemoteView: React.FC<StageRemoteViewProps> = ({
             </div>
           </div>
 
-          {/* Active & Queued Section Status HUD (7 cols) */}
-          <div className="lg:col-span-7 bg-white dark:bg-[#111827] border border-slate-200 dark:border-slate-800 rounded-2xl p-5 flex flex-col justify-between">
+          {/* Active & Queued Section Status HUD + Setlist Navigation (7 cols) */}
+          <div className="lg:col-span-7 bg-[#111827] border border-slate-800 rounded-2xl p-5 flex flex-col justify-between">
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               {/* Current Active Section */}
-              <div className="bg-slate-50 dark:bg-[#0B0F17] border border-slate-200 dark:border-slate-800 rounded-xl p-4">
-                <div className="text-xs text-slate-500 dark:text-slate-400 mb-1">Sección en Curso</div>
-                <div className="font-display text-2xl sm:text-3xl font-bold text-emerald-600 dark:text-emerald-400 truncate">
-                  {activeSection ? activeSection.name : 'Detenido'}
+              <div className="bg-[#0B0F17] border border-slate-800 rounded-xl p-4">
+                <div className="text-xs text-slate-400 mb-1">Sección en Curso</div>
+                <div className="font-display text-2xl sm:text-3xl font-bold text-emerald-400 truncate">
+                  {activeSection ? activeSection.name : 'Reproducción Libre'}
                 </div>
-                <div className="text-xs font-mono tabular-nums text-slate-500 dark:text-slate-400 mt-1">
+                <div className="text-xs font-mono tabular-nums text-slate-400 mt-1">
                   {activeSection
-                    ? `Compases ${activeSection.startBar}–${activeSection.startBar + activeSection.lengthBars - 1}`
-                    : 'Listo para iniciar'}
+                    ? `${formatMmSs(activeSection.startTimeSec)} – ${formatMmSs(activeSection.endTimeSec)}`
+                    : 'Sin marcadores activos'}
                 </div>
               </div>
 
-              {/* Next / Queued Jump Status */}
+              {/* Next / Queued Jump Status or Setlist Status */}
               <div
                 className={`rounded-xl p-4 border ${
                   queuedSection
                     ? 'bg-amber-500/15 border-amber-500'
                     : transport.isVamping
                     ? 'bg-amber-500/10 border-amber-500/50'
-                    : 'bg-slate-50 dark:bg-[#0B0F17] border-slate-200 dark:border-slate-800'
+                    : 'bg-[#0B0F17] border-slate-800'
                 }`}
               >
-                <div className="text-xs text-slate-600 dark:text-slate-300 mb-1">
+                <div className="text-xs text-slate-300 mb-1">
                   {queuedSection
-                    ? 'Salto en Cola (Sincronizado al Compás)'
+                    ? 'Salto en Cola'
                     : transport.isVamping
                     ? 'Modo Bucle Dinámico'
-                    : 'Estado de Transición'}
+                    : 'Cola del Setlist en Vivo'}
                 </div>
-                <div className="font-display text-2xl sm:text-3xl font-bold text-amber-600 dark:text-amber-300 truncate">
+                <div className="font-display text-2xl sm:text-3xl font-bold text-amber-300 truncate">
                   {queuedSection
                     ? `→ ${queuedSection.name}`
                     : transport.isVamping
                     ? 'VAMP LOOP ACTIVO'
-                    : 'Flujo Lineal'}
+                    : currentSetlistIdx >= 0
+                    ? `Tema ${currentSetlistIdx + 1} de ${setlistQueue.length}`
+                    : `${setlistQueue.length} temas en Setlist`}
                 </div>
-                <div className="text-xs font-mono tabular-nums text-slate-600 dark:text-slate-300 mt-1">
-                  {queuedSection
-                    ? `Entra en ${transport.countdownBeats} pulsos (Compás ${transport.queuedTargetBar})`
-                    : transport.isVamping
-                    ? 'Repitiendo sección actual indefinidamente'
-                    : `Cuantización: ${project.quantizeMode}`}
+                <div className="text-xs font-mono tabular-nums text-slate-300 mt-1 flex items-center justify-between">
+                  <span>
+                    {queuedSection
+                      ? `Entra en ${formatMmSs(queuedSection.startTimeSec)}`
+                      : currentSetlistIdx >= 0 &&
+                        currentSetlistIdx < setlistQueue.length - 1
+                      ? `Siguiente: ${setlistQueue[currentSetlistIdx + 1].title}`
+                      : `Modo Salto: ${project.quantizeMode}`}
+                  </span>
                 </div>
               </div>
             </div>
 
-            {/* Quantize Mode Selector Bar for Stage */}
-            <div className="mt-4 flex flex-wrap items-center justify-between gap-2 pt-3 border-t border-slate-200 dark:border-slate-800">
-              <span className="text-xs font-medium text-slate-500 dark:text-slate-400">
-                Cuantización de Salto:
-              </span>
+            {/* Setlist Prev/Next + Quantize Selector Bar */}
+            <div className="mt-4 flex flex-wrap items-center justify-between gap-2 pt-3 border-t border-slate-800">
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-semibold text-amber-300 flex items-center gap-1">
+                  <ListMusic className="w-3.5 h-3.5" />
+                  <span>Setlist:</span>
+                </span>
+                <button
+                  type="button"
+                  onClick={onPrevSetlistSong}
+                  disabled={currentSetlistIdx <= 0}
+                  className="min-h-[38px] px-3 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 disabled:opacity-30 text-slate-200 border border-slate-800 text-xs font-semibold flex items-center gap-1.5 cursor-pointer"
+                >
+                  <SkipBack className="w-3.5 h-3.5" />
+                  <span>Anterior</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={onNextSetlistSong}
+                  disabled={
+                    setlistQueue.length === 0 ||
+                    currentSetlistIdx >= setlistQueue.length - 1
+                  }
+                  className="min-h-[38px] px-3 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-400 disabled:opacity-30 text-slate-950 text-xs font-bold flex items-center gap-1.5 cursor-pointer"
+                >
+                  <span>Siguiente Canción</span>
+                  <SkipForward className="w-3.5 h-3.5" />
+                </button>
+              </div>
+
               <div className="flex items-center gap-1.5">
                 {(
                   [
-                    { id: '1-bar', label: '1 Compás' },
-                    { id: '2-bars', label: '2 Compases' },
-                    { id: 'section-end', label: 'Fin Sección' },
                     { id: 'immediate', label: 'Inmediato' },
+                    { id: '1-bar', label: '1 Compás' },
+                    { id: 'section-end', label: 'Fin Sección' },
                   ] as { id: QuantizeMode; label: string }[]
                 ).map((q) => (
                   <button
                     key={q.id}
                     type="button"
                     onClick={() => onChangeQuantize(q.id)}
-                    className={`min-h-[40px] px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors cursor-pointer ${
+                    className={`min-h-[38px] px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors cursor-pointer ${
                       project.quantizeMode === q.id
-                        ? 'bg-sky-600 dark:bg-cyan-400 text-white dark:text-slate-950'
-                        : 'bg-slate-100 dark:bg-slate-900 text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-800 hover:bg-slate-200 dark:hover:bg-slate-800'
+                        ? 'bg-cyan-400 text-slate-950'
+                        : 'bg-slate-900 text-slate-300 border border-slate-800 hover:bg-slate-800'
                     }`}
                   >
                     {q.label}
@@ -214,87 +253,91 @@ export const StageRemoteView: React.FC<StageRemoteViewProps> = ({
         {/* Stretch Zone: Large Tactile Section Jump Pads */}
         <div>
           <div className="flex items-center justify-between mb-2.5">
-            <h2 className="font-display text-base font-semibold text-slate-900 dark:text-slate-200">
-              Pads de Sección en Vivo (Toca para saltar al compás)
+            <h2 className="font-display text-base font-semibold text-slate-200">
+              Pads de Sección en Vivo (Minutos y Segundos)
             </h2>
-            <span className="text-xs text-slate-500 dark:text-slate-400">
-              Toca de nuevo una sección en cola para cancelar el salto
+            <span className="text-xs text-slate-400">
+              Toca una sección para saltar a su marca de tiempo (mm:ss)
             </span>
           </div>
 
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
-            {project.sections.map((sec, idx) => {
-              const isActive = sec.id === transport.activeSectionId;
-              const isQueued = sec.id === transport.queuedSectionId;
-              const isVampingHere = isActive && transport.isVamping;
+          {project.sections.length === 0 ? (
+            <div className="p-8 rounded-2xl bg-[#111827] border border-slate-800 text-center text-xs text-slate-400">
+              Esta canción aún no tiene marcadores de sección. Puedes añadirlos con el botón «+ Marcar aquí» en la barra de transporte.
+            </div>
+          ) : (
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+              {project.sections.map((sec, idx) => {
+                const isActive = sec.id === transport.activeSectionId;
+                const isQueued = sec.id === transport.queuedSectionId;
+                const isVampingHere = isActive && transport.isVamping;
 
-              return (
-                <button
-                  key={sec.id}
-                  type="button"
-                  onClick={() => onJumpSection(sec.id)}
-                  className={`min-h-[104px] p-4 rounded-2xl border text-left flex flex-col justify-between transition-transform active:scale-[0.98] cursor-pointer ${
-                    isQueued
-                      ? 'bg-amber-500/20 border-amber-500 text-amber-950 dark:text-amber-100'
-                      : isVampingHere
-                      ? 'bg-amber-500/15 border-amber-500 text-amber-900 dark:text-amber-200'
-                      : isActive
-                      ? 'bg-emerald-500/20 border-emerald-500 text-emerald-950 dark:text-emerald-100'
-                      : 'bg-white dark:bg-[#111827] border-slate-200 dark:border-slate-800 text-slate-800 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800/80'
-                  }`}
-                >
-                  <div className="flex items-center justify-between w-full">
-                    <span
-                      style={{ backgroundColor: sec.color }}
-                      className="px-2 py-0.5 rounded text-xs font-mono font-bold text-white"
-                    >
-                      {sec.code || idx + 1}
-                    </span>
-                    <span className="font-mono tabular-nums text-xs text-slate-500 dark:text-slate-400">
-                      c.{sec.startBar} ({sec.lengthBars}c)
-                    </span>
-                  </div>
-
-                  <div className="my-2">
-                    <div className="font-display text-lg font-bold leading-snug truncate">
-                      {sec.name}
+                return (
+                  <button
+                    key={sec.id}
+                    type="button"
+                    onClick={() => onJumpSection(sec.id)}
+                    className={`min-h-[104px] p-4 rounded-2xl border text-left flex flex-col justify-between transition-transform active:scale-[0.98] cursor-pointer ${
+                      isQueued
+                        ? 'bg-amber-500/20 border-amber-500 text-amber-100'
+                        : isVampingHere
+                        ? 'bg-amber-500/15 border-amber-500 text-amber-200'
+                        : isActive
+                        ? 'bg-emerald-500/20 border-emerald-500 text-emerald-100'
+                        : 'bg-[#111827] border-slate-800 text-slate-200 hover:bg-slate-800/80'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between w-full">
+                      <span
+                        style={{ backgroundColor: sec.color }}
+                        className="px-2 py-0.5 rounded text-xs font-mono font-bold text-white"
+                      >
+                        {sec.code || idx + 1}
+                      </span>
+                      <span className="font-mono tabular-nums text-xs text-slate-400">
+                        {formatMmSs(sec.startTimeSec)}
+                      </span>
                     </div>
-                  </div>
 
-                  <div className="text-xs font-mono tabular-nums flex items-center justify-between">
-                    {isQueued ? (
-                      <span className="text-amber-700 dark:text-amber-300 font-bold">
-                        EN COLA · {transport.countdownBeats} PULSOS
-                      </span>
-                    ) : isVampingHere ? (
-                      <span className="text-amber-700 dark:text-amber-300 font-semibold flex items-center gap-1">
-                        <Repeat className="w-3.5 h-3.5" /> VAMP ACTIVO
-                      </span>
-                    ) : isActive ? (
-                      <span className="text-emerald-700 dark:text-emerald-300 font-semibold">
-                        REPRODUCIENDO
-                      </span>
-                    ) : (
-                      <span className="text-slate-400 dark:text-slate-500">Tocar para saltar</span>
-                    )}
-                  </div>
-                </button>
-              );
-            })}
-          </div>
+                    <div className="my-2">
+                      <div className="font-display text-lg font-bold leading-snug truncate">
+                        {sec.name}
+                      </div>
+                    </div>
+
+                    <div className="text-xs font-mono tabular-nums flex items-center justify-between">
+                      {isQueued ? (
+                        <span className="text-amber-300 font-bold">EN COLA</span>
+                      ) : isVampingHere ? (
+                        <span className="text-amber-300 font-semibold flex items-center gap-1">
+                          <Repeat className="w-3.5 h-3.5" /> VAMP ACTIVO
+                        </span>
+                      ) : isActive ? (
+                        <span className="text-emerald-300 font-semibold">
+                          REPRODUCIENDO
+                        </span>
+                      ) : (
+                        <span className="text-slate-500">Tocar para saltar</span>
+                      )}
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          )}
         </div>
 
         {/* Bottom Natural Thumb Zone: Primary Stage Transport Triggers + Quick Mix & Stems Mute */}
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 items-stretch">
           {/* Big Stage Transport Controls (6 cols) */}
-          <div className="lg:col-span-6 bg-white dark:bg-[#111827] border border-slate-200 dark:border-slate-800 rounded-2xl p-4 grid grid-cols-3 gap-3">
+          <div className="lg:col-span-6 bg-[#111827] border border-slate-800 rounded-2xl p-4 grid grid-cols-3 gap-3">
             <button
               type="button"
               onClick={onPlayPause}
               className={`min-h-[72px] rounded-xl font-display text-base font-bold flex flex-col items-center justify-center gap-1.5 transition-transform active:scale-[0.98] cursor-pointer ${
                 transport.isPlaying
-                  ? 'bg-emerald-600 dark:bg-emerald-500 text-white dark:text-slate-950'
-                  : 'bg-sky-600 dark:bg-cyan-400 text-white dark:text-slate-950'
+                  ? 'bg-emerald-500 text-slate-950'
+                  : 'bg-cyan-400 text-slate-950'
               }`}
             >
               {transport.isPlaying ? (
@@ -311,7 +354,7 @@ export const StageRemoteView: React.FC<StageRemoteViewProps> = ({
               className={`min-h-[72px] rounded-xl font-display text-base font-bold flex flex-col items-center justify-center gap-1.5 border transition-transform active:scale-[0.98] cursor-pointer ${
                 transport.isVamping
                   ? 'bg-amber-400 text-slate-950 border-amber-300'
-                  : 'bg-slate-100 dark:bg-slate-900 text-slate-800 dark:text-slate-200 border-slate-200 dark:border-slate-700 hover:bg-slate-200 dark:hover:bg-slate-800'
+                  : 'bg-slate-900 text-slate-200 border-slate-700 hover:bg-slate-800'
               }`}
             >
               <Repeat className="w-6 h-6" />
@@ -321,7 +364,7 @@ export const StageRemoteView: React.FC<StageRemoteViewProps> = ({
             <button
               type="button"
               onClick={onStop}
-              className="min-h-[72px] rounded-xl bg-slate-100 dark:bg-slate-900 hover:bg-red-500/15 text-slate-800 dark:text-slate-200 hover:text-red-600 dark:hover:text-red-300 border border-slate-200 dark:border-slate-800 font-display text-base font-bold flex flex-col items-center justify-center gap-1.5 transition-transform active:scale-[0.98] cursor-pointer"
+              className="min-h-[72px] rounded-xl bg-slate-900 hover:bg-red-500/15 text-slate-200 hover:text-red-300 border border-slate-800 font-display text-base font-bold flex flex-col items-center justify-center gap-1.5 transition-transform active:scale-[0.98] cursor-pointer"
             >
               <Square className="w-6 h-6 fill-current" />
               <span>STOP / INICIO</span>
@@ -329,22 +372,22 @@ export const StageRemoteView: React.FC<StageRemoteViewProps> = ({
           </div>
 
           {/* Quick Monitor Bus Faders & Stem Mute Matrix (6 cols) */}
-          <div className="lg:col-span-6 bg-white dark:bg-[#111827] border border-slate-200 dark:border-slate-800 rounded-2xl p-4 flex flex-col justify-between gap-4">
+          <div className="lg:col-span-6 bg-[#111827] border border-slate-800 rounded-2xl p-4 flex flex-col justify-between gap-4">
             {/* Click, Cues, Master Touch Sliders */}
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-              <div className="bg-slate-50 dark:bg-[#0B0F17] border border-slate-200 dark:border-slate-800 rounded-xl p-3">
+              <div className="bg-[#0B0F17] border border-slate-800 rounded-xl p-3">
                 <div className="flex items-center justify-between mb-2">
                   <button
                     type="button"
                     onClick={onToggleClick}
                     className={`text-xs font-semibold flex items-center gap-1 cursor-pointer ${
-                      project.clickEnabled ? 'text-sky-600 dark:text-cyan-400' : 'text-slate-400 line-through'
+                      project.clickEnabled ? 'text-cyan-400' : 'text-slate-400 line-through'
                     }`}
                   >
                     <Volume2 className="w-3.5 h-3.5" />
                     <span>Click</span>
                   </button>
-                  <span className="font-mono tabular-nums text-xs text-slate-500 dark:text-slate-400">
+                  <span className="font-mono tabular-nums text-xs text-slate-400">
                     {Math.round(project.clickGain * 100)}%
                   </span>
                 </div>
@@ -356,23 +399,23 @@ export const StageRemoteView: React.FC<StageRemoteViewProps> = ({
                   step={0.02}
                   value={project.clickGain}
                   onChange={(e) => onChangeClickGain(Number(e.target.value))}
-                  className="w-full accent-sky-600 dark:accent-cyan-400 h-2 bg-slate-200 dark:bg-slate-800 rounded-lg cursor-pointer"
+                  className="w-full accent-cyan-400 h-2 bg-slate-800 rounded-lg cursor-pointer"
                 />
               </div>
 
-              <div className="bg-slate-50 dark:bg-[#0B0F17] border border-slate-200 dark:border-slate-800 rounded-xl p-3">
+              <div className="bg-[#0B0F17] border border-slate-800 rounded-xl p-3">
                 <div className="flex items-center justify-between mb-2">
                   <button
                     type="button"
                     onClick={onToggleGuide}
                     className={`text-xs font-semibold flex items-center gap-1 cursor-pointer ${
-                      project.guideCuesEnabled ? 'text-sky-600 dark:text-cyan-400' : 'text-slate-400 line-through'
+                      project.guideCuesEnabled ? 'text-cyan-400' : 'text-slate-400 line-through'
                     }`}
                   >
                     <Mic className="w-3.5 h-3.5" />
                     <span>Guía Vocal</span>
                   </button>
-                  <span className="font-mono tabular-nums text-xs text-slate-500 dark:text-slate-400">
+                  <span className="font-mono tabular-nums text-xs text-slate-400">
                     {Math.round(project.guideGain * 100)}%
                   </span>
                 </div>
@@ -384,16 +427,16 @@ export const StageRemoteView: React.FC<StageRemoteViewProps> = ({
                   step={0.02}
                   value={project.guideGain}
                   onChange={(e) => onChangeGuideGain(Number(e.target.value))}
-                  className="w-full accent-sky-600 dark:accent-cyan-400 h-2 bg-slate-200 dark:bg-slate-800 rounded-lg cursor-pointer"
+                  className="w-full accent-cyan-400 h-2 bg-slate-800 rounded-lg cursor-pointer"
                 />
               </div>
 
-              <div className="bg-slate-50 dark:bg-[#0B0F17] border border-slate-200 dark:border-slate-800 rounded-xl p-3">
+              <div className="bg-[#0B0F17] border border-slate-800 rounded-xl p-3">
                 <div className="flex items-center justify-between mb-2">
-                  <span className="text-xs font-semibold text-emerald-600 dark:text-emerald-400">
+                  <span className="text-xs font-semibold text-emerald-400">
                     Master L/R
                   </span>
-                  <span className="font-mono tabular-nums text-xs text-slate-500 dark:text-slate-400">
+                  <span className="font-mono tabular-nums text-xs text-slate-400">
                     {Math.round(project.masterGain * 100)}%
                   </span>
                 </div>
@@ -405,7 +448,7 @@ export const StageRemoteView: React.FC<StageRemoteViewProps> = ({
                   step={0.02}
                   value={project.masterGain}
                   onChange={(e) => onChangeMasterGain(Number(e.target.value))}
-                  className="w-full accent-emerald-600 dark:accent-emerald-400 h-2 bg-slate-200 dark:bg-slate-800 rounded-lg cursor-pointer"
+                  className="w-full accent-emerald-400 h-2 bg-slate-800 rounded-lg cursor-pointer"
                 />
               </div>
             </div>
@@ -419,8 +462,8 @@ export const StageRemoteView: React.FC<StageRemoteViewProps> = ({
                   onClick={() => onToggleTrackMute(trk.id)}
                   className={`min-h-[44px] px-3 py-2 rounded-xl text-xs font-semibold border flex items-center gap-2 transition-colors cursor-pointer ${
                     trk.muted
-                      ? 'bg-red-500/15 border-red-500/50 text-red-700 dark:text-red-300 line-through'
-                      : 'bg-slate-50 dark:bg-[#0B0F17] border-slate-200 dark:border-slate-800 text-slate-800 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800'
+                      ? 'bg-red-500/15 border-red-500/50 text-red-300 line-through'
+                      : 'bg-[#0B0F17] border-slate-800 text-slate-200 hover:bg-slate-800'
                   }`}
                 >
                   <span

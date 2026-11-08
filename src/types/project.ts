@@ -4,13 +4,17 @@ export type OutputBus = 'main' | 'cue-click' | 'both';
 
 export type SplitRoutingMode = 'stereo' | 'split-mono';
 
+export type SetlistTransitionMode = 'stop' | 'cue-next' | 'auto-play';
+
 export interface SongSection {
   id: string;
   name: string;
-  code: string; // e.g., 'I', 'V1', 'C', 'B', 'O'
+  code: string; // e.g., 'IN', 'V1', 'CO', 'PU', 'FI'
   color: string; // semantic studio hex color
-  startBar: number; // 1-indexed inclusive
-  lengthBars: number;
+  startTimeSec: number; // Start time in seconds (mm:ss)
+  endTimeSec: number; // End time in seconds (mm:ss)
+  startBar?: number; // Legacy/optional bar reference
+  lengthBars?: number; // Legacy/optional bar length
   vampByDefault?: boolean;
   cueName?: string; // Spoken or synthesized guide cue label
 }
@@ -20,7 +24,7 @@ export interface TrackChannel {
   name: string;
   role: 'drums' | 'bass' | 'keys' | 'guitar' | 'synth' | 'vox' | 'perc' | 'fx' | 'click' | 'guide' | 'custom';
   color: string;
-  gain: number; // 0.0 to 1.25 (1.0 = 0 dB)
+  gain: number; // 0.0 to 1.995 (-60 dB to +6 dB, 1.0 = 0 dB)
   pan: number; // -1.0 (L) to +1.0 (R)
   muted: boolean;
   soloed: boolean;
@@ -39,6 +43,7 @@ export interface SongProject {
   artist: string;
   folder?: RepertoireFolder;
   inSetlist?: boolean;
+  setlistOrder?: number;
   bpm: number;
   beatsPerBar: number;
   beatUnit: number;
@@ -51,7 +56,7 @@ export interface SongProject {
   clickGain: number;
   clickSubdivision: 1 | 2; // 1 = quarter notes, 2 = eighth notes
   guideCuesEnabled: boolean;
-  guideVoiceReadout: boolean; // Web Speech / Synth tone guide readout 1 bar before section change
+  guideVoiceReadout: boolean;
   guideGain: number;
   masterGain: number;
   cueMasterGain?: number; // Master output gain for the Click / Cue bus ("Auriculares banda")
@@ -64,6 +69,7 @@ export interface SongProject {
 export interface TransportState {
   isPlaying: boolean;
   currentTimeSec: number;
+  totalDurationSec: number;
   currentBar: number; // 1-indexed
   currentBeat: number; // 1-indexed (1..beatsPerBar)
   beatProgress: number; // 0..1 fractional progress within current beat
@@ -102,4 +108,6 @@ export type RemoteSyncMessage =
   | { type: 'CMD_SET_MASTER_GAIN'; gain: number }
   | { type: 'CMD_SET_CLICK_GAIN'; gain: number }
   | { type: 'CMD_SET_GUIDE_GAIN'; gain: number }
+  | { type: 'CMD_NEXT_SONG' }
+  | { type: 'CMD_PREV_SONG' }
   | { type: 'CMD_REQUEST_SYNC' };

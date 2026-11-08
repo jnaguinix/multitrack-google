@@ -1,58 +1,58 @@
 import React, { useMemo, useRef, useState } from 'react';
 import {
   Search,
-  Folder,
   FolderOpen,
   Music,
   Upload,
   FolderPlus,
-  Star,
   Trash2,
   Download,
   PanelLeftClose,
   PanelLeftOpen,
   Plus,
+  GripVertical,
 } from 'lucide-react';
 import { SongProject } from '../types/project';
 
 interface RepertoireTreeSidebarProps {
   projects: SongProject[];
-  currentProjectId: string;
+  setlistQueue: SongProject[];
+  currentProjectId: string | null;
   isCollapsed: boolean;
   onToggleCollapse: () => void;
-  onSelectProject: (projectId: string) => void;
-  onToggleSetlistStar: (projectId: string) => void;
+  onRequestSongAction: (project: SongProject) => void;
+  onAddToSetlist: (projectId: string) => void;
   onDeleteProject: (projectId: string) => void;
   onExportJson: (project: SongProject) => void;
   onQuickImportNewSongFiles: (files: FileList) => void;
   onOpenNewSongModal: () => void;
 }
 
+function formatDurationMmSs(sec?: number, totalBars?: number, bpm?: number): string {
+  const effectiveSec =
+    sec && sec > 1 ? sec : ((totalBars || 24) * 4 * 60) / (bpm || 120);
+  const mins = Math.floor(effectiveSec / 60);
+  const rem = Math.floor(effectiveSec % 60);
+  return `${String(mins).padStart(2, '0')}:${String(rem).padStart(2, '0')}`;
+}
+
 export const RepertoireTreeSidebar: React.FC<RepertoireTreeSidebarProps> = ({
   projects,
+  setlistQueue,
   currentProjectId,
   isCollapsed,
   onToggleCollapse,
-  onSelectProject,
-  onToggleSetlistStar,
+  onRequestSongAction,
+  onAddToSetlist,
   onDeleteProject,
   onExportJson,
   onQuickImportNewSongFiles,
   onOpenNewSongModal,
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
-  const [openFolders, setOpenFolders] = useState<Record<string, boolean>>({
-    setlist: true,
-    imported: true,
-    demos: true,
-  });
 
   const multiFileInputRef = useRef<HTMLInputElement | null>(null);
   const folderInputRef = useRef<HTMLInputElement | null>(null);
-
-  const toggleFolder = (key: string) => {
-    setOpenFolders((prev) => ({ ...prev, [key]: !prev[key] }));
-  };
 
   const filteredProjects = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
@@ -66,34 +66,16 @@ export const RepertoireTreeSidebar: React.FC<RepertoireTreeSidebarProps> = ({
     });
   }, [projects, searchQuery]);
 
-  const setlistSongs = useMemo(
-    () => filteredProjects.filter((p) => p.inSetlist),
-    [filteredProjects]
-  );
-
-  const importedSongs = useMemo(
-    () =>
-      filteredProjects.filter(
-        (p) => !p.id.startsWith('demo-') || p.folder === 'imported'
-      ),
-    [filteredProjects]
-  );
-
-  const demoSongs = useMemo(
-    () => filteredProjects.filter((p) => p.id.startsWith('demo-')),
-    [filteredProjects]
-  );
-
   if (isCollapsed) {
     return (
       <aside
         aria-label="Repertorio Colapsado"
-        className="w-11 shrink-0 bg-[#111827] border-r border-slate-800 flex flex-col items-center py-3 gap-4 select-none"
+        className="w-11 shrink-0 bg-[#111827] border-r border-slate-800 flex flex-col items-center py-3 gap-3 select-none"
       >
         <button
           type="button"
           onClick={onToggleCollapse}
-          title="Expandir Árbol de Repertorio"
+          title="Expandir Repertorio"
           className="p-2 rounded-lg text-slate-300 hover:bg-slate-800 cursor-pointer"
         >
           <PanelLeftOpen className="w-4 h-4" />
@@ -125,98 +107,24 @@ export const RepertoireTreeSidebar: React.FC<RepertoireTreeSidebarProps> = ({
     );
   }
 
-  const renderSongNode = (song: SongProject) => {
-    const isCurrent = song.id === currentProjectId;
-
-    return (
-      <div
-        key={song.id}
-        onClick={() => onSelectProject(song.id)}
-        className={`group flex items-center justify-between gap-2 px-2.5 py-2 rounded-lg text-xs cursor-pointer transition-colors select-none ${
-          isCurrent
-            ? 'bg-cyan-500/15 text-cyan-200 font-semibold border border-cyan-500/30'
-            : 'text-slate-300 hover:bg-slate-800/70 hover:text-white'
-        }`}
-      >
-        <div className="flex items-center gap-2 min-w-0 flex-1">
-          <Music
-            className={`w-3.5 h-3.5 shrink-0 ${
-              isCurrent ? 'text-cyan-400' : 'text-slate-500 group-hover:text-slate-300'
-            }`}
-          />
-          <div className="min-w-0 flex-1">
-            <div className="truncate" title={song.title}>
-              {song.title}
-            </div>
-            <div className="flex items-center gap-1.5 text-[10px] text-slate-500 font-normal">
-              <span className="font-mono tabular-nums">{song.bpm} BPM</span>
-              <span aria-hidden="true">·</span>
-              <span>{song.keySignature}</span>
-              <span aria-hidden="true">·</span>
-              <span className="font-mono tabular-nums">{song.tracks.length} pistas</span>
-            </div>
-          </div>
-        </div>
-
-        {/* Quick Actions on Hover */}
-        <div className="hidden group-hover:flex items-center gap-0.5 shrink-0">
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              onToggleSetlistStar(song.id);
-            }}
-            title={
-              song.inSetlist
-                ? 'Quitar de Setlist en Vivo'
-                : 'Fijar en Setlist en Vivo'
-            }
-            className={`p-1 rounded hover:bg-slate-700 cursor-pointer ${
-              song.inSetlist ? 'text-amber-400' : 'text-slate-400'
-            }`}
-          >
-            <Star className={`w-3.5 h-3.5 ${song.inSetlist ? 'fill-current' : ''}`} />
-          </button>
-
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              onExportJson(song);
-            }}
-            title="Exportar configuración .libretracks.json"
-            className="p-1 rounded hover:bg-slate-700 text-slate-400 hover:text-slate-200 cursor-pointer"
-          >
-            <Download className="w-3.5 h-3.5" />
-          </button>
-
-          {projects.length > 1 && (
-            <button
-              type="button"
-              onClick={(e) => {
-                e.stopPropagation();
-                onDeleteProject(song.id);
-              }}
-              title="Quitar de la biblioteca (no borra tus archivos del disco)"
-              className="p-1 rounded hover:bg-red-500/20 text-slate-400 hover:text-red-400 cursor-pointer"
-            >
-              <Trash2 className="w-3.5 h-3.5" />
-            </button>
-          )}
-        </div>
-      </div>
-    );
+  const handleSongDragStart = (
+    e: React.DragEvent<HTMLDivElement>,
+    song: SongProject
+  ) => {
+    e.dataTransfer.setData('application/x-libretracks-song-id', song.id);
+    e.dataTransfer.effectAllowed = 'copyMove';
   };
 
   return (
     <aside
-      aria-label="Árbol de Repertorio y Biblioteca"
+      aria-label="Árbol de Repertorio"
       className="w-68 shrink-0 bg-[#111827] border-r border-slate-800 flex flex-col h-full select-none"
     >
       {/* Sidebar Header */}
       <div className="px-3.5 py-2.5 border-b border-slate-800 flex items-center justify-between">
-        <span className="font-display text-xs font-bold text-slate-200">
-          Repertorio ({projects.length})
+        <span className="font-display text-xs font-bold text-slate-200 flex items-center gap-1.5">
+          <FolderOpen className="w-3.5 h-3.5 text-cyan-400" />
+          <span>Repertorio ({projects.length})</span>
         </span>
 
         <div className="flex items-center gap-1">
@@ -239,7 +147,7 @@ export const RepertoireTreeSidebar: React.FC<RepertoireTreeSidebarProps> = ({
         </div>
       </div>
 
-      {/* Live Search Input */}
+      {/* Search + Import Triggers */}
       <div className="p-2.5 border-b border-slate-800 space-y-2">
         <div className="relative">
           <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
@@ -252,13 +160,12 @@ export const RepertoireTreeSidebar: React.FC<RepertoireTreeSidebarProps> = ({
           />
         </div>
 
-        {/* Instant New Song Import Triggers (Stems or Folder) */}
         <div className="grid grid-cols-2 gap-1.5">
           <button
             type="button"
             onClick={() => multiFileInputRef.current?.click()}
             className="px-2.5 py-1.5 rounded-lg bg-cyan-400 hover:bg-cyan-300 text-slate-950 text-[11px] font-semibold flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
-            title="Selecciona los stems de una canción para crearla automáticamente"
+            title="Selecciona los stems de una canción para guardarla en tu Repertorio"
           >
             <Upload className="w-3 h-3 shrink-0" />
             <span className="truncate">Importar Stems</span>
@@ -275,7 +182,10 @@ export const RepertoireTreeSidebar: React.FC<RepertoireTreeSidebarProps> = ({
           </button>
         </div>
 
-        {/* Hidden File & Directory Inputs */}
+        <div className="px-2 py-1.5 rounded-md bg-[#0B0F17] border border-slate-800/90 text-[10px] text-slate-400 leading-snug">
+          Arrastra una canción hacia el <strong>Setlist</strong> o el <strong>DAW</strong>, o haz clic para confirmar su carga.
+        </div>
+
         <input
           ref={multiFileInputRef}
           type="file"
@@ -293,7 +203,7 @@ export const RepertoireTreeSidebar: React.FC<RepertoireTreeSidebarProps> = ({
           ref={folderInputRef}
           type="file"
           multiple
-          // @ts-expect-error webkitdirectory is standard across browsers for directory selection
+          // @ts-expect-error webkitdirectory is standard across browsers
           webkitdirectory="true"
           directory="true"
           className="hidden"
@@ -306,96 +216,111 @@ export const RepertoireTreeSidebar: React.FC<RepertoireTreeSidebarProps> = ({
         />
       </div>
 
-      {/* Scrollable Tree View: Folders -> Single Song Items Only */}
-      <div className="flex-1 overflow-y-auto p-2 space-y-2.5">
-        {/* 1. Setlist / Live Show Folder */}
-        {setlistSongs.length > 0 && (
-          <div>
-            <button
-              type="button"
-              onClick={() => toggleFolder('setlist')}
-              className="w-full flex items-center justify-between px-2 py-1 text-xs font-semibold text-slate-300 hover:text-white cursor-pointer"
-            >
-              <span className="flex items-center gap-1.5">
-                {openFolders.setlist ? (
-                  <FolderOpen className="w-3.5 h-3.5 text-amber-400" />
-                ) : (
-                  <Folder className="w-3.5 h-3.5 text-amber-400" />
-                )}
-                <span>Setlist en Vivo</span>
-              </span>
-              <span className="font-mono tabular-nums text-[10px] text-slate-500">
-                {setlistSongs.length}
-              </span>
-            </button>
-            {openFolders.setlist && (
-              <div className="mt-1 pl-2 border-l border-slate-800/80 ml-2 space-y-0.5">
-                {setlistSongs.map(renderSongNode)}
-              </div>
-            )}
+      {/* Scrollable Song List */}
+      <div className="flex-1 overflow-y-auto p-2 space-y-1">
+        {filteredProjects.length === 0 ? (
+          <div className="px-3 py-6 text-center text-xs text-slate-500">
+            Tu repertorio está vacío. Usa los botones <strong>Importar Stems</strong> o{' '}
+            <strong>Carpeta</strong> para añadir tus canciones.
           </div>
-        )}
+        ) : (
+          filteredProjects.map((song) => {
+            const isCurrent = song.id === currentProjectId;
+            const isInSetlist = setlistQueue.some((s) => s.id === song.id);
 
-        {/* 2. Imported / Custom Repertoire Folder */}
-        <div>
-          <button
-            type="button"
-            onClick={() => toggleFolder('imported')}
-            className="w-full flex items-center justify-between px-2 py-1 text-xs font-semibold text-slate-300 hover:text-white cursor-pointer"
-          >
-            <span className="flex items-center gap-1.5">
-              {openFolders.imported ? (
-                <FolderOpen className="w-3.5 h-3.5 text-cyan-400" />
-              ) : (
-                <Folder className="w-3.5 h-3.5 text-cyan-400" />
-              )}
-              <span>Mis Canciones</span>
-            </span>
-            <span className="font-mono tabular-nums text-[10px] text-slate-500">
-              {importedSongs.length}
-            </span>
-          </button>
-
-          {openFolders.imported && (
-            <div className="mt-1 pl-2 border-l border-slate-800/80 ml-2 space-y-0.5">
-              {importedSongs.length === 0 ? (
-                <div className="px-2.5 py-2 text-[11px] text-slate-500">
-                  Suelta una carpeta o grupo de pistas para agregar tu canción aquí.
+            return (
+              <div
+                key={song.id}
+                draggable
+                onDragStart={(e) => handleSongDragStart(e, song)}
+                onClick={() => onRequestSongAction(song)}
+                title="Haz clic para confirmar carga o arrastra esta canción hacia el Setlist / DAW"
+                className={`group flex items-center justify-between gap-1.5 px-2 py-2 rounded-lg text-xs cursor-grab active:cursor-grabbing transition-colors select-none border ${
+                  isCurrent
+                    ? 'bg-cyan-500/15 text-cyan-200 font-semibold border-cyan-500/40'
+                    : 'text-slate-300 border-transparent hover:bg-slate-800/80 hover:border-slate-700/80 hover:text-white'
+                }`}
+              >
+                <div className="flex items-center gap-1.5 min-w-0 flex-1">
+                  <GripVertical className="w-3.5 h-3.5 text-slate-600 group-hover:text-cyan-400 shrink-0" />
+                  <Music
+                    className={`w-3.5 h-3.5 shrink-0 ${
+                      isCurrent ? 'text-cyan-400' : 'text-slate-500 group-hover:text-slate-300'
+                    }`}
+                  />
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-1.5">
+                      <span className="truncate">{song.title}</span>
+                      {isCurrent && (
+                        <span className="px-1 py-0.2 rounded bg-cyan-500/25 text-cyan-300 text-[9px] font-mono uppercase shrink-0">
+                          ACTIVA
+                        </span>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-1.5 text-[10px] text-slate-500 font-normal">
+                      <span className="font-mono tabular-nums">
+                        {formatDurationMmSs(song.durationSec, song.totalBars, song.bpm)}
+                      </span>
+                      <span aria-hidden="true">·</span>
+                      <span className="font-mono tabular-nums">{song.bpm} BPM</span>
+                      <span aria-hidden="true">·</span>
+                      <span className="font-mono tabular-nums">{song.tracks.length}p</span>
+                    </div>
+                  </div>
                 </div>
-              ) : (
-                importedSongs.map(renderSongNode)
-              )}
-            </div>
-          )}
-        </div>
 
-        {/* 3. Built-in Demo Sessions Folder */}
-        {demoSongs.length > 0 && (
-          <div>
-            <button
-              type="button"
-              onClick={() => toggleFolder('demos')}
-              className="w-full flex items-center justify-between px-2 py-1 text-xs font-semibold text-slate-300 hover:text-white cursor-pointer"
-            >
-              <span className="flex items-center gap-1.5">
-                {openFolders.demos ? (
-                  <FolderOpen className="w-3.5 h-3.5 text-emerald-400" />
-                ) : (
-                  <Folder className="w-3.5 h-3.5 text-emerald-400" />
-                )}
-                <span>Sesiones Demo</span>
-              </span>
-              <span className="font-mono tabular-nums text-[10px] text-slate-500">
-                {demoSongs.length}
-              </span>
-            </button>
+                {/* Quick Actions */}
+                <div className="flex items-center gap-0.5 shrink-0">
+                  {!isInSetlist ? (
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onAddToSetlist(song.id);
+                      }}
+                      title="Añadir al Setlist"
+                      className="px-1.5 py-0.5 rounded bg-slate-800 hover:bg-emerald-500/20 text-slate-400 hover:text-emerald-300 border border-slate-700 text-[10px] font-semibold cursor-pointer"
+                    >
+                      +Setlist
+                    </button>
+                  ) : (
+                    <span
+                      title="En el Setlist"
+                      className="px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 text-[9px] font-mono"
+                    >
+                      SET
+                    </span>
+                  )}
 
-            {openFolders.demos && (
-              <div className="mt-1 pl-2 border-l border-slate-800/80 ml-2 space-y-0.5">
-                {demoSongs.map(renderSongNode)}
+                  <div className="hidden group-hover:flex items-center gap-0.5">
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onExportJson(song);
+                      }}
+                      title="Exportar configuración .libretracks.json"
+                      className="p-1 rounded hover:bg-slate-700 text-slate-400 hover:text-slate-200 cursor-pointer"
+                    >
+                      <Download className="w-3.5 h-3.5" />
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onDeleteProject(song.id);
+                      }}
+                      title="Quitar de la biblioteca (no borra tus archivos del disco)"
+                      className="p-1 rounded hover:bg-red-500/20 text-slate-400 hover:text-red-400 cursor-pointer"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                </div>
               </div>
-            )}
-          </div>
+            );
+          })
         )}
       </div>
     </aside>

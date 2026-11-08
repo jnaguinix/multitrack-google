@@ -39,18 +39,25 @@ export class LibreTracksAudioEngine {
 
   private activeSectionId: string | null = null;
   private queuedSectionId: string | null = null;
-  private queuedTargetBar: number | null = null;
+  private queuedTargetSec: number | null = null;
   private isVamping = false;
   private lastCueMessage: string | null = null;
 
   private lastScheduledSubStep = -1;
-  private lastAnnouncedTargetBar = -1;
+  private lastAnnouncedSectionId: string | null = null;
   private rafId: number | null = null;
   private listeners: Set<TransportListener> = new Set();
+  private onSongEndedCallback: (() => void) | null = null;
+
+  public setOnSongEnded(cb: (() => void) | null) {
+    this.onSongEndedCallback = cb;
+  }
 
   public ensureContext(): AudioContext {
     if (!this.ctx) {
-      const AudioCtx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+      const AudioCtx =
+        window.AudioContext ||
+        (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
       this.ctx = new AudioCtx();
 
       this.masterGainNode = this.ctx.createGain();
@@ -108,6 +115,20 @@ export class LibreTracksAudioEngine {
     };
   }
 
+  public getTotalDurationSec(): number {
+    if (!this.project) return 48;
+    let maxBufSec = 0;
+    this.trackBuffers.forEach((buf) => {
+      if (buf.duration > maxBufSec) maxBufSec = buf.duration;
+    });
+    if (maxBufSec > 1) return maxBufSec;
+    if (this.project.durationSec && this.project.durationSec > 1) {
+      return this.project.durationSec;
+    }
+    const secPerBar = (60 / (this.project.bpm || 120)) * (this.project.beatsPerBar || 4);
+    return Math.max(8, (this.project.totalBars || 24) * secPerBar);
+  }
+
   public async loadProject(
     project: SongProject,
     customStems?: Map<string, ArrayBuffer>,
@@ -140,7 +161,6 @@ export class LibreTracksAudioEngine {
 
       if (!audioBuffer && rawCustom) {
         try {
-          // Copy slice because decodeAudioData detaches ArrayBuffer
           const copy = rawCustom.slice(0);
           audioBuffer = await ctx.decodeAudioData(copy);
         } catch (err) {
@@ -159,7 +179,6 @@ export class LibreTracksAudioEngine {
           : extractWaveformPeaks(audioBuffer, 320);
       updatedPeaks.set(track.id, peaks);
 
-      // Build persistent mixer strip nodes for this track
       const gainNode = ctx.createGain();
       const panNode = ctx.createStereoPanner();
       const analyser = ctx.createAnalyser();
@@ -203,7 +222,10 @@ export class LibreTracksAudioEngine {
     this.emitTransport();
   }
 
-  public mountDecodedTrack(track: TrackChannel, decoded: AudioBuffer): { peaks: number[]; durationSec: number } {
+  public mountDecodedTrack(
+    track: TrackChannel,
+    decoded: AudioBuffer
+  ): { peaks: number[]; durationSec: number } {
     const ctx = this.ensureContext();
     this.trackBuffers.set(track.id, decoded);
 
@@ -283,7 +305,6 @@ export class LibreTracksAudioEngine {
       0.015
     );
 
-    // Split-Mono stage mode routes Click/Cue strictly Left (-1) and Main Tracks strictly Right (+1)
     if (this.project.splitRoutingMode === 'split-mono') {
       this.cueBusPan.pan.setValueAtTime(-1.0, this.ctx.currentTime);
       this.mainBusPan.pan.setValueAtTime(1.0, this.ctx.currentTime);
@@ -308,7 +329,6 @@ export class LibreTracksAudioEngine {
         0.015
       );
 
-      // Reconnect analyser output to appropriate bus
       try {
         node.analyser.disconnect();
       } catch {
@@ -382,7 +402,7 @@ export class LibreTracksAudioEngine {
     this.playStartCtxTime = ctx.currentTime;
     this.playStartSongSec = this.pausedSongSec;
     this.lastScheduledSubStep = -1;
-    this.lastAnnouncedTargetBar = -1;
+    this.lastAnnouncedSectionId = null;
 
     this.startAllTrackSources(this.playStartSongSec);
     this.startLoop();
@@ -413,9 +433,9 @@ export class LibreTracksAudioEngine {
     this.isPlaying = false;
     this.pausedSongSec = 0;
     this.queuedSectionId = null;
-    this.queuedTargetBar = null;
+    this.queuedTargetSec = null;
     this.lastScheduledSubStep = -1;
-    this.lastAnnouncedTargetBar = -1;
+    this.lastAnnouncedSectionId = null;
     this.stopAllTrackSources();
 
     if (this.rafId !== null) {
@@ -428,34 +448,10 @@ export class LibreTracksAudioEngine {
       this.activeSectionId = first.id;
       this.isVamping = Boolean(first.vampByDefault);
       this.lastCueMessage = `LISTO: ${first.name.toUpperCase()}`;
-    }
-
-    this.emitTransport();
-  }
-
-  public seekToBar(barNumber: number) {
-    if (!this.project) return;
-    const clampedBar = Math.max(1, Math.min(this.project.totalBars, barNumber));
-    const secPerBar = (60 / this.project.bpm) * this.project.beatsPerBar;
-    const targetSec = (clampedBar - 1) * secPerBar;
-
-    const matchingSec = this.findSectionAtBar(clampedBar);
-    if (matchingSec) {
-      this.activeSectionId = matchingSec.id;
-      this.isVamping = Boolean(matchingSec.vampByDefault);
-      this.lastCueMessage = `SECCIÓN: ${matchingSec.name.toUpperCase()}`;
-    }
-
-    this.queuedSectionId = null;
-    this.queuedTargetBar = null;
-
-    if (this.isPlaying && this.ctx) {
-      this.playStartCtxTime = this.ctx.currentTime;
-      this.playStartSongSec = targetSec;
-      this.lastScheduledSubStep = -1;
-      this.startAllTrackSources(targetSec);
     } else {
-      this.pausedSongSec = targetSec;
+      this.activeSectionId = null;
+      this.isVamping = false;
+      this.lastCueMessage = null;
     }
 
     this.emitTransport();
@@ -463,15 +459,18 @@ export class LibreTracksAudioEngine {
 
   public seekToSeconds(seconds: number) {
     if (!this.project) return;
-    const secPerBar = (60 / this.project.bpm) * this.project.beatsPerBar;
-    const totalSec = this.project.totalBars * secPerBar;
+    const totalSec = this.getTotalDurationSec();
     const clampedSec = Math.max(0, Math.min(totalSec - 0.01, seconds));
-    const currentBar = Math.floor(clampedSec / secPerBar) + 1;
 
-    const matchingSec = this.findSectionAtBar(currentBar);
+    const matchingSec = this.findSectionAtTime(clampedSec);
     if (matchingSec) {
       this.activeSectionId = matchingSec.id;
+      this.isVamping = Boolean(matchingSec.vampByDefault);
+      this.lastCueMessage = `SECCIÓN: ${matchingSec.name.toUpperCase()}`;
     }
+
+    this.queuedSectionId = null;
+    this.queuedTargetSec = null;
 
     if (this.isPlaying && this.ctx) {
       this.playStartCtxTime = this.ctx.currentTime;
@@ -489,44 +488,61 @@ export class LibreTracksAudioEngine {
     const targetSection = this.project.sections.find((s) => s.id === sectionId);
     if (!targetSection) return;
 
-    // If transport is stopped, jump immediately to the start of that section
+    const targetStartSec = targetSection.startTimeSec ?? 0;
+
+    // If transport is stopped, jump immediately to the start time of that section
     if (!this.isPlaying) {
-      this.seekToBar(targetSection.startBar);
+      this.seekToSeconds(targetStartSec);
       return;
     }
 
     // If user clicks the already queued section again, cancel the queued jump
     if (this.queuedSectionId === sectionId) {
       this.queuedSectionId = null;
-      this.queuedTargetBar = null;
+      this.queuedTargetSec = null;
       this.lastCueMessage = 'SALTO CANCELADO';
       this.emitTransport();
       return;
     }
 
-    const { currentBar } = this.getMusicalPosition(this.getCurrentSongSec());
+    const nowSec = this.getCurrentSongSec();
     const mode: QuantizeMode = this.project.quantizeMode;
 
     if (mode === 'immediate') {
-      this.seekToBar(targetSection.startBar);
+      this.seekToSeconds(targetStartSec);
       this.TriggerGuideCue(targetSection.cueName || targetSection.name, true);
       return;
     }
 
-    let transitionBar = currentBar + 1;
-    if (mode === '2-bars') {
-      transitionBar = currentBar + 2;
+    const secPerBeat = 60 / (this.project.bpm || 120);
+    const secPerBar = secPerBeat * (this.project.beatsPerBar || 4);
+
+    let transitionSec = nowSec + secPerBar;
+    if (mode === '1-bar') {
+      const nextBarIndex = Math.floor(nowSec / secPerBar) + 1;
+      transitionSec = nextBarIndex * secPerBar;
+      if (transitionSec - nowSec < 0.25) transitionSec += secPerBar;
+    } else if (mode === '2-bars') {
+      const nextBarIndex = Math.floor(nowSec / secPerBar) + 2;
+      transitionSec = nextBarIndex * secPerBar;
     } else if (mode === 'section-end') {
-      const currentSec = this.findSectionAtBar(currentBar);
-      if (currentSec) {
-        transitionBar = currentSec.startBar + currentSec.lengthBars;
+      const currentSecObj = this.findSectionAtTime(nowSec);
+      if (currentSecObj && currentSecObj.endTimeSec > nowSec) {
+        transitionSec = currentSecObj.endTimeSec;
       }
     }
 
     this.queuedSectionId = targetSection.id;
-    this.queuedTargetBar = transitionBar;
-    this.isVamping = false; // Queueing a jump releases active vamp
+    this.queuedTargetSec = transitionSec;
+    this.isVamping = false;
     this.lastCueMessage = `EN COLA → ${targetSection.name.toUpperCase()}`;
+    this.emitTransport();
+  }
+
+  public cancelQueuedJump() {
+    this.queuedSectionId = null;
+    this.queuedTargetSec = null;
+    this.lastCueMessage = 'SALTO CANCELADO';
     this.emitTransport();
   }
 
@@ -534,7 +550,7 @@ export class LibreTracksAudioEngine {
     this.isVamping = !this.isVamping;
     if (this.isVamping) {
       this.queuedSectionId = null;
-      this.queuedTargetBar = null;
+      this.queuedTargetSec = null;
       this.lastCueMessage = 'VAMP ACTIVO (LOOP SECCIÓN)';
       this.TriggerGuideCue('Vamp On', false);
     } else {
@@ -544,10 +560,10 @@ export class LibreTracksAudioEngine {
     this.emitTransport();
   }
 
-  private findSectionAtBar(bar: number): SongSection | undefined {
-    if (!this.project) return undefined;
+  private findSectionAtTime(timeSec: number): SongSection | undefined {
+    if (!this.project || this.project.sections.length === 0) return undefined;
     return this.project.sections.find(
-      (s) => bar >= s.startBar && bar < s.startBar + s.lengthBars
+      (s) => timeSec >= s.startTimeSec && timeSec < s.endTimeSec
     );
   }
 
@@ -586,37 +602,32 @@ export class LibreTracksAudioEngine {
       if (!this.isPlaying || !this.project || !this.ctx) return;
 
       const songSec = this.getCurrentSongSec();
-      const secPerBeat = 60 / this.project.bpm;
-      const secPerBar = secPerBeat * this.project.beatsPerBar;
-      const totalSongSec = this.project.totalBars * secPerBar;
+      const totalSongSec = this.getTotalDurationSec();
+      const { totalBeatsElapsed } = this.getMusicalPosition(songSec);
 
-      const { currentBar, totalBeatsElapsed } = this.getMusicalPosition(songSec);
-
-      // 1. Check if we reached a queued section jump bar boundary
+      // 1. Check if we reached a queued section jump time boundary
       if (
         this.queuedSectionId &&
-        this.queuedTargetBar !== null &&
-        currentBar >= this.queuedTargetBar
+        this.queuedTargetSec !== null &&
+        songSec >= this.queuedTargetSec
       ) {
         const targetSecObj = this.project.sections.find((s) => s.id === this.queuedSectionId);
         this.queuedSectionId = null;
-        this.queuedTargetBar = null;
+        this.queuedTargetSec = null;
 
         if (targetSecObj) {
-          this.seekToBar(targetSecObj.startBar);
+          this.seekToSeconds(targetSecObj.startTimeSec);
           this.lastCueMessage = `EN VIVO: ${targetSecObj.name.toUpperCase()}`;
           this.rafId = requestAnimationFrame(tick);
           return;
         }
       }
 
-      // 2. Check if active section reached its end while Vamping is enabled
+      // 2. Check if active section reached its endTimeSec while Vamping is enabled
       const currentActiveSec = this.project.sections.find((s) => s.id === this.activeSectionId);
       if (this.isVamping && currentActiveSec && !this.queuedSectionId) {
-        const sectionEndBar = currentActiveSec.startBar + currentActiveSec.lengthBars;
-        if (currentBar >= sectionEndBar) {
-          // Loop seamlessly back to the start of the vamped section
-          this.seekToBar(currentActiveSec.startBar);
+        if (songSec >= currentActiveSec.endTimeSec) {
+          this.seekToSeconds(currentActiveSec.startTimeSec);
           this.isVamping = true;
           this.lastCueMessage = `VAMP LOOP: ${currentActiveSec.name.toUpperCase()}`;
           this.rafId = requestAnimationFrame(tick);
@@ -624,8 +635,8 @@ export class LibreTracksAudioEngine {
         }
       }
 
-      // 3. Update active section when crossing naturally into a new section
-      const naturalSec = this.findSectionAtBar(currentBar);
+      // 3. Update active section when crossing naturally into a new time section
+      const naturalSec = this.findSectionAtTime(songSec);
       if (naturalSec && naturalSec.id !== this.activeSectionId) {
         this.activeSectionId = naturalSec.id;
         if (!this.queuedSectionId && naturalSec.vampByDefault) {
@@ -636,7 +647,7 @@ export class LibreTracksAudioEngine {
         }
       }
 
-      // 4. Trigger Metronome Click & Guide Cue on each subdivision step
+      // 4. Trigger Metronome Click & Guide Cue
       const subdiv = this.project.clickSubdivision || 1;
       const currentSubStep = Math.floor(totalBeatsElapsed * subdiv);
       if (currentSubStep > this.lastScheduledSubStep) {
@@ -648,28 +659,37 @@ export class LibreTracksAudioEngine {
           this.triggerMetronomeClick(beatInBar === 1 && isMainBeat, isMainBeat);
         }
 
-        // Check if 4 beats (1 bar) ahead of a queued jump or next section to announce Guide Cue
-        if (isMainBeat && beatInBar === 1 && this.project.guideCuesEnabled) {
-          const nextBar = currentBar + 1;
-          if (this.queuedSectionId && this.queuedTargetBar === nextBar) {
+        // Announce upcoming section ~2 seconds ahead
+        if (isMainBeat && this.project.guideCuesEnabled) {
+          if (
+            this.queuedSectionId &&
+            this.queuedTargetSec !== null &&
+            this.queuedTargetSec - songSec <= 2.2 &&
+            this.lastAnnouncedSectionId !== this.queuedSectionId
+          ) {
             const qSec = this.project.sections.find((s) => s.id === this.queuedSectionId);
-            if (qSec && this.lastAnnouncedTargetBar !== nextBar) {
-              this.lastAnnouncedTargetBar = nextBar;
-              this.TriggerGuideCue(`${qSec.cueName || qSec.name} in 2, 3, 4`, true);
+            if (qSec) {
+              this.lastAnnouncedSectionId = qSec.id;
+              this.TriggerGuideCue(`${qSec.cueName || qSec.name}`, true);
             }
           } else if (!this.isVamping && !this.queuedSectionId) {
-            const upcomingSec = this.project.sections.find((s) => s.startBar === nextBar);
-            if (upcomingSec && this.lastAnnouncedTargetBar !== nextBar) {
-              this.lastAnnouncedTargetBar = nextBar;
+            const upcomingSec = this.project.sections.find(
+              (s) => s.startTimeSec > songSec && s.startTimeSec - songSec <= 2.0
+            );
+            if (upcomingSec && this.lastAnnouncedSectionId !== upcomingSec.id) {
+              this.lastAnnouncedSectionId = upcomingSec.id;
               this.TriggerGuideCue(`${upcomingSec.cueName || upcomingSec.name}`, true);
             }
           }
         }
       }
 
-      // 5. Stop at end of song if not vamping or jumping
+      // 5. Stop at end of song and notify Setlist listener
       if (songSec >= totalSongSec) {
         this.stop();
+        if (this.onSongEndedCallback) {
+          this.onSongEndedCallback();
+        }
         return;
       }
 
@@ -687,7 +707,6 @@ export class LibreTracksAudioEngine {
     const osc = this.ctx.createOscillator();
     const clickEnv = this.ctx.createGain();
 
-    // Classic studio UREI / Ableton style high-clarity click frequencies
     osc.type = isDownbeat ? 'triangle' : 'sine';
     osc.frequency.setValueAtTime(isDownbeat ? 1680 : isQuarterBeat ? 1120 : 840, now);
     osc.frequency.exponentialRampToValueAtTime(isDownbeat ? 820 : 540, now + 0.035);
@@ -708,7 +727,6 @@ export class LibreTracksAudioEngine {
   private TriggerGuideCue(cueText: string, playChime: boolean) {
     if (!this.project || !this.project.guideCuesEnabled) return;
 
-    // 1. Audible Studio Guide Chime on the Cue Bus (always works 100% deterministically in Web Audio)
     if (playChime && this.ctx && this.cueBusGain) {
       const now = this.ctx.currentTime;
       const osc1 = this.ctx.createOscillator();
@@ -717,8 +735,8 @@ export class LibreTracksAudioEngine {
 
       osc1.type = 'sine';
       osc2.type = 'triangle';
-      osc1.frequency.setValueAtTime(587.33, now); // D5
-      osc1.frequency.setValueAtTime(880.0, now + 0.07); // A5
+      osc1.frequency.setValueAtTime(587.33, now);
+      osc1.frequency.setValueAtTime(880.0, now + 0.07);
       osc2.frequency.setValueAtTime(293.66, now);
 
       const level = this.project.guideGain * 0.25;
@@ -736,8 +754,11 @@ export class LibreTracksAudioEngine {
       osc2.stop(now + 0.2);
     }
 
-    // 2. Spoken Voice Guide Cue (if enabled and SpeechSynthesis is available)
-    if (this.project.guideVoiceReadout && typeof window !== 'undefined' && 'speechSynthesis' in window) {
+    if (
+      this.project.guideVoiceReadout &&
+      typeof window !== 'undefined' &&
+      'speechSynthesis' in window
+    ) {
       try {
         window.speechSynthesis.cancel();
         const utter = new SpeechSynthesisUtterance(cueText);
@@ -753,24 +774,29 @@ export class LibreTracksAudioEngine {
 
   public getTransportState(): TransportState {
     const songSec = this.getCurrentSongSec();
-    const { currentBar, currentBeat, beatProgress, totalBeatsElapsed } =
-      this.getMusicalPosition(songSec);
+    const totalDurationSec = this.getTotalDurationSec();
+    const { currentBar, currentBeat, beatProgress } = this.getMusicalPosition(songSec);
 
     let countdownBeats = 0;
-    if (this.queuedTargetBar !== null && this.project) {
-      const targetTotalBeats = (this.queuedTargetBar - 1) * this.project.beatsPerBar;
-      countdownBeats = Math.max(1, Math.ceil(targetTotalBeats - totalBeatsElapsed));
+    let queuedTargetBar: number | null = null;
+    if (this.queuedTargetSec !== null && this.project) {
+      const secPerBeat = 60 / (this.project.bpm || 120);
+      const secRemaining = Math.max(0, this.queuedTargetSec - songSec);
+      countdownBeats = Math.max(1, Math.ceil(secRemaining / secPerBeat));
+      queuedTargetBar =
+        Math.floor(this.queuedTargetSec / (secPerBeat * (this.project.beatsPerBar || 4))) + 1;
     }
 
     return {
       isPlaying: this.isPlaying,
       currentTimeSec: songSec,
+      totalDurationSec,
       currentBar,
       currentBeat,
       beatProgress,
       activeSectionId: this.activeSectionId,
       queuedSectionId: this.queuedSectionId,
-      queuedTargetBar: this.queuedTargetBar,
+      queuedTargetBar,
       countdownBeats,
       isVamping: this.isVamping,
       lastCueMessage: this.lastCueMessage,

@@ -1,4 +1,4 @@
-import { SongProject } from '../types/project';
+import { SongProject, SongSection } from '../types/project';
 
 const DB_NAME = 'LibreTracksWebDB';
 const DB_VERSION = 1;
@@ -12,6 +12,55 @@ export interface StoredAudioStem {
   arrayBuffer: ArrayBuffer;
   mimeType: string;
   fileName: string;
+}
+
+/**
+ * Ensures any legacy bar-only sections have valid startTimeSec and endTimeSec in seconds
+ */
+export function normalizeProjectSectionsToTime(project: SongProject): SongProject {
+  const secPerBar = (60 / (project.bpm || 120)) * (project.beatsPerBar || 4);
+  const totalSec = Math.max(
+    1,
+    project.durationSec || (project.totalBars || 24) * secPerBar
+  );
+
+  if (!Array.isArray(project.sections) || project.sections.length === 0) {
+    return {
+      ...project,
+      durationSec: totalSec,
+      sections: [],
+    };
+  }
+
+  const normalized: SongSection[] = project.sections.map((sec, idx) => {
+    const hasTime =
+      typeof sec.startTimeSec === 'number' &&
+      typeof sec.endTimeSec === 'number' &&
+      sec.endTimeSec > sec.startTimeSec;
+
+    if (hasTime) {
+      return sec;
+    }
+
+    const startBar = sec.startBar ?? idx * 4 + 1;
+    const lengthBars = sec.lengthBars ?? 4;
+    const startTimeSec = Math.max(0, (startBar - 1) * secPerBar);
+    const endTimeSec = Math.min(totalSec, startTimeSec + lengthBars * secPerBar);
+
+    return {
+      ...sec,
+      startTimeSec: Number(startTimeSec.toFixed(2)),
+      endTimeSec: Number(Math.max(startTimeSec + 1, endTimeSec).toFixed(2)),
+    };
+  });
+
+  normalized.sort((a, b) => a.startTimeSec - b.startTimeSec);
+
+  return {
+    ...project,
+    durationSec: totalSec,
+    sections: normalized,
+  };
 }
 
 function openDatabase(): Promise<IDBDatabase> {
@@ -46,13 +95,24 @@ export async function saveProjectToDb(project: SongProject): Promise<void> {
 export async function loadAllProjectsFromDb(): Promise<SongProject[]> {
   const db = await openDatabase();
   return new Promise((resolve, reject) => {
-    const tx = db.transaction(STORE_PROJECTS, 'readonly');
+    const tx = db.transaction(STORE_PROJECTS, 'readwrite');
     const store = tx.objectStore(STORE_PROJECTS);
     const req = store.getAll();
     req.onsuccess = () => {
-      const list = (req.result as SongProject[]) || [];
-      list.sort((a, b) => b.updatedAt - a.updatedAt);
-      resolve(list);
+      const rawList = (req.result as SongProject[]) || [];
+      const userProjects: SongProject[] = [];
+
+      for (const item of rawList) {
+        // Purge any legacy default demo projects so only user songs remain
+        if (item.id.startsWith('demo-')) {
+          store.delete(item.id);
+        } else {
+          userProjects.push(normalizeProjectSectionsToTime(item));
+        }
+      }
+
+      userProjects.sort((a, b) => b.updatedAt - a.updatedAt);
+      resolve(userProjects);
     };
     req.onerror = () => reject(req.error);
   });
@@ -101,198 +161,38 @@ export async function loadProjectStemsFromDb(projectId: string): Promise<StoredA
   });
 }
 
-export const DEFAULT_DEMO_PROJECTS: SongProject[] = [
-  {
-    id: 'demo-neon-horizon',
-    title: 'Horizonte Boreal (Live Session)',
-    artist: 'LibreTracks Ensemble',
-    bpm: 120,
+export function createEmptyProjectTemplate(
+  title = 'Nueva Canción',
+  artist = 'Sesión en Vivo',
+  bpm = 120,
+  keySignature = 'C Major'
+): SongProject {
+  return {
+    id: `song-${Date.now()}`,
+    title,
+    artist,
+    folder: 'imported',
+    inSetlist: false,
+    setlistOrder: 0,
+    bpm,
     beatsPerBar: 4,
     beatUnit: 4,
-    keySignature: 'C Minor',
+    keySignature,
     totalBars: 24,
-    quantizeMode: '1-bar',
+    durationSec: 48,
+    quantizeMode: 'immediate',
     splitRoutingMode: 'stereo',
-    clickEnabled: true,
-    clickGain: 0.75,
+    clickEnabled: false,
+    clickGain: 1.0,
     clickSubdivision: 1,
     guideCuesEnabled: true,
     guideVoiceReadout: true,
-    guideGain: 0.85,
-    masterGain: 0.95,
+    guideGain: 1.0,
+    masterGain: 1.0,
+    cueMasterGain: 1.0,
     pitchSemitones: 0,
-    updatedAt: 1730990000000,
-    sections: [
-      { id: 'sec-intro', name: 'Intro Conteo', code: 'IN', color: '#06B6D4', startBar: 1, lengthBars: 4, cueName: 'Intro' },
-      { id: 'sec-verse1', name: 'Verso 1', code: 'V1', color: '#3B82F6', startBar: 5, lengthBars: 4, cueName: 'Verse One' },
-      { id: 'sec-chorus1', name: 'Coro Principal', code: 'CH', color: '#10B981', startBar: 9, lengthBars: 4, cueName: 'Chorus' },
-      { id: 'sec-bridge', name: 'Puente (Vamp)', code: 'BR', color: '#F59E0B', startBar: 13, lengthBars: 4, vampByDefault: true, cueName: 'Bridge Vamp' },
-      { id: 'sec-chorus2', name: 'Coro Doble', code: 'C2', color: '#8B5CF6', startBar: 17, lengthBars: 4, cueName: 'Final Chorus' },
-      { id: 'sec-outro', name: 'Outro Final', code: 'OU', color: '#EC4899', startBar: 21, lengthBars: 4, cueName: 'Outro' },
-    ],
-    tracks: [
-      {
-        id: 'trk-drums',
-        name: 'Drums & Acoustic Kit',
-        role: 'drums',
-        color: '#F59E0B',
-        gain: 0.92,
-        pan: 0,
-        muted: false,
-        soloed: false,
-        bus: 'main',
-        peaks: [],
-      },
-      {
-        id: 'trk-bass',
-        name: 'Sub & Synth Bass',
-        role: 'bass',
-        color: '#EF4444',
-        gain: 0.88,
-        pan: -0.05,
-        muted: false,
-        soloed: false,
-        bus: 'main',
-        peaks: [],
-      },
-      {
-        id: 'trk-keys',
-        name: 'Warm Analog Keys',
-        role: 'keys',
-        color: '#06B6D4',
-        gain: 0.82,
-        pan: -0.35,
-        muted: false,
-        soloed: false,
-        bus: 'main',
-        peaks: [],
-      },
-      {
-        id: 'trk-guitar',
-        name: 'Clean Delay Arp Guitar',
-        role: 'guitar',
-        color: '#10B981',
-        gain: 0.80,
-        pan: 0.40,
-        muted: false,
-        soloed: false,
-        bus: 'main',
-        peaks: [],
-      },
-      {
-        id: 'trk-synth',
-        name: 'Shimmer Pad & Choir',
-        role: 'synth',
-        color: '#8B5CF6',
-        gain: 0.76,
-        pan: 0.15,
-        muted: false,
-        soloed: false,
-        bus: 'main',
-        peaks: [],
-      },
-      {
-        id: 'trk-perc',
-        name: 'Shaker & Tam-Perc',
-        role: 'perc',
-        color: '#EC4899',
-        gain: 0.68,
-        pan: -0.25,
-        muted: false,
-        soloed: false,
-        bus: 'main',
-        peaks: [],
-      },
-    ],
-  },
-  {
-    id: 'demo-sunday-anthem',
-    title: 'Catedral de Luz (Arena Set)',
-    artist: 'LibreTracks Worship & Stage',
-    bpm: 96,
-    beatsPerBar: 4,
-    beatUnit: 4,
-    keySignature: 'G Major',
-    totalBars: 20,
-    quantizeMode: '1-bar',
-    splitRoutingMode: 'stereo',
-    clickEnabled: true,
-    clickGain: 0.80,
-    clickSubdivision: 2,
-    guideCuesEnabled: true,
-    guideVoiceReadout: true,
-    guideGain: 0.85,
-    masterGain: 0.95,
-    pitchSemitones: 0,
-    updatedAt: 1730980000000,
-    sections: [
-      { id: 'sec2-intro', name: 'Intro Atmos', code: 'IN', color: '#06B6D4', startBar: 1, lengthBars: 4, cueName: 'Intro' },
-      { id: 'sec2-verse', name: 'Verso Suave', code: 'VS', color: '#3B82F6', startBar: 5, lengthBars: 4, cueName: 'Verse' },
-      { id: 'sec2-chorus', name: 'Coro Abierto', code: 'CH', color: '#10B981', startBar: 9, lengthBars: 4, cueName: 'Chorus' },
-      { id: 'sec2-vamp', name: 'Espontáneo (Vamp)', code: 'VP', color: '#F59E0B', startBar: 13, lengthBars: 4, vampByDefault: true, cueName: 'Vamp Section' },
-      { id: 'sec2-outro', name: 'Final Crescendo', code: 'OU', color: '#EC4899', startBar: 17, lengthBars: 4, cueName: 'Ending' },
-    ],
-    tracks: [
-      {
-        id: 'trk2-drums',
-        name: 'Stadium Drums',
-        role: 'drums',
-        color: '#F59E0B',
-        gain: 0.90,
-        pan: 0,
-        muted: false,
-        soloed: false,
-        bus: 'main',
-        peaks: [],
-      },
-      {
-        id: 'trk2-bass',
-        name: 'Moog Taurus Bass',
-        role: 'bass',
-        color: '#EF4444',
-        gain: 0.88,
-        pan: 0,
-        muted: false,
-        soloed: false,
-        bus: 'main',
-        peaks: [],
-      },
-      {
-        id: 'trk2-keys',
-        name: 'Grand Piano & Rhodes',
-        role: 'keys',
-        color: '#06B6D4',
-        gain: 0.85,
-        pan: -0.30,
-        muted: false,
-        soloed: false,
-        bus: 'main',
-        peaks: [],
-      },
-      {
-        id: 'trk2-guitar',
-        name: 'Dotted 8th Swell Guitar',
-        role: 'guitar',
-        color: '#10B981',
-        gain: 0.82,
-        pan: 0.35,
-        muted: false,
-        soloed: false,
-        bus: 'main',
-        peaks: [],
-      },
-      {
-        id: 'trk2-synth',
-        name: 'Warm Ambient Strings',
-        role: 'synth',
-        color: '#8B5CF6',
-        gain: 0.78,
-        pan: 0.15,
-        muted: false,
-        soloed: false,
-        bus: 'main',
-        peaks: [],
-      },
-    ],
-  },
-];
+    sections: [],
+    tracks: [],
+    updatedAt: Date.now(),
+  };
+}

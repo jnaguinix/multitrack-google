@@ -26,7 +26,11 @@ export function extractWaveformPeaks(buffer: AudioBuffer, numBuckets = 320): num
 }
 
 function findSectionForBar(sections: SongSection[], bar: number): SongSection | undefined {
-  return sections.find((s) => bar >= s.startBar && bar < s.startBar + s.lengthBars);
+  return sections.find((s) => {
+    const startBar = s.startBar ?? 1;
+    const lengthBars = s.lengthBars ?? 4;
+    return bar >= startBar && bar < startBar + lengthBars;
+  });
 }
 
 /**
