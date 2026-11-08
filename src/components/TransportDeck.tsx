@@ -182,10 +182,17 @@ export const TransportDeck: React.FC<TransportDeckProps> = ({
         <div className="flex items-center gap-1.5">
           <button
             type="button"
+            disabled={Boolean(transport.isMountingSong)}
             onClick={onPlayPause}
-            title="Reproducir / Pausar (Barra Espaciadora)"
-            className={`min-h-[36px] px-3.5 py-1.5 rounded-lg font-semibold text-xs flex items-center gap-1.5 transition-all whitespace-nowrap shrink-0 cursor-pointer ${
-              transport.isPlaying
+            title={
+              transport.isMountingSong
+                ? transport.mountingProgressText || 'Cargando pistas en RAM...'
+                : 'Reproducir / Pausar (Barra Espaciadora)'
+            }
+            className={`min-h-[36px] px-3.5 py-1.5 rounded-lg font-semibold text-xs flex items-center gap-1.5 transition-all whitespace-nowrap shrink-0 cursor-pointer disabled:opacity-50 disabled:cursor-wait ${
+              transport.isMountingSong
+                ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
+                : transport.isPlaying
                 ? 'bg-emerald-500 text-slate-950 hover:bg-emerald-400'
                 : 'bg-slate-800 text-slate-100 hover:bg-slate-700 border border-slate-700'
             }`}
@@ -195,7 +202,13 @@ export const TransportDeck: React.FC<TransportDeckProps> = ({
             ) : (
               <Play className="w-3.5 h-3.5 fill-current" />
             )}
-            <span>{transport.isPlaying ? 'Pause' : 'Play'}</span>
+            <span>
+              {transport.isMountingSong
+                ? 'Cargando RAM...'
+                : transport.isPlaying
+                ? 'Pause'
+                : 'Play'}
+            </span>
           </button>
 
           <button
@@ -265,11 +278,11 @@ export const TransportDeck: React.FC<TransportDeckProps> = ({
 
         <div className="h-5 w-px bg-slate-800 hidden xl:block" />
 
-        {/* Active & Queued Section Readout or Live Import Progress */}
+        {/* Active & Queued Section Readout or Live Import / RAM Mounting Progress */}
         <div className="hidden xl:flex items-center gap-2 min-w-[140px]">
-          {importStatusText ? (
-            <span className="text-xs font-semibold text-cyan-400 truncate">
-              {importStatusText}
+          {transport.mountingProgressText || importStatusText ? (
+            <span className="text-xs font-semibold text-amber-400 truncate">
+              {transport.mountingProgressText || importStatusText}
             </span>
           ) : (
             <>

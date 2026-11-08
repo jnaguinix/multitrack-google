@@ -66,8 +66,17 @@ export interface SongProject {
   updatedAt: number;
 }
 
+export interface SongRamCacheInfo {
+  cachedCount: number;
+  totalCount: number;
+  isReady: boolean;
+  isPreloading: boolean;
+}
+
 export interface TransportState {
   isPlaying: boolean;
+  isMountingSong?: boolean;
+  mountingProgressText?: string | null;
   currentTimeSec: number;
   totalDurationSec: number;
   currentBar: number; // 1-indexed
@@ -87,12 +96,21 @@ export interface TrackMeterReading {
   clipping: boolean;
 }
 
+export interface MetersSnapshot {
+  tracks: Record<string, TrackMeterReading>;
+  master: TrackMeterReading;
+}
+
 export type RemoteSyncMessage =
   | {
       type: 'STATE_SYNC';
-      project: Omit<SongProject, 'tracks'> & {
+      project?: Omit<SongProject, 'tracks'> & {
         tracks: Omit<TrackChannel, 'peaks'>[];
       };
+      transport: TransportState;
+    }
+  | {
+      type: 'TRANSPORT_SYNC';
       transport: TransportState;
     }
   | { type: 'CMD_PLAY_PAUSE' }

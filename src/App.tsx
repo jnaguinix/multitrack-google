@@ -11,12 +11,13 @@ import {
   createEmptyProjectTemplate,
   deleteProjectFromDb,
   loadAllProjectsFromDb,
-  loadProjectStemsFromDb,
   normalizeProjectSectionsToTime,
   saveProjectToDb,
-  saveStemAudioToDb,
+  saveStemsBatchToDb,
+  StoredAudioStem,
 } from './storage/projectDb';
 import {
+  MetersSnapshot,
   OutputBus,
   QuantizeMode,
   RemoteSyncMessage,
@@ -24,7 +25,6 @@ import {
   SongProject,
   SongSection,
   TrackChannel,
-  TrackMeterReading,
   TransportState,
 } from './types/project';
 import { TopBar, WorkspaceView } from './components/TopBar';
@@ -55,6 +55,8 @@ const INITIAL_TRANSPORT: TransportState = {
   countdownBeats: 0,
   isVamping: false,
   lastCueMessage: null,
+  isMountingSong: false,
+  mountingProgressText: null,
 };
 
 function getInitialViewFromHash(): WorkspaceView {
@@ -97,16 +99,16 @@ export default function App() {
   const [projects, setProjects] = useState<SongProject[]>([]);
   const [currentProject, setCurrentProject] = useState<SongProject | null>(null);
   const [transport, setTransport] = useState<TransportState>(INITIAL_TRANSPORT);
+  const [ramCacheVersion, setRamCacheVersion] = useState<number>(0);
+  // Default transition mode is 'cue-next' (mounts at 00:00 in pause) so songs never start playing on their own unexpectedly
   const [setlistTransitionMode, setSetlistTransitionMode] =
-    useState<SetlistTransitionMode>('auto-play');
+    useState<SetlistTransitionMode>('cue-next');
   const [confirmSongCandidate, setConfirmSongCandidate] = useState<SongProject | null>(
     null
   );
 
-  const [meters, setMeters] = useState<{
-    tracks: Record<string, TrackMeterReading>;
-    master: TrackMeterReading;
-  }>({
+  // 5. Medidores en un ref (no en el estado de App) para no recargar el hilo principal
+  const metersRef = useRef<MetersSnapshot>({
     tracks: {},
     master: { rms: 0, peak: 0, clipping: false },
   });
@@ -120,8 +122,11 @@ export default function App() {
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
   const channelRef = useRef<BroadcastChannel | null>(null);
+  const lastBroadcastTransportMsRef = useRef<number>(0);
   const currentProjectRef = useRef<SongProject | null>(currentProject);
   currentProjectRef.current = currentProject;
+  const transportRef = useRef<TransportState>(transport);
+  transportRef.current = transport;
 
   const showToast = useCallback((msg: string) => {
     setToastMessage(msg);
@@ -137,33 +142,82 @@ export default function App() {
       .sort((a, b) => (a.setlistOrder ?? 999) - (b.setlistOrder ?? 999));
   }, [projects]);
 
-  // Activate a project in the audio engine ONLY when explicitly requested by user
+  // Subscribe to RAM cache status updates to refresh Setlist card badges
+  useEffect(() => {
+    const unsubscribeCache = audioEngine.subscribeCache(() => {
+      setRamCacheVersion((v) => v + 1);
+    });
+    return unsubscribeCache;
+  }, []);
+
+  // 2. CACHÉ Y PRECARGA DE LA SIGUIENTE CANCIÓN:
+  // Cuando una canción del setlist queda activa o el setlist cambia, recalcula cuál es la siguiente
+  // y llama a preloadProject(nextSong) en segundo plano (manteniendo máx. 2 canciones en caché: actual + siguiente).
+  useEffect(() => {
+    if (setlistQueue.length === 0) return;
+
+    const activeId = currentProject?.id;
+    const activeIdx = activeId
+      ? setlistQueue.findIndex((s) => s.id === activeId)
+      : -1;
+
+    const nextSong =
+      activeIdx >= 0 && activeIdx < setlistQueue.length - 1
+        ? setlistQueue[activeIdx + 1]
+        : activeIdx === -1 && setlistQueue.length > 0
+        ? setlistQueue[0]
+        : null;
+
+    if (!nextSong || nextSong.id === activeId) return;
+
+    const timerId = window.setTimeout(() => {
+      audioEngine.preloadProject(nextSong).catch((err) => {
+        console.error('Error preloading next setlist song:', err);
+      });
+    }, 100);
+
+    return () => {
+      window.clearTimeout(timerId);
+    };
+  }, [setlistQueue, currentProject?.id]);
+
+  // 2 & 6. Activate a project using cached AudioBuffers if available and log console.info metrics
   const activateProject = useCallback(
     async (
       projectToLoad: SongProject,
       predecodedBuffers?: Map<string, AudioBuffer>,
-      autoPlayAfterLoad = false
+      explicitPlayIfAlreadyInRam = false
     ) => {
+      const t0 = performance.now();
       try {
         const normalizedProj = normalizeProjectSectionsToTime(projectToLoad);
-        let customMap: Map<string, ArrayBuffer> | undefined;
-        if (!predecodedBuffers) {
-          const storedStems = await loadProjectStemsFromDb(normalizedProj.id);
-          customMap = new Map<string, ArrayBuffer>();
-          for (const s of storedStems) {
-            customMap.set(s.trackId, s.arrayBuffer);
-          }
-        }
+        const cachedBuffers =
+          predecodedBuffers ??
+          (audioEngine.hasFullProjectInCache(normalizedProj)
+            ? audioEngine.getCachedProjectBuffers(normalizedProj.id)
+            : undefined);
+        const cameFromCache = Boolean(cachedBuffers);
 
-        const calculatedPeaks = await audioEngine.loadProject(
+        // Show project UI immediately while stems mount
+        setCurrentProject(normalizedProj);
+
+        const { peaksMap, wasCancelled } = await audioEngine.loadProject(
           normalizedProj,
-          customMap,
-          predecodedBuffers
+          cachedBuffers
         );
+
+        // If user switched to another song while this one was still decoding, abort
+        if (wasCancelled) return;
+
+        const elapsedMs = performance.now() - t0;
+        console.info(
+          `[AudioEngine][activateProject] "${normalizedProj.title}" (${normalizedProj.id}) activada en ${elapsedMs.toFixed(1)} ms | Origen: ${cameFromCache ? 'CACHÉ RAM (HIT)' : 'INDEXEDDB (MISS)'}`
+        );
+
         const realDurationSec = audioEngine.getTotalDurationSec();
         const enrichedTracks = normalizedProj.tracks.map((t) => ({
           ...t,
-          peaks: calculatedPeaks.get(t.id) || t.peaks || [],
+          peaks: peaksMap.get(t.id) || t.peaks || [],
         }));
 
         const updatedProject: SongProject = {
@@ -180,7 +234,9 @@ export default function App() {
           return prev.map((p) => (p.id === updatedProject.id ? updatedProject : p));
         });
 
-        if (autoPlayAfterLoad) {
+        // Never start spontaneous playback after a slow disk load;
+        // only play if explicitly requested AND the song was already 100% ready in RAM
+        if (explicitPlayIfAlreadyInRam && cameFromCache) {
           audioEngine.play();
         }
       } catch (err) {
@@ -225,11 +281,12 @@ export default function App() {
         return;
       }
 
-      await activateProject(nextSong, undefined, autoPlay);
+      const isReadyInRam = audioEngine.getSongRamCacheInfo(nextSong).isReady;
+      await activateProject(nextSong, undefined, autoPlay && isReadyInRam);
       showToast(
-        autoPlay
+        autoPlay && isReadyInRam
           ? `Reproduciendo siguiente en Setlist: ${nextSong.title}`
-          : `Siguiente canción lista en consola: ${nextSong.title}`
+          : `Siguiente canción lista en 00:00: ${nextSong.title}`
       );
     },
     [activateProject, setlistQueue, showToast]
@@ -241,7 +298,7 @@ export default function App() {
     if (idx > 0) {
       const prevSong = setlistQueue[idx - 1];
       await activateProject(prevSong, undefined, false);
-      showToast(`Canción anterior cargada: ${prevSong.title}`);
+      showToast(`Canción anterior cargada en 00:00: ${prevSong.title}`);
     }
   }, [activateProject, setlistQueue, showToast]);
 
@@ -257,44 +314,41 @@ export default function App() {
     return () => audioEngine.setOnSongEnded(null);
   }, [handleNextSetlistSong, setlistTransitionMode]);
 
-  // Subscribe to transport updates and BroadcastChannel sync
+  // 5. BroadcastChannel: send full project ONLY when currentProject changes
+  useEffect(() => {
+    if (!channelRef.current || !currentProject) return;
+    const msg: RemoteSyncMessage = {
+      type: 'STATE_SYNC',
+      project: {
+        ...currentProject,
+        tracks: currentProject.tracks.map(({ peaks: _peaks, ...rest }) => rest),
+      },
+      transport: transportRef.current,
+    };
+    channelRef.current.postMessage(msg);
+  }, [currentProject]);
+
+  // 5. Subscribe to transport updates (already throttled to ~20fps by audioEngine)
+  // and send transport-only BroadcastChannel updates throttled to ~10fps (100ms)
   useEffect(() => {
     const unsubscribe = audioEngine.subscribe((newTransport) => {
       setTransport(newTransport);
 
       if (channelRef.current && currentProjectRef.current) {
-        const p = currentProjectRef.current;
-        const msg: RemoteSyncMessage = {
-          type: 'STATE_SYNC',
-          project: {
-            ...p,
-            tracks: p.tracks.map(({ peaks: _peaks, ...rest }) => rest),
-          },
-          transport: newTransport,
-        };
-        channelRef.current.postMessage(msg);
+        const nowMs = performance.now();
+        if (nowMs - lastBroadcastTransportMsRef.current >= 100) {
+          lastBroadcastTransportMsRef.current = nowMs;
+          const msg: RemoteSyncMessage = {
+            type: 'TRANSPORT_SYNC',
+            transport: newTransport,
+          };
+          channelRef.current.postMessage(msg);
+        }
       }
     });
 
     return unsubscribe;
   }, []);
-
-  // Poll 60fps real-time track & master VU meters while playing
-  useEffect(() => {
-    if (!transport.isPlaying) {
-      setMeters({ tracks: {}, master: { rms: 0, peak: 0, clipping: false } });
-      return;
-    }
-
-    let animId: number;
-    const updateMeters = () => {
-      setMeters(audioEngine.getTrackMeters());
-      animId = requestAnimationFrame(updateMeters);
-    };
-    animId = requestAnimationFrame(updateMeters);
-
-    return () => cancelAnimationFrame(animId);
-  }, [transport.isPlaying]);
 
   // Mutate and persist current project helper
   const updateCurrentProject = useCallback(
@@ -420,6 +474,8 @@ export default function App() {
 
   /**
    * INSTANT NON-BLOCKING STEM & FOLDER IMPORT PIPELINE
+   * Uses controlled parallel decoding (batches of 3), immediate SetlistRamCache storage,
+   * and a single atomic IndexedDB transaction storing native File Blobs.
    */
   const handleInstantImportFiles = useCallback(
     async (
@@ -456,56 +512,65 @@ export default function App() {
         effectiveMode === 'new-song' ? 4 : currentProjectRef.current!.beatsPerBar;
       const secPerBar = (60 / bpm) * beatsPerBar;
 
-      setImportStatusText(`Importando 0/${validFiles.length} pistas...`);
+      setImportStatusText(`Importando 0/${validFiles.length} pistas en RAM...`);
 
       const decodedTracks: TrackChannel[] = [];
       const decodedAudioBuffers = new Map<string, AudioBuffer>();
+      const stemsToSaveBatch: StoredAudioStem[] = [];
       let maxDurationSec = 0;
       let completedCount = 0;
 
-      await Promise.allSettled(
+      await Promise.all(
         validFiles.map(async (file, idx) => {
-          const trackId = `stem-${Date.now()}-${idx}`;
+          const trackId = `stem-${Date.now()}-${String(idx).padStart(2, '0')}`;
           const trackLabel = cleanTrackNames[idx] || file.name.replace(/\.[^/.]+$/, '');
           const inferred = inferTrackRoleAndColor(trackLabel, idx);
 
-          const rawBuf = await file.arrayBuffer();
-          const { audioBuffer, peaks, durationSec } = await audioEngine.decodeStemBuffer(rawBuf);
+          try {
+            const rawBuf = await file.arrayBuffer();
+            const { audioBuffer, peaks, durationSec } =
+              await audioEngine.decodeStemBuffer(rawBuf, trackLabel);
 
-          completedCount++;
-          setImportStatusText(`Decodificando ${completedCount}/${validFiles.length}: ${trackLabel}`);
+            completedCount++;
+            setImportStatusText(
+              `Decodificando en RAM ${completedCount}/${validFiles.length}: ${trackLabel}`
+            );
 
-          if (durationSec > maxDurationSec) {
-            maxDurationSec = durationSec;
+            if (durationSec > maxDurationSec) {
+              maxDurationSec = durationSec;
+            }
+
+            const newTrack: TrackChannel = {
+              id: trackId,
+              name: trackLabel,
+              role: inferred.role,
+              color: inferred.color,
+              gain: 1.0,
+              pan: 0,
+              muted: false,
+              soloed: false,
+              bus: inferred.bus === 'cue-click' ? 'cue-click' : defaultBus,
+              peaks,
+              isCustomAudio: true,
+              fileName: file.name,
+              durationSec,
+            };
+
+            decodedTracks.push(newTrack);
+            decodedAudioBuffers.set(trackId, audioBuffer);
+
+            // Store native File (Blob) in a single atomic IndexedDB batch transaction
+            stemsToSaveBatch.push({
+              key: `${targetProjectId}:${trackId}`,
+              projectId: targetProjectId,
+              trackId,
+              blob: file,
+              mimeType: file.type || 'audio/wav',
+              fileName: file.name,
+            });
+          } catch (err) {
+            console.error(`[AudioEngine][Import Decode Error] Falló "${trackLabel}":`, err);
           }
-
-          const newTrack: TrackChannel = {
-            id: trackId,
-            name: trackLabel,
-            role: inferred.role,
-            color: inferred.color,
-            gain: 1.0,
-            pan: 0,
-            muted: false,
-            soloed: false,
-            bus: inferred.bus === 'cue-click' ? 'cue-click' : defaultBus,
-            peaks,
-            isCustomAudio: true,
-            fileName: file.name,
-            durationSec,
-          };
-
-          decodedTracks.push(newTrack);
-          decodedAudioBuffers.set(trackId, audioBuffer);
-
-          saveStemAudioToDb({
-            key: `${targetProjectId}:${trackId}`,
-            projectId: targetProjectId,
-            trackId,
-            arrayBuffer: rawBuf,
-            mimeType: file.type || 'audio/wav',
-            fileName: file.name,
-          }).catch((err) => console.warn('Background IndexedDB stem save warning:', err));
         })
       );
 
@@ -515,6 +580,11 @@ export default function App() {
         showToast('No se pudo decodificar el audio seleccionado');
         return;
       }
+
+      // Persist all stems in a single IndexedDB transaction in the background
+      saveStemsBatchToDb(stemsToSaveBatch).catch((err) =>
+        console.warn('Background IndexedDB batch stem save warning:', err)
+      );
 
       decodedTracks.sort((a, b) => a.id.localeCompare(b.id));
 
@@ -553,9 +623,11 @@ export default function App() {
           updatedAt: Date.now(),
         };
 
-        await activateProject(newSongProject, decodedAudioBuffers);
+        // Store all decoded buffers directly in SetlistRamCache so switching back is 0ms
+        audioEngine.storeProjectBuffersInRamCache(targetProjectId, decodedAudioBuffers);
+        await activateProject(newSongProject, decodedAudioBuffers, false);
         showToast(
-          `Canción "${songTitle}" importada y montada (${decodedTracks.length} pistas · ${formatMmSs(maxDurationSec)})`
+          `Canción "${songTitle}" lista en RAM (${decodedTracks.length} pistas · ${formatMmSs(maxDurationSec)})`
         );
       } else {
         for (const trk of decodedTracks) {
@@ -578,7 +650,7 @@ export default function App() {
           };
         });
 
-        showToast(`${decodedTracks.length} stem(s) añadidos a "${currentProjectRef.current?.title}"`);
+        showToast(`${decodedTracks.length} stem(s) añadidos en RAM a "${currentProjectRef.current?.title}"`);
       }
     },
     [activateProject, projects.length, showToast, updateCurrentProject]
@@ -827,6 +899,7 @@ export default function App() {
   };
 
   const handleDeleteProject = async (projectId: string) => {
+    audioEngine.evictSongFromRamCache(projectId);
     await deleteProjectFromDb(projectId);
     const remaining = projects.filter((p) => p.id !== projectId);
     setProjects(remaining);
@@ -1005,8 +1078,9 @@ export default function App() {
               allProjects={projects}
               setlistQueue={setlistQueue}
               transport={transport}
+              ramCacheVersion={ramCacheVersion}
               setlistTransitionMode={setlistTransitionMode}
-              meters={meters}
+              metersRef={metersRef}
               onPlayPause={handlePlayPause}
               onStop={handleStop}
               onToggleVamp={handleToggleVamp}
@@ -1063,7 +1137,7 @@ export default function App() {
                 <TimelineArranger
                   project={currentProject}
                   transport={transport}
-                  meters={meters.tracks}
+                  metersRef={metersRef}
                   isDarkMode={true}
                   isDockedMixerOpen={isDockedMixerOpen}
                   onToggleDockedMixer={() => setIsDockedMixerOpen((prev) => !prev)}
@@ -1087,7 +1161,7 @@ export default function App() {
                   <MultitrackMixer
                     project={currentProject}
                     transport={transport}
-                    meters={meters}
+                    metersRef={metersRef}
                     docked={true}
                     onToggleTrackMute={handleToggleTrackMute}
                     onToggleTrackSolo={handleToggleTrackSolo}
@@ -1137,7 +1211,7 @@ export default function App() {
               <MultitrackMixer
                 project={currentProject}
                 transport={transport}
-                meters={meters}
+                metersRef={metersRef}
                 docked={false}
                 onToggleTrackMute={handleToggleTrackMute}
                 onToggleTrackSolo={handleToggleTrackSolo}

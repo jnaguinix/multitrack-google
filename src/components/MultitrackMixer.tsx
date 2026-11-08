@@ -1,11 +1,12 @@
-import React, { useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
+  MetersSnapshot,
   OutputBus,
   SongProject,
   TrackChannel,
-  TrackMeterReading,
   TransportState,
 } from '../types/project';
+import { audioEngine } from '../audio/audioEngine';
 
 const MIN_DB = -60;
 const MAX_DB = 6;
@@ -219,10 +220,7 @@ const StudioFader: React.FC<StudioFaderProps> = ({
 export interface MultitrackMixerProps {
   project: SongProject;
   transport: TransportState;
-  meters: {
-    tracks: Record<string, TrackMeterReading>;
-    master: TrackMeterReading;
-  };
+  metersRef: React.MutableRefObject<MetersSnapshot>;
   docked?: boolean;
   onToggleTrackMute: (trackId: string) => void;
   onToggleTrackSolo: (trackId: string) => void;
@@ -241,7 +239,7 @@ export interface MultitrackMixerProps {
 export const MultitrackMixer: React.FC<MultitrackMixerProps> = ({
   project,
   transport,
-  meters,
+  metersRef,
   docked = false,
   onToggleTrackMute,
   onToggleTrackSolo,
@@ -256,6 +254,28 @@ export const MultitrackMixer: React.FC<MultitrackMixerProps> = ({
   onChangeCueMasterGain,
   onResetMixer,
 }) => {
+  const [, setMeterTick] = useState(0);
+
+  // Poll meters into metersRef and refresh only MultitrackMixer at a maximum of 20 fps (50 ms)
+  useEffect(() => {
+    if (!transport.isPlaying) {
+      metersRef.current = {
+        tracks: {},
+        master: { rms: 0, peak: 0, clipping: false },
+      };
+      setMeterTick((t) => t + 1);
+      return;
+    }
+
+    const intervalId = window.setInterval(() => {
+      metersRef.current = audioEngine.getTrackMeters();
+      setMeterTick((t) => (t + 1) % 1000000);
+    }, 50);
+
+    return () => window.clearInterval(intervalId);
+  }, [transport.isPlaying, metersRef]);
+
+  const meters = metersRef.current;
   const anySolo = project.tracks.some((t) => t.soloed);
   const activeSection = project.sections.find((s) => s.id === transport.activeSectionId);
 

@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   Repeat,
   Trash2,
@@ -9,19 +9,20 @@ import {
   Flag,
 } from 'lucide-react';
 import {
+  MetersSnapshot,
   OutputBus,
   SongProject,
   SongSection,
   TrackChannel,
-  TrackMeterReading,
   TransportState,
 } from '../types/project';
+import { audioEngine } from '../audio/audioEngine';
 import { formatMmSs } from './TransportDeck';
 
 interface TimelineArrangerProps {
   project: SongProject;
   transport: TransportState;
-  meters: Record<string, TrackMeterReading>;
+  metersRef: React.MutableRefObject<MetersSnapshot>;
   isDarkMode: boolean;
   isDockedMixerOpen?: boolean;
   onToggleDockedMixer?: () => void;
@@ -201,7 +202,7 @@ const WaveformCanvas: React.FC<WaveformCanvasProps> = ({
 export const TimelineArranger: React.FC<TimelineArrangerProps> = ({
   project,
   transport,
-  meters,
+  metersRef,
   isDockedMixerOpen = false,
   onToggleDockedMixer,
   onJumpSection,
@@ -217,6 +218,21 @@ export const TimelineArranger: React.FC<TimelineArrangerProps> = ({
   onOpenSectionEditor,
 }) => {
   const addStemInputRef = useRef<HTMLInputElement | null>(null);
+  const [, setMeterTick] = useState(0);
+
+  useEffect(() => {
+    if (!transport.isPlaying) {
+      setMeterTick((t) => t + 1);
+      return;
+    }
+    const intervalId = window.setInterval(() => {
+      metersRef.current = audioEngine.getTrackMeters();
+      setMeterTick((t) => (t + 1) % 1000000);
+    }, 50);
+    return () => window.clearInterval(intervalId);
+  }, [transport.isPlaying, metersRef]);
+
+  const meters = metersRef.current.tracks;
 
   const secPerBar = (60 / (project.bpm || 120)) * (project.beatsPerBar || 4);
   const totalDurationSec = Math.max(

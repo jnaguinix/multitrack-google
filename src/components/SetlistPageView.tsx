@@ -19,13 +19,14 @@ import {
   Repeat,
 } from 'lucide-react';
 import {
+  MetersSnapshot,
   OutputBus,
   QuantizeMode,
   SetlistTransitionMode,
   SongProject,
-  TrackMeterReading,
   TransportState,
 } from '../types/project';
+import { audioEngine } from '../audio/audioEngine';
 import { formatMmSs, formatTimecode } from './TransportDeck';
 import { MultitrackMixer } from './MultitrackMixer';
 
@@ -34,11 +35,9 @@ interface SetlistPageViewProps {
   allProjects: SongProject[];
   setlistQueue: SongProject[];
   transport: TransportState;
+  ramCacheVersion: number;
   setlistTransitionMode: SetlistTransitionMode;
-  meters: {
-    tracks: Record<string, TrackMeterReading>;
-    master: TrackMeterReading;
-  };
+  metersRef: React.MutableRefObject<MetersSnapshot>;
   onPlayPause: () => void;
   onStop: () => void;
   onToggleVamp: () => void;
@@ -78,8 +77,9 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
   allProjects,
   setlistQueue,
   transport,
+  ramCacheVersion: _ramCacheVersion,
   setlistTransitionMode,
-  meters,
+  metersRef,
   onPlayPause,
   onToggleVamp,
   onLoadAndPlaySong,
@@ -433,6 +433,7 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
           {setlistQueue.map((song, idx) => {
             const isCurrent = project?.id === song.id;
             const isPlayingThis = isCurrent && transport.isPlaying;
+            const cacheInfo = audioEngine.getSongRamCacheInfo(song);
             const durSec =
               song.durationSec ||
               ((song.totalBars || 24) * 4 * 60) / (song.bpm || 120);
@@ -487,27 +488,60 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
                       : 'border-[#252d3c] bg-[#161c24] hover:border-slate-600'
                   }`}
                 >
-                  {/* Card Top: Grip + Play Button + Menu */}
-                  <div className="flex items-center justify-between">
-                    <GripHorizontal className="w-3.5 h-3.5 text-[#7f8899] cursor-grab" />
+                  {/* Card Top: Grip + RAM Status Badge + Play Button + Menu */}
+                  <div className="flex items-center justify-between gap-1">
+                    <div className="flex items-center gap-1.5">
+                      <GripHorizontal className="w-3.5 h-3.5 text-[#7f8899] cursor-grab" />
+                      {cacheInfo.totalCount > 0 && (
+                        <span
+                          title={
+                            cacheInfo.isReady
+                              ? `100% en caché RAM (${cacheInfo.cachedCount}/${cacheInfo.totalCount} pistas) — Cambio instantáneo (0 ms)`
+                              : cacheInfo.isPreloading
+                              ? `Precargando pistas en RAM en segundo plano (${cacheInfo.cachedCount}/${cacheInfo.totalCount})...`
+                              : `${cacheInfo.cachedCount}/${cacheInfo.totalCount} pistas en RAM`
+                          }
+                          className={`px-1.5 py-0.5 rounded text-[9px] font-mono font-semibold tracking-tight ${
+                            cacheInfo.isReady
+                              ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
+                              : cacheInfo.isPreloading || cacheInfo.cachedCount > 0
+                              ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
+                              : 'bg-slate-800/80 text-slate-400 border border-slate-700'
+                          }`}
+                        >
+                          {cacheInfo.isReady
+                            ? '● RAM'
+                            : `◐ ${cacheInfo.cachedCount}/${cacheInfo.totalCount}`}
+                        </span>
+                      )}
+                    </div>
 
                     <div className="flex items-center gap-1">
                       <button
                         type="button"
+                        disabled={Boolean(isCurrent && transport.isMountingSong)}
                         onClick={(e) => {
                           e.stopPropagation();
                           if (isCurrent) {
                             onPlayPause();
                           } else {
-                            onLoadAndPlaySong(song.id, true);
+                            // Only start immediate playback if 100% of stems are already in RAM;
+                            // otherwise mount in pause at 00:00 so it never starts playing unexpectedly later
+                            onLoadAndPlaySong(song.id, cacheInfo.isReady);
                           }
                         }}
                         title={
-                          isPlayingThis
+                          isCurrent && transport.isMountingSong
+                            ? transport.mountingProgressText || 'Cargando pistas en RAM...'
+                            : isPlayingThis
                             ? 'Pausar canción'
-                            : 'Cargar y reproducir inmediatamente'
+                            : isCurrent
+                            ? 'Reproducir desde posición actual'
+                            : cacheInfo.isReady
+                            ? 'En RAM: Montar y reproducir al instante'
+                            : 'Montar en consola en 00:00 (esperar 100% RAM antes de sonar)'
                         }
-                        className="w-6 h-6 rounded bg-[#0c1414] hover:bg-emerald-500 text-emerald-400 hover:text-slate-950 border border-emerald-500/40 flex items-center justify-center cursor-pointer transition-colors"
+                        className="w-6 h-6 rounded bg-[#0c1414] hover:bg-emerald-500 text-emerald-400 hover:text-slate-950 border border-emerald-500/40 flex items-center justify-center cursor-pointer transition-colors disabled:opacity-40 disabled:cursor-wait"
                       >
                         {isPlayingThis ? (
                           <Pause className="w-3 h-3 fill-current" />
@@ -568,7 +602,7 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
                         }}
                         className="w-full px-2.5 py-1.5 text-left rounded hover:bg-slate-800 text-cyan-300 font-semibold cursor-pointer"
                       >
-                        Montar en consola
+                        Montar en consola (00:00)
                       </button>
                       <button
                         type="button"
@@ -787,6 +821,18 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
               </span>
             </div>
 
+            {/* Mounting in RAM Progress Overlay Banner */}
+            {transport.isMountingSong && (
+              <div className="absolute inset-0 bg-slate-950/70 backdrop-blur-xs flex flex-col items-center justify-center p-4 text-center z-20">
+                <div className="px-4 py-2.5 rounded-xl bg-[#151a24] border border-amber-500/50 text-amber-300 text-xs font-semibold shadow-xl">
+                  {transport.mountingProgressText || 'Cargando pistas en RAM...'}
+                </div>
+                <span className="text-[11px] text-slate-300 mt-1.5">
+                  Play está bloqueado hasta que el 100% de los instrumentos estén listos en RAM.
+                </span>
+              </div>
+            )}
+
             {/* Section Markers Overlay Pills */}
             {project.sections.length > 0 && (
               <div className="absolute top-9 left-3.5 right-3.5 flex items-center gap-1.5 pointer-events-auto overflow-x-auto">
@@ -923,7 +969,7 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
           <MultitrackMixer
             project={filteredProjectForMixer}
             transport={transport}
-            meters={meters}
+            metersRef={metersRef}
             docked={true}
             onToggleTrackMute={onToggleTrackMute}
             onToggleTrackSolo={onToggleTrackSolo}

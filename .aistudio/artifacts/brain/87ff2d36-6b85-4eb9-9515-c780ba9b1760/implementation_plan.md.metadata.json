@@ -1,6 +1,6 @@
 {
-  "summary":  "Plan de implementación para crear la página dedicada de Setlist (con tarjetas horizontales de canciones, onda maestra unificada y el Mixer rediseñado abajo) e iniciar la app sin ninguna canción autocargada ni demos por defecto.",
-  "updatedAt":  "2026-11-08T05:53:39.876802415Z",
+  "summary":  "Plan técnico para resolver la lentitud de carga (30s), instrumentos faltantes y reproducción espontánea mediante un Caché Granular Inteligente en RAM (hasta 6 canciones con optimización de canales), decodificación paralela, escritura atómica en IndexedDB y bloqueo estricto de reproducción hasta el 100% de carga.",
+  "updatedAt":  "2026-11-08T06:08:58.078686874Z",
   "requestFeedback":  true,
   "userFacing":  true
 }

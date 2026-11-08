@@ -9,10 +9,13 @@ export interface StoredAudioStem {
   key: string; // `${projectId}:${trackId}`
   projectId: string;
   trackId: string;
-  arrayBuffer: ArrayBuffer;
+  blob?: Blob;
+  arrayBuffer?: ArrayBuffer;
   mimeType: string;
   fileName: string;
 }
+
+let cachedDbPromise: Promise<IDBDatabase> | null = null;
 
 /**
  * Ensures any legacy bar-only sections have valid startTimeSec and endTimeSec in seconds
@@ -64,7 +67,9 @@ export function normalizeProjectSectionsToTime(project: SongProject): SongProjec
 }
 
 function openDatabase(): Promise<IDBDatabase> {
-  return new Promise((resolve, reject) => {
+  if (cachedDbPromise) return cachedDbPromise;
+
+  cachedDbPromise = new Promise((resolve, reject) => {
     const request = indexedDB.open(DB_NAME, DB_VERSION);
     request.onupgradeneeded = () => {
       const db = request.result;
@@ -76,9 +81,20 @@ function openDatabase(): Promise<IDBDatabase> {
         audioStore.createIndex('byProject', 'projectId', { unique: false });
       }
     };
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error);
+    request.onsuccess = () => {
+      const db = request.result;
+      db.onclose = () => {
+        cachedDbPromise = null;
+      };
+      resolve(db);
+    };
+    request.onerror = () => {
+      cachedDbPromise = null;
+      reject(request.error);
+    };
   });
+
+  return cachedDbPromise;
 }
 
 export async function saveProjectToDb(project: SongProject): Promise<void> {
@@ -103,7 +119,6 @@ export async function loadAllProjectsFromDb(): Promise<SongProject[]> {
       const userProjects: SongProject[] = [];
 
       for (const item of rawList) {
-        // Purge any legacy default demo projects so only user songs remain
         if (item.id.startsWith('demo-')) {
           store.delete(item.id);
         } else {
@@ -150,6 +165,23 @@ export async function saveStemAudioToDb(stem: StoredAudioStem): Promise<void> {
   });
 }
 
+/**
+ * Writes all stems of a song in a single atomic IndexedDB transaction using native Blobs
+ */
+export async function saveStemsBatchToDb(stems: StoredAudioStem[]): Promise<void> {
+  if (stems.length === 0) return;
+  const db = await openDatabase();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE_AUDIO, 'readwrite');
+    const store = tx.objectStore(STORE_AUDIO);
+    for (const stem of stems) {
+      store.put(stem);
+    }
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
 export async function loadProjectStemsFromDb(projectId: string): Promise<StoredAudioStem[]> {
   const db = await openDatabase();
   return new Promise((resolve, reject) => {
@@ -159,6 +191,16 @@ export async function loadProjectStemsFromDb(projectId: string): Promise<StoredA
     req.onsuccess = () => resolve((req.result as StoredAudioStem[]) || []);
     req.onerror = () => reject(req.error);
   });
+}
+
+export async function extractStemArrayBuffer(stem: StoredAudioStem): Promise<ArrayBuffer | null> {
+  if (stem.blob) {
+    return await stem.blob.arrayBuffer();
+  }
+  if (stem.arrayBuffer) {
+    return stem.arrayBuffer;
+  }
+  return null;
 }
 
 export function createEmptyProjectTemplate(
