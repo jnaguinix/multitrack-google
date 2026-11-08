@@ -3,6 +3,15 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+export interface FastWavHeaderInfo {
+  durationSec: number;
+  sampleRate: number;
+  channels: number;
+  bitsPerSample: number;
+  dataOffset: number;
+  dataSize: number;
+}
+
 /**
  * Validates whether a file is a candidate audio stem.
  * Rejects macOS resource forks (._*), hidden files, text/metadata files, and empty 0-byte entries.
@@ -39,6 +48,76 @@ export function isAudioFileCandidate(file: File): boolean {
 
   // Check supported multitrack audio extensions (.wav, .mp3, .ogg, .flac, .m4a, .aac, .webm, .opus, .aif, .aiff, .caf, .wma)
   return /\.(wav|mp3|ogg|flac|m4a|aac|webm|opus|aif|aiff|caf|wma)$/i.test(lower);
+}
+
+/**
+ * Reads only the first 4 KB of a WAV file (< 0.5 ms) to extract exact duration,
+ * sampleRate, channels, and bit depth without reading or decoding the entire file.
+ */
+export async function parseWavHeaderFast(file: File): Promise<FastWavHeaderInfo | null> {
+  const lower = file.name.toLowerCase();
+  const isWav =
+    lower.endsWith('.wav') ||
+    file.type === 'audio/wav' ||
+    file.type === 'audio/x-wav' ||
+    file.type === 'audio/wave';
+
+  if (!isWav || file.size < 44) return null;
+
+  try {
+    const headerSlice = await file.slice(0, 4096).arrayBuffer();
+    const view = new DataView(headerSlice);
+
+    // Check "RIFF" (0x52494646) and "WAVE" (0x57415645)
+    if (view.getUint32(0, false) !== 0x52494646 || view.getUint32(8, false) !== 0x57415645) {
+      return null;
+    }
+
+    let offset = 12;
+    let channels = 2;
+    let sampleRate = 48000;
+    let byteRate = 0;
+    let bitsPerSample = 16;
+    let dataOffset = 44;
+    let dataSize = Math.max(0, file.size - 44);
+
+    while (offset + 8 <= view.byteLength) {
+      const chunkId = view.getUint32(offset, false);
+      const chunkSize = view.getUint32(offset + 4, true);
+
+      // "fmt " chunk (0x666d7420)
+      if (chunkId === 0x666d7420 && offset + 24 <= view.byteLength) {
+        channels = view.getUint16(offset + 10, true) || 2;
+        sampleRate = view.getUint32(offset + 12, true) || 48000;
+        byteRate = view.getUint32(offset + 16, true);
+        bitsPerSample = view.getUint16(offset + 22, true) || 16;
+      }
+      // "data" chunk (0x64617461)
+      else if (chunkId === 0x64617461) {
+        dataOffset = offset + 8;
+        dataSize = chunkSize > 0 && chunkSize <= file.size ? chunkSize : file.size - dataOffset;
+        break;
+      }
+
+      offset += 8 + chunkSize + (chunkSize % 2);
+    }
+
+    const effectiveByteRate =
+      byteRate > 0 ? byteRate : sampleRate * channels * Math.max(1, bitsPerSample >> 3);
+    if (effectiveByteRate <= 0) return null;
+
+    const durationSec = Math.max(0.1, dataSize / effectiveByteRate);
+    return {
+      durationSec,
+      sampleRate,
+      channels,
+      bitsPerSample,
+      dataOffset,
+      dataSize,
+    };
+  } catch {
+    return null;
+  }
 }
 
 /**

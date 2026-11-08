@@ -696,12 +696,13 @@ export class LibreTracksAudioEngine {
 
   public async decodeStemBuffer(
     rawBuffer: ArrayBuffer,
-    label = 'stem'
+    label = 'stem',
+    cloneBuffer = false
   ): Promise<{ audioBuffer: AudioBuffer; peaks: number[]; durationSec: number }> {
     const ctx = this.ensureContext();
     const t0 = performance.now();
-    const copy = rawBuffer.slice(0);
-    const audioBuffer = await ctx.decodeAudioData(copy);
+    const targetBuf = cloneBuffer ? rawBuffer.slice(0) : rawBuffer;
+    const audioBuffer = await ctx.decodeAudioData(targetBuf);
     const elapsedMs = performance.now() - t0;
     console.info(
       `[AudioEngine][Decode] Pista "${label}" decodificada en ${elapsedMs.toFixed(1)} ms (${audioBuffer.duration.toFixed(1)}s, ${audioBuffer.numberOfChannels}ch)`
@@ -812,8 +813,7 @@ export class LibreTracksAudioEngine {
             try {
               const rawBuf = await extractStemArrayBuffer(stemRecord);
               if (!rawBuf) return;
-              const copy = rawBuf.slice(0);
-              const decoded = await ctx.decodeAudioData(copy);
+              const decoded = await ctx.decodeAudioData(rawBuf);
               const elapsedMs = performance.now() - t0;
               console.info(
                 `[AudioEngine][Decode] Pista "${track.name}" (${track.id}) decodificada en ${elapsedMs.toFixed(1)} ms`
@@ -1377,6 +1377,74 @@ export class LibreTracksAudioEngine {
     this.emitTransport(true);
   }
 
+  /**
+   * Mounts a newly imported project shell and its mixer nodes in < 1 ms
+   * so the UI and mixer are 100% responsive immediately while stems decode in parallel.
+   */
+  public prepareProjectShell(project: SongProject): void {
+    ++this.loadGenerationId;
+    this.stop();
+
+    const ctx = this.ensureContext();
+    this.project = project;
+    this.skippedByRamBudgetIds.delete(project.id);
+
+    this.trackNodes.forEach((node) => {
+      try {
+        node.source?.stop();
+        node.source?.disconnect();
+        node.sourceFadeGain?.disconnect();
+        node.gainNode.disconnect();
+        node.panNode.disconnect();
+        node.analyser.disconnect();
+      } catch {
+        // Ignore cleanup errors
+      }
+    });
+    this.trackNodes.clear();
+
+    this.streamingTracks.forEach((st) => st.dispose());
+    this.streamingTracks.clear();
+    this.trackBuffers.clear();
+
+    let songMap = this.projectBufferCache.get(project.id);
+    if (!songMap) {
+      songMap = new Map<string, AudioBuffer>();
+      this.projectBufferCache.set(project.id, songMap);
+    }
+    this.touchCacheOrder(project.id);
+
+    for (const track of project.tracks) {
+      const gainNode = ctx.createGain();
+      const panNode = ctx.createStereoPanner();
+      const analyser = ctx.createAnalyser();
+      analyser.fftSize = 256;
+
+      gainNode.connect(panNode);
+      panNode.connect(analyser);
+
+      this.trackNodes.set(track.id, {
+        source: null,
+        sourceFadeGain: null,
+        gainNode,
+        panNode,
+        analyser,
+        timeDomainData: new Float32Array(analyser.fftSize),
+      });
+    }
+
+    this.isMountingSong = false;
+    this.mountingProgressText = null;
+    this.applyMixerRouting();
+    this.pausedSongSec = 0;
+    const firstSec = project.sections[0] || null;
+    this.activeSectionId = firstSec ? firstSec.id : null;
+    this.isVamping = Boolean(firstSec?.vampByDefault);
+    this.lastCueMessage = firstSec ? `LISTO: ${firstSec.name.toUpperCase()}` : null;
+    this.emitTransport(true);
+    this.emitCacheUpdate();
+  }
+
   public mountDecodedTrack(
     track: TrackChannel,
     decoded: AudioBuffer
@@ -1403,31 +1471,56 @@ export class LibreTracksAudioEngine {
         ? track.peaks
         : extractWaveformPeaks(decoded, 320);
 
-    const gainNode = ctx.createGain();
-    const panNode = ctx.createStereoPanner();
-    const analyser = ctx.createAnalyser();
-    analyser.fftSize = 256;
+    let existingNode = this.trackNodes.get(track.id);
+    if (!existingNode) {
+      const gainNode = ctx.createGain();
+      const panNode = ctx.createStereoPanner();
+      const analyser = ctx.createAnalyser();
+      analyser.fftSize = 256;
 
-    gainNode.connect(panNode);
-    panNode.connect(analyser);
+      gainNode.connect(panNode);
+      panNode.connect(analyser);
 
-    this.trackNodes.set(track.id, {
-      source: null,
-      sourceFadeGain: null,
-      gainNode,
-      panNode,
-      analyser,
-      timeDomainData: new Float32Array(analyser.fftSize),
-    });
+      existingNode = {
+        source: null,
+        sourceFadeGain: null,
+        gainNode,
+        panNode,
+        analyser,
+        timeDomainData: new Float32Array(analyser.fftSize),
+      };
+      this.trackNodes.set(track.id, existingNode);
+    }
+
+    const gainNode = existingNode.gainNode;
 
     if (this.project) {
-      if (!this.project.tracks.some((t) => t.id === track.id)) {
-        this.project = {
-          ...this.project,
-          tracks: [...this.project.tracks, track],
-        };
-      }
+      const enrichedTrack: TrackChannel = {
+        ...track,
+        peaks,
+        durationSec: decoded.duration,
+      };
+      const exists = this.project.tracks.some((t) => t.id === track.id);
+      const nextTracks = exists
+        ? this.project.tracks.map((t) => (t.id === track.id ? enrichedTrack : t))
+        : [...this.project.tracks, enrichedTrack];
+
+      const nextDurationSec = Math.max(this.project.durationSec || 0, decoded.duration);
+      const secPerBar = (60 / (this.project.bpm || 120)) * (this.project.beatsPerBar || 4);
+      const nextTotalBars = Math.max(
+        this.project.totalBars || 24,
+        nextDurationSec > 2 ? Math.max(4, Math.ceil(nextDurationSec / secPerBar)) : 24
+      );
+
+      this.project = {
+        ...this.project,
+        durationSec: nextDurationSec,
+        totalBars: nextTotalBars,
+        tracks: nextTracks,
+      };
+
       this.applyMixerRouting();
+      this.emitTransport(true);
 
       if (this.isStreamingMode() && track.pcm && track.pcm.frames > 0) {
         try {

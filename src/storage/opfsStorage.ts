@@ -151,8 +151,8 @@ export async function writeTrackPcmFromAudioBuffer(
   const leftChannel = audioBuffer.getChannelData(0);
   const rightChannel = numChannels > 1 ? audioBuffer.getChannelData(1) : leftChannel;
 
-  // Process and write in 64k frame chunks (256 KB per write)
-  const CHUNK_FRAMES = 65536;
+  // Process and write in 1M frame chunks (4 MB per write) to minimize IPC overhead
+  const CHUNK_FRAMES = 1048576;
   let offset = 0;
   let bytesWritten = 0;
 

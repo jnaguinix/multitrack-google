@@ -204,7 +204,7 @@ export async function extractStemArrayBuffer(stem: StoredAudioStem): Promise<Arr
     return await stem.blob.arrayBuffer();
   }
   if (stem.arrayBuffer) {
-    return stem.arrayBuffer;
+    return stem.arrayBuffer.slice(0);
   }
   return null;
 }

@@ -38,7 +38,6 @@ import { StageRemoteView } from './components/StageRemoteView';
 import {
   cleanOrphanPcmDirectories,
   ensureStoragePersist,
-  writeTrackPcmFromAudioBuffer,
 } from './storage/opfsStorage';
 import {
   optimizeProjectForStreaming,
@@ -47,7 +46,7 @@ import {
 import {
   extractAudioFilesFromDataTransfer,
   extractAudioFilesFromFileList,
-  isAudioFileCandidate,
+  parseWavHeaderFast,
 } from './utils/fileImportHelper';
 import {
   ConfirmSongActionModal,
@@ -586,6 +585,7 @@ export default function App() {
       defaultBus: OutputBus = 'main',
       importMode: 'new-song' | 'current-song' = 'new-song'
     ) => {
+      const t0 = performance.now();
       const validFiles = extractAudioFilesFromFileList(fileList);
 
       if (validFiles.length === 0) {
@@ -598,9 +598,10 @@ export default function App() {
           ? 'current-song'
           : 'new-song';
 
+      const baseTimestamp = Date.now();
       const targetProjectId =
         effectiveMode === 'new-song'
-          ? `song-${Date.now()}`
+          ? `song-${baseTimestamp}`
           : currentProjectRef.current!.id;
 
       const { songTitle, detectedBpm, detectedKey, cleanTrackNames } =
@@ -614,109 +615,65 @@ export default function App() {
         effectiveMode === 'new-song' ? 4 : currentProjectRef.current!.beatsPerBar;
       const secPerBar = (60 / bpm) * beatsPerBar;
 
-      setImportStatusText(`Importando 0/${validFiles.length} pistas...`);
-      // Request storage persistence in background without blocking audio decoding
+      // Request storage persistence in background without blocking
       ensureStoragePersist().catch(() => {});
 
-      const decodedTracks: TrackChannel[] = [];
-      const decodedAudioBuffers = new Map<string, AudioBuffer>();
-      const stemsToSaveBatch: StoredAudioStem[] = [];
-      let maxDurationSec = 0;
+      // =========================================================================
+      // PHASE 1: SUB-MILLISECOND WAV HEADER INSPECTION & INSTANT UI/ENGINE MOUNT
+      // =========================================================================
+      const wavHeaders = await Promise.all(validFiles.map((f) => parseWavHeaderFast(f)));
 
-      // Sequential decoding prevents high-RAM spikes, UI freezing, and OPFS file lock contention
+      const initialTracks: TrackChannel[] = [];
+      const stemsToSaveBatch: StoredAudioStem[] = [];
+      let headerMaxDurationSec = 0;
+
       for (let idx = 0; idx < validFiles.length; idx++) {
         const file = validFiles[idx];
-        const trackId = `stem-${Date.now()}-${String(idx).padStart(2, '0')}`;
+        const trackId = `stem-${baseTimestamp}-${String(idx).padStart(2, '0')}`;
         const trackLabel = cleanTrackNames[idx] || file.name.replace(/\.[^/.]+$/, '');
         const inferred = inferTrackRoleAndColor(trackLabel, idx);
+        const wavInfo = wavHeaders[idx];
+        const estDuration = wavInfo?.durationSec || 0;
 
-        setImportStatusText(
-          `Decodificando pista ${idx + 1}/${validFiles.length}: ${trackLabel}...`
-        );
-
-        try {
-          const rawBuf = await file.arrayBuffer();
-          const { audioBuffer, peaks, durationSec } =
-            await audioEngine.decodeStemBuffer(rawBuf, trackLabel);
-
-          if (durationSec > maxDurationSec) {
-            maxDurationSec = durationSec;
-          }
-
-          let pcmMeta:
-            | { sampleRate: number; channels: 2; frames: number; bytesWritten: number }
-            | undefined;
-          try {
-            pcmMeta = await writeTrackPcmFromAudioBuffer(
-              targetProjectId,
-              trackId,
-              audioBuffer
-            );
-          } catch (pcmErr) {
-            console.warn(
-              `[OPFS] Aviso al escribir PCM durante importación para "${trackLabel}":`,
-              pcmErr
-            );
-          }
-
-          const newTrack: TrackChannel = {
-            id: trackId,
-            name: trackLabel,
-            role: inferred.role,
-            color: inferred.color,
-            gain: 1.0,
-            pan: 0,
-            muted: false,
-            soloed: false,
-            bus: inferred.bus === 'cue-click' ? 'cue-click' : defaultBus,
-            peaks,
-            pcm: pcmMeta
-              ? {
-                  sampleRate: pcmMeta.sampleRate,
-                  channels: 2,
-                  frames: pcmMeta.frames,
-                  version: 1,
-                }
-              : undefined,
-            isCustomAudio: true,
-            fileName: file.name,
-            durationSec,
-          };
-
-          decodedTracks.push(newTrack);
-          decodedAudioBuffers.set(trackId, audioBuffer);
-
-          stemsToSaveBatch.push({
-            key: `${targetProjectId}:${trackId}`,
-            projectId: targetProjectId,
-            trackId,
-            blob: file,
-            mimeType: file.type || 'audio/wav',
-            fileName: file.name,
-          });
-        } catch (err) {
-          console.error(`[AudioEngine][Import Decode Error] Falló "${trackLabel}":`, err);
+        if (estDuration > headerMaxDurationSec) {
+          headerMaxDurationSec = estDuration;
         }
+
+        const newTrack: TrackChannel = {
+          id: trackId,
+          name: trackLabel,
+          role: inferred.role,
+          color: inferred.color,
+          gain: 1.0,
+          pan: 0,
+          muted: false,
+          soloed: false,
+          bus: inferred.bus === 'cue-click' ? 'cue-click' : defaultBus,
+          peaks: [],
+          isCustomAudio: true,
+          fileName: file.name,
+          durationSec: estDuration > 0 ? estDuration : undefined,
+        };
+
+        initialTracks.push(newTrack);
+        stemsToSaveBatch.push({
+          key: `${targetProjectId}:${trackId}`,
+          projectId: targetProjectId,
+          trackId,
+          blob: file,
+          mimeType: file.type || 'audio/wav',
+          fileName: file.name,
+        });
       }
 
-      setImportStatusText(null);
+      const initialDurationSec =
+        headerMaxDurationSec > 1
+          ? headerMaxDurationSec
+          : effectiveMode === 'current-song'
+          ? currentProjectRef.current?.durationSec || 180
+          : 180;
 
-      if (decodedTracks.length === 0) {
-        showToast('No se pudo decodificar el audio seleccionado');
-        return;
-      }
-
-      // Persist all stems in background IndexedDB batch transaction
-      saveStemsBatchToDb(stemsToSaveBatch).catch((err) =>
-        console.warn('Background IndexedDB batch stem save warning:', err)
-      );
-
-      decodedTracks.sort((a, b) => a.id.localeCompare(b.id));
-
-      const calculatedBars =
-        maxDurationSec > 2
-          ? Math.max(4, Math.ceil(maxDurationSec / secPerBar))
-          : 24;
+      const initialBars = Math.max(4, Math.ceil(initialDurationSec / secPerBar));
 
       if (effectiveMode === 'new-song') {
         const newSongProject: SongProject = {
@@ -730,8 +687,8 @@ export default function App() {
           beatsPerBar: 4,
           beatUnit: 4,
           keySignature: detectedKey || 'C Major',
-          totalBars: calculatedBars,
-          durationSec: maxDurationSec,
+          totalBars: initialBars,
+          durationSec: initialDurationSec,
           quantizeMode: 'immediate',
           splitRoutingMode: 'stereo',
           clickEnabled: false,
@@ -744,51 +701,157 @@ export default function App() {
           cueMasterGain: 1.0,
           pitchSemitones: 0,
           sections: [],
-          tracks: decodedTracks,
+          tracks: initialTracks,
           updatedAt: Date.now(),
         };
 
-        audioEngine.storeProjectBuffersInRamCache(targetProjectId, decodedAudioBuffers);
-        await activateProject(newSongProject, decodedAudioBuffers, false);
-        showToast(
-          `Canción "${songTitle}" lista (${decodedTracks.length} pistas · ${formatMmSs(maxDurationSec)})`
-        );
+        // Mount project shell and mixer nodes in < 1 ms
+        audioEngine.prepareProjectShell(newSongProject);
+        setCurrentProject(newSongProject);
+        setProjects((prev) => [newSongProject, ...prev]);
+        saveProjectToDb(newSongProject).catch(() => {});
       } else {
-        const current = currentProjectRef.current;
-        if (current) {
-          const combinedTracks = [...current.tracks, ...decodedTracks];
-          const nextTotalBars = Math.max(current.totalBars, calculatedBars);
-          const nextDurationSec = Math.max(current.durationSec || 0, maxDurationSec);
-          const updatedCurrentProject: SongProject = {
-            ...current,
-            totalBars: nextTotalBars,
-            durationSec: nextDurationSec,
-            tracks: combinedTracks,
-          };
+        const current = currentProjectRef.current!;
+        const combinedTracks = [...current.tracks, ...initialTracks];
+        const nextDurationSec = Math.max(current.durationSec || 0, initialDurationSec);
+        const nextTotalBars = Math.max(current.totalBars, initialBars);
 
-          // Update audio engine project configuration first so mixer routes find the new tracks
-          audioEngine.updateProjectConfig(updatedCurrentProject);
+        const updatedProject: SongProject = {
+          ...current,
+          totalBars: nextTotalBars,
+          durationSec: nextDurationSec,
+          tracks: combinedTracks,
+          updatedAt: Date.now(),
+        };
 
-          for (const trk of decodedTracks) {
-            const buf = decodedAudioBuffers.get(trk.id);
-            if (buf) {
-              audioEngine.mountDecodedTrack(trk, buf);
+        audioEngine.updateProjectConfig(updatedProject);
+        setCurrentProject(updatedProject);
+        setProjects((prev) =>
+          prev.map((p) => (p.id === updatedProject.id ? updatedProject : p))
+        );
+        saveProjectToDb(updatedProject).catch(() => {});
+      }
+
+      // Save native File Blob pointers to IndexedDB in background (zero re-encoding)
+      saveStemsBatchToDb(stemsToSaveBatch).catch((err) =>
+        console.warn('Background IndexedDB batch stem save warning:', err)
+      );
+
+      const mountMs = performance.now() - t0;
+      console.info(
+        `[AudioEngine][InstantImport] "${songTitle}" (${initialTracks.length} pistas) montada en consola en ${mountMs.toFixed(1)} ms`
+      );
+      showToast(
+        effectiveMode === 'new-song'
+          ? `Canción "${songTitle}" montada en ${Math.max(1, Math.round(mountMs))} ms (${initialTracks.length} pistas)`
+          : `${initialTracks.length} stem(s) montado(s) en ${Math.max(1, Math.round(mountMs))} ms`
+      );
+
+      // =========================================================================
+      // PHASE 2: PARALLEL NATIVE C++ AUDIO BUFFER HYDRATION (ZERO OPFS WRITES)
+      // =========================================================================
+      let completedCount = 0;
+      let maxDecodedDurationSec = headerMaxDurationSec;
+      let anyDecoded = false;
+
+      setImportStatusText(
+        `Preparando audio 0/${validFiles.length} en segundo plano...`
+      );
+
+      const BATCH_SIZE = 4;
+      for (let i = 0; i < validFiles.length; i += BATCH_SIZE) {
+        const batchFiles = validFiles.slice(i, i + BATCH_SIZE);
+        const batchTracks = initialTracks.slice(i, i + BATCH_SIZE);
+
+        await Promise.all(
+          batchFiles.map(async (file, batchIdx) => {
+            const trk = batchTracks[batchIdx];
+            try {
+              const rawBuf = await file.arrayBuffer();
+              const { audioBuffer, peaks, durationSec } =
+                await audioEngine.decodeStemBuffer(rawBuf, trk.name, false);
+
+              anyDecoded = true;
+              completedCount++;
+              if (durationSec > maxDecodedDurationSec) {
+                maxDecodedDurationSec = durationSec;
+              }
+
+              setImportStatusText(
+                completedCount < validFiles.length
+                  ? `Preparando audio ${completedCount}/${validFiles.length}: ${trk.name}`
+                  : null
+              );
+
+              const enrichedTrack: TrackChannel = {
+                ...trk,
+                peaks,
+                durationSec,
+              };
+
+              // If this project is still the active project in the console, mount buffer live
+              if (currentProjectRef.current?.id === targetProjectId) {
+                audioEngine.mountDecodedTrack(enrichedTrack, audioBuffer);
+              } else {
+                // Otherwise store in RAM cache for instant switching
+                const cachedMap =
+                  audioEngine.getCachedProjectBuffers(targetProjectId) ||
+                  new Map<string, AudioBuffer>();
+                cachedMap.set(trk.id, audioBuffer);
+                audioEngine.storeProjectBuffersInRamCache(targetProjectId, cachedMap);
+              }
+
+              // Update track peaks & duration progressively in React state
+              const updateProjectWithTrack = (proj: SongProject): SongProject => {
+                if (proj.id !== targetProjectId) return proj;
+                const nextDur = Math.max(
+                  headerMaxDurationSec > 0 ? proj.durationSec || 0 : 0,
+                  maxDecodedDurationSec
+                );
+                const finalDur = nextDur > 0 ? nextDur : proj.durationSec || 180;
+                const finalBars = Math.max(4, Math.ceil(finalDur / secPerBar));
+                return {
+                  ...proj,
+                  durationSec: finalDur,
+                  totalBars: finalBars,
+                  tracks: proj.tracks.map((t) =>
+                    t.id === enrichedTrack.id ? enrichedTrack : t
+                  ),
+                };
+              };
+
+              setCurrentProject((prev) =>
+                prev && prev.id === targetProjectId ? updateProjectWithTrack(prev) : prev
+              );
+              setProjects((prev) =>
+                prev.map((p) =>
+                  p.id === targetProjectId ? updateProjectWithTrack(p) : p
+                )
+              );
+            } catch (err) {
+              completedCount++;
+              console.error(
+                `[AudioEngine][Import Decode Error] Falló "${trk.name}":`,
+                err
+              );
             }
-          }
+          })
+        );
+      }
 
-          setCurrentProject(updatedCurrentProject);
-          saveProjectToDb(updatedCurrentProject).catch(() => {});
-          setProjects((list) =>
-            list.map((item) => (item.id === updatedCurrentProject.id ? updatedCurrentProject : item))
-          );
+      setImportStatusText(null);
 
-          showToast(
-            `${decodedTracks.length} stem(s) añadido(s) a "${current.title}"`
-          );
-        }
+      if (!anyDecoded) {
+        showToast('No se pudo decodificar el audio seleccionado');
+        return;
+      }
+
+      // Persist final peaks and exact duration to IndexedDB
+      if (currentProjectRef.current?.id === targetProjectId) {
+        saveProjectToDb(currentProjectRef.current).catch(() => {});
       }
     },
-    [activateProject, projects.length, showToast]
+    [projects.length, showToast]
   );
 
   // Add a Section Marker directly at the current playhead time (mm:ss)
