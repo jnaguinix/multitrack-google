@@ -1,6 +1,6 @@
 {
-  "summary":  "Plan de arquitectura de 6 etapas para evolucionar el motor de audio de LibreTracks hacia un motor híbrido REAPER-style ('buffer' con presupuesto de bytes en RAM + 'stream' desde disco vía OPFS e Int16 en Web Worker), entregando la Etapa 1 tras aprobar el plan y avanzando etapa por etapa con 'continúa'.",
-  "updatedAt":  "2026-11-08T16:57:45.850255611Z",
+  "summary":  "Plan arquitectónico para importación instantánea en milisegundos (estilo escritorio/REAPER) eliminando la copia y recodificación síncrona a OPFS durante la importación, con montaje inmediato en UI y lectura directa desde referencias de archivo (WAV y MP3/M4A).",
+  "updatedAt":  "2026-11-08T20:34:20.987142543Z",
   "requestFeedback":  true,
   "userFacing":  true
 }

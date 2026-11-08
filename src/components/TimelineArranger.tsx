@@ -34,7 +34,7 @@ interface TimelineArrangerProps {
   onChangeTrackPan: (trackId: string, pan: number) => void;
   onChangeTrackBus: (trackId: string, bus: OutputBus) => void;
   onDeleteTrack: (trackId: string) => void;
-  onAddStemsToCurrentSong: (files: FileList) => void;
+  onAddStemsToCurrentSong: (files: FileList | File[]) => void;
   onAddMarkerAtPlayhead: () => void;
   onOpenImportModal: () => void;
   onOpenSectionEditor: () => void;
@@ -362,12 +362,13 @@ export const TimelineArranger: React.FC<TimelineArrangerProps> = ({
                 ref={addStemInputRef}
                 type="file"
                 multiple
-                accept="audio/*,.wav,.mp3,.ogg,.flac,.m4a"
+                accept="audio/*,.wav,.mp3,.ogg,.flac,.m4a,.aac,.webm,.opus,.aif,.aiff,.caf"
                 className="hidden"
                 onChange={(e) => {
                   if (e.target.files && e.target.files.length > 0) {
-                    onAddStemsToCurrentSong(e.target.files);
+                    const files = Array.from(e.target.files);
                     e.target.value = '';
+                    onAddStemsToCurrentSong(files);
                   }
                 }}
               />

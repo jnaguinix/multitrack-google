@@ -28,6 +28,7 @@ import {
   TransportState,
 } from '../types/project';
 import { audioEngine } from '../audio/audioEngine';
+import { extractAudioFilesFromDataTransfer } from '../utils/fileImportHelper';
 import { formatMmSs, formatTimecode } from './TransportDeck';
 import { MultitrackMixer } from './MultitrackMixer';
 
@@ -57,8 +58,8 @@ interface SetlistPageViewProps {
   onCancelQueuedJump: () => void;
   onAddMarkerAtPlayhead: () => void;
   onOpenSectionEditor: () => void;
-  onAddStemsToCurrentSong: (files: FileList) => void;
-  onQuickImportNewSongFiles: (files: FileList) => void;
+  onAddStemsToCurrentSong: (files: FileList | File[]) => void;
+  onQuickImportNewSongFiles: (files: FileList | File[]) => void;
   onToggleTrackMute: (trackId: string) => void;
   onToggleTrackSolo: (trackId: string) => void;
   onChangeTrackGain: (trackId: string, gain: number) => void;
@@ -696,15 +697,18 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
           {/* "+ Nueva canción" Dashed Card (Matching LibreTracks Screenshot) */}
           <div
             onDragOver={(e) => e.preventDefault()}
-            onDrop={(e) => {
+            onDrop={async (e) => {
               e.preventDefault();
               const songId = e.dataTransfer.getData(
                 'application/x-libretracks-song-id'
               );
               if (songId) {
                 onAddToSetlist(songId);
-              } else if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-                onQuickImportNewSongFiles(e.dataTransfer.files);
+                return;
+              }
+              const audioFiles = await extractAudioFilesFromDataTransfer(e.dataTransfer);
+              if (audioFiles.length > 0) {
+                onQuickImportNewSongFiles(audioFiles);
               }
             }}
             className="relative w-44 h-27 rounded-lg border border-dashed border-[#252d3c] hover:border-[#2fd0c8] bg-[#12161f]/60 flex items-center justify-center gap-2 shrink-0 transition-colors"
@@ -798,12 +802,13 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
               ref={newSongFilesInputRef}
               type="file"
               multiple
-              accept="audio/*,.wav,.mp3,.ogg,.flac,.m4a"
+              accept="audio/*,.wav,.mp3,.ogg,.flac,.m4a,.aac,.webm,.opus,.aif,.aiff,.caf"
               className="hidden"
               onChange={(e) => {
                 if (e.target.files && e.target.files.length > 0) {
-                  onQuickImportNewSongFiles(e.target.files);
+                  const files = Array.from(e.target.files);
                   e.target.value = '';
+                  onQuickImportNewSongFiles(files);
                 }
               }}
             />
@@ -812,13 +817,14 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
               type="file"
               multiple
               // @ts-expect-error webkitdirectory is standard
-              webkitdirectory="true"
-              directory="true"
+              webkitdirectory=""
+              directory=""
               className="hidden"
               onChange={(e) => {
                 if (e.target.files && e.target.files.length > 0) {
-                  onQuickImportNewSongFiles(e.target.files);
+                  const files = Array.from(e.target.files);
                   e.target.value = '';
+                  onQuickImportNewSongFiles(files);
                 }
               }}
             />
@@ -966,12 +972,13 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
             ref={addAudioInputRef}
             type="file"
             multiple
-            accept="audio/*,.wav,.mp3,.ogg,.flac,.m4a"
+            accept="audio/*,.wav,.mp3,.ogg,.flac,.m4a,.aac,.webm,.opus,.aif,.aiff,.caf"
             className="hidden"
             onChange={(e) => {
               if (e.target.files && e.target.files.length > 0) {
-                onAddStemsToCurrentSong(e.target.files);
+                const files = Array.from(e.target.files);
                 e.target.value = '';
+                onAddStemsToCurrentSong(files);
               }
             }}
           />

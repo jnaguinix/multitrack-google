@@ -1421,8 +1421,39 @@ export class LibreTracksAudioEngine {
     });
 
     if (this.project) {
+      if (!this.project.tracks.some((t) => t.id === track.id)) {
+        this.project = {
+          ...this.project,
+          tracks: [...this.project.tracks, track],
+        };
+      }
       this.applyMixerRouting();
-      if (this.isPlaying) {
+
+      if (this.isStreamingMode() && track.pcm && track.pcm.frames > 0) {
+        try {
+          pcmReaderClient.openProject(this.project.id, [track.id], 'active').catch(() => {});
+          const st = new StreamingTrack({
+            projectId: this.project.id,
+            trackId: track.id,
+            sampleRate: track.pcm.sampleRate || ctx.sampleRate,
+            totalFrames: track.pcm.frames,
+            destinationNode: gainNode,
+            ctx,
+            pitchSemitones: this.project.pitchSemitones || 0,
+          });
+          this.streamingTracks.set(track.id, st);
+          if (this.isPlaying) {
+            const currentSec = this.getCurrentSongSec();
+            st.seekTo(currentSec).catch(() => {});
+          }
+        } catch (stErr) {
+          console.warn('[AudioEngine] Error mounting streaming track, falling back to buffer:', stErr);
+          if (this.isPlaying) {
+            const currentSec = this.getCurrentSongSec();
+            this.startSourceForTrack(track.id, currentSec, ctx.currentTime);
+          }
+        }
+      } else if (this.isPlaying) {
         const currentSec = this.getCurrentSongSec();
         this.startSourceForTrack(track.id, currentSec, ctx.currentTime);
       }
@@ -1574,7 +1605,8 @@ export class LibreTracksAudioEngine {
     whenCtxTime = 0,
     stopPreviousAtCtxTime?: number
   ) {
-    if (!this.ctx || !this.project || this.isStreamingMode()) return;
+    if (!this.ctx || !this.project) return;
+    if (this.isStreamingMode() && this.streamingTracks.has(trackId)) return;
     const buffer = this.trackBuffers.get(trackId);
     const node = this.trackNodes.get(trackId);
     if (!buffer || !node) return;

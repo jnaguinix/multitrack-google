@@ -24,7 +24,7 @@ interface RepertoireTreeSidebarProps {
   onAddToSetlist: (projectId: string) => void;
   onDeleteProject: (projectId: string) => void;
   onExportJson: (project: SongProject) => void;
-  onQuickImportNewSongFiles: (files: FileList) => void;
+  onQuickImportNewSongFiles: (files: FileList | File[]) => void;
   onOpenNewSongModal: () => void;
 }
 
@@ -190,12 +190,13 @@ export const RepertoireTreeSidebar: React.FC<RepertoireTreeSidebarProps> = ({
           ref={multiFileInputRef}
           type="file"
           multiple
-          accept="audio/*,.wav,.mp3,.ogg,.flac,.m4a"
+          accept="audio/*,.wav,.mp3,.ogg,.flac,.m4a,.aac,.webm,.opus,.aif,.aiff,.caf"
           className="hidden"
           onChange={(e) => {
             if (e.target.files && e.target.files.length > 0) {
-              onQuickImportNewSongFiles(e.target.files);
+              const files = Array.from(e.target.files);
               e.target.value = '';
+              onQuickImportNewSongFiles(files);
             }
           }}
         />
@@ -204,13 +205,14 @@ export const RepertoireTreeSidebar: React.FC<RepertoireTreeSidebarProps> = ({
           type="file"
           multiple
           // @ts-expect-error webkitdirectory is standard across browsers
-          webkitdirectory="true"
-          directory="true"
+          webkitdirectory=""
+          directory=""
           className="hidden"
           onChange={(e) => {
             if (e.target.files && e.target.files.length > 0) {
-              onQuickImportNewSongFiles(e.target.files);
+              const files = Array.from(e.target.files);
               e.target.value = '';
+              onQuickImportNewSongFiles(files);
             }
           }}
         />

@@ -45,6 +45,11 @@ import {
   PcmOptimizationProgress,
 } from './storage/pcmOptimizer';
 import {
+  extractAudioFilesFromDataTransfer,
+  extractAudioFilesFromFileList,
+  isAudioFileCandidate,
+} from './utils/fileImportHelper';
+import {
   ConfirmSongActionModal,
   inferTrackRoleAndColor,
   LibraryView,
@@ -82,11 +87,6 @@ function getInitialViewFromHash(): WorkspaceView {
     return hash;
   }
   return 'setlist';
-}
-
-function isAudioFileCandidate(file: File): boolean {
-  if (file.type && file.type.startsWith('audio/')) return true;
-  return /\.(wav|mp3|ogg|flac|m4a|aac|webm|opus|aiff|wma)$/i.test(file.name);
 }
 
 const MARKER_PALETTE = [
@@ -586,8 +586,7 @@ export default function App() {
       defaultBus: OutputBus = 'main',
       importMode: 'new-song' | 'current-song' = 'new-song'
     ) => {
-      const rawArray = Array.from(fileList);
-      const validFiles = rawArray.filter(isAudioFileCandidate);
+      const validFiles = extractAudioFilesFromFileList(fileList);
 
       if (validFiles.length === 0) {
         showToast('No se encontraron archivos de audio compatibles (.wav, .mp3, .ogg, .flac, .m4a)');
@@ -615,93 +614,90 @@ export default function App() {
         effectiveMode === 'new-song' ? 4 : currentProjectRef.current!.beatsPerBar;
       const secPerBar = (60 / bpm) * beatsPerBar;
 
-      setImportStatusText(`Importando 0/${validFiles.length} pistas en RAM...`);
-      await ensureStoragePersist();
+      setImportStatusText(`Importando 0/${validFiles.length} pistas...`);
+      // Request storage persistence in background without blocking audio decoding
+      ensureStoragePersist().catch(() => {});
 
       const decodedTracks: TrackChannel[] = [];
       const decodedAudioBuffers = new Map<string, AudioBuffer>();
       const stemsToSaveBatch: StoredAudioStem[] = [];
       let maxDurationSec = 0;
-      let completedCount = 0;
 
-      await Promise.all(
-        validFiles.map(async (file, idx) => {
-          const trackId = `stem-${Date.now()}-${String(idx).padStart(2, '0')}`;
-          const trackLabel = cleanTrackNames[idx] || file.name.replace(/\.[^/.]+$/, '');
-          const inferred = inferTrackRoleAndColor(trackLabel, idx);
+      // Sequential decoding prevents high-RAM spikes, UI freezing, and OPFS file lock contention
+      for (let idx = 0; idx < validFiles.length; idx++) {
+        const file = validFiles[idx];
+        const trackId = `stem-${Date.now()}-${String(idx).padStart(2, '0')}`;
+        const trackLabel = cleanTrackNames[idx] || file.name.replace(/\.[^/.]+$/, '');
+        const inferred = inferTrackRoleAndColor(trackLabel, idx);
 
-          try {
-            const rawBuf = await file.arrayBuffer();
-            const { audioBuffer, peaks, durationSec } =
-              await audioEngine.decodeStemBuffer(rawBuf, trackLabel);
+        setImportStatusText(
+          `Decodificando pista ${idx + 1}/${validFiles.length}: ${trackLabel}...`
+        );
 
-            // Write PCM to OPFS in parallel with decoding so it's stream-ready immediately
-            let pcmMeta:
-              | { sampleRate: number; channels: 2; frames: number; bytesWritten: number }
-              | undefined;
-            try {
-              pcmMeta = await writeTrackPcmFromAudioBuffer(
-                targetProjectId,
-                trackId,
-                audioBuffer
-              );
-            } catch (pcmErr) {
-              console.warn(
-                `[OPFS] No se pudo escribir PCM durante importación para "${trackLabel}":`,
-                pcmErr
-              );
-            }
+        try {
+          const rawBuf = await file.arrayBuffer();
+          const { audioBuffer, peaks, durationSec } =
+            await audioEngine.decodeStemBuffer(rawBuf, trackLabel);
 
-            completedCount++;
-            setImportStatusText(
-              `Decodificando en RAM ${completedCount}/${validFiles.length}: ${trackLabel}`
-            );
-
-            if (durationSec > maxDurationSec) {
-              maxDurationSec = durationSec;
-            }
-
-            const newTrack: TrackChannel = {
-              id: trackId,
-              name: trackLabel,
-              role: inferred.role,
-              color: inferred.color,
-              gain: 1.0,
-              pan: 0,
-              muted: false,
-              soloed: false,
-              bus: inferred.bus === 'cue-click' ? 'cue-click' : defaultBus,
-              peaks,
-              pcm: pcmMeta
-                ? {
-                    sampleRate: pcmMeta.sampleRate,
-                    channels: 2,
-                    frames: pcmMeta.frames,
-                    version: 1,
-                  }
-                : undefined,
-              isCustomAudio: true,
-              fileName: file.name,
-              durationSec,
-            };
-
-            decodedTracks.push(newTrack);
-            decodedAudioBuffers.set(trackId, audioBuffer);
-
-            // Store native File (Blob) in a single atomic IndexedDB batch transaction
-            stemsToSaveBatch.push({
-              key: `${targetProjectId}:${trackId}`,
-              projectId: targetProjectId,
-              trackId,
-              blob: file,
-              mimeType: file.type || 'audio/wav',
-              fileName: file.name,
-            });
-          } catch (err) {
-            console.error(`[AudioEngine][Import Decode Error] Falló "${trackLabel}":`, err);
+          if (durationSec > maxDurationSec) {
+            maxDurationSec = durationSec;
           }
-        })
-      );
+
+          let pcmMeta:
+            | { sampleRate: number; channels: 2; frames: number; bytesWritten: number }
+            | undefined;
+          try {
+            pcmMeta = await writeTrackPcmFromAudioBuffer(
+              targetProjectId,
+              trackId,
+              audioBuffer
+            );
+          } catch (pcmErr) {
+            console.warn(
+              `[OPFS] Aviso al escribir PCM durante importación para "${trackLabel}":`,
+              pcmErr
+            );
+          }
+
+          const newTrack: TrackChannel = {
+            id: trackId,
+            name: trackLabel,
+            role: inferred.role,
+            color: inferred.color,
+            gain: 1.0,
+            pan: 0,
+            muted: false,
+            soloed: false,
+            bus: inferred.bus === 'cue-click' ? 'cue-click' : defaultBus,
+            peaks,
+            pcm: pcmMeta
+              ? {
+                  sampleRate: pcmMeta.sampleRate,
+                  channels: 2,
+                  frames: pcmMeta.frames,
+                  version: 1,
+                }
+              : undefined,
+            isCustomAudio: true,
+            fileName: file.name,
+            durationSec,
+          };
+
+          decodedTracks.push(newTrack);
+          decodedAudioBuffers.set(trackId, audioBuffer);
+
+          stemsToSaveBatch.push({
+            key: `${targetProjectId}:${trackId}`,
+            projectId: targetProjectId,
+            trackId,
+            blob: file,
+            mimeType: file.type || 'audio/wav',
+            fileName: file.name,
+          });
+        } catch (err) {
+          console.error(`[AudioEngine][Import Decode Error] Falló "${trackLabel}":`, err);
+        }
+      }
 
       setImportStatusText(null);
 
@@ -710,7 +706,7 @@ export default function App() {
         return;
       }
 
-      // Persist all stems in a single IndexedDB transaction in the background
+      // Persist all stems in background IndexedDB batch transaction
       saveStemsBatchToDb(stemsToSaveBatch).catch((err) =>
         console.warn('Background IndexedDB batch stem save warning:', err)
       );
@@ -752,37 +748,47 @@ export default function App() {
           updatedAt: Date.now(),
         };
 
-        // Store all decoded buffers directly in SetlistRamCache so switching back is 0ms
         audioEngine.storeProjectBuffersInRamCache(targetProjectId, decodedAudioBuffers);
         await activateProject(newSongProject, decodedAudioBuffers, false);
         showToast(
-          `Canción "${songTitle}" lista en RAM (${decodedTracks.length} pistas · ${formatMmSs(maxDurationSec)})`
+          `Canción "${songTitle}" lista (${decodedTracks.length} pistas · ${formatMmSs(maxDurationSec)})`
         );
       } else {
-        for (const trk of decodedTracks) {
-          const buf = decodedAudioBuffers.get(trk.id);
-          if (buf) {
-            audioEngine.mountDecodedTrack(trk, buf);
-          }
-        }
-
-        updateCurrentProject((prev) => {
-          const combinedTracks = [...prev.tracks, ...decodedTracks];
-          const nextTotalBars = Math.max(prev.totalBars, calculatedBars);
-          const nextDurationSec = Math.max(prev.durationSec || 0, maxDurationSec);
-
-          return {
-            ...prev,
+        const current = currentProjectRef.current;
+        if (current) {
+          const combinedTracks = [...current.tracks, ...decodedTracks];
+          const nextTotalBars = Math.max(current.totalBars, calculatedBars);
+          const nextDurationSec = Math.max(current.durationSec || 0, maxDurationSec);
+          const updatedCurrentProject: SongProject = {
+            ...current,
             totalBars: nextTotalBars,
             durationSec: nextDurationSec,
             tracks: combinedTracks,
           };
-        });
 
-        showToast(`${decodedTracks.length} stem(s) añadidos en RAM a "${currentProjectRef.current?.title}"`);
+          // Update audio engine project configuration first so mixer routes find the new tracks
+          audioEngine.updateProjectConfig(updatedCurrentProject);
+
+          for (const trk of decodedTracks) {
+            const buf = decodedAudioBuffers.get(trk.id);
+            if (buf) {
+              audioEngine.mountDecodedTrack(trk, buf);
+            }
+          }
+
+          setCurrentProject(updatedCurrentProject);
+          saveProjectToDb(updatedCurrentProject).catch(() => {});
+          setProjects((list) =>
+            list.map((item) => (item.id === updatedCurrentProject.id ? updatedCurrentProject : item))
+          );
+
+          showToast(
+            `${decodedTracks.length} stem(s) añadido(s) a "${current.title}"`
+          );
+        }
       }
     },
-    [activateProject, projects.length, showToast, updateCurrentProject]
+    [activateProject, projects.length, showToast]
   );
 
   // Add a Section Marker directly at the current playhead time (mm:ss)
@@ -1093,7 +1099,7 @@ export default function App() {
     }
   };
 
-  const handleDropOnDaw = (e: React.DragEvent) => {
+  const handleDropOnDaw = async (e: React.DragEvent) => {
     e.preventDefault();
     setDragOverlayMode(null);
 
@@ -1104,8 +1110,11 @@ export default function App() {
       return;
     }
 
-    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-      handleInstantImportFiles(e.dataTransfer.files, 'main', 'new-song');
+    const audioFiles = await extractAudioFilesFromDataTransfer(e.dataTransfer);
+    if (audioFiles.length > 0) {
+      handleInstantImportFiles(audioFiles, 'main', 'new-song');
+    } else {
+      showToast('No se encontraron archivos de audio compatibles (.wav, .mp3, .ogg, .flac, .m4a)');
     }
   };
 

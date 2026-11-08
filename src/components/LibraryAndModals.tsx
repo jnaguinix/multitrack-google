@@ -441,7 +441,7 @@ interface StemImporterModalProps {
   isOpen: boolean;
   onClose: () => void;
   onImportFiles: (
-    files: FileList,
+    files: FileList | File[],
     defaultBus: OutputBus,
     importMode: 'new-song' | 'current-song'
   ) => void;
@@ -538,11 +538,12 @@ export const StemImporterModal: React.FC<StemImporterModalProps> = ({
             <input
               type="file"
               multiple
-              accept="audio/*,.wav,.mp3,.ogg,.flac,.m4a"
+              accept="audio/*,.wav,.mp3,.ogg,.flac,.m4a,.aac,.webm,.opus,.aif,.aiff,.caf"
               className="hidden"
               onChange={(e) => {
                 if (e.target.files && e.target.files.length > 0) {
-                  const selected = e.target.files;
+                  const selected = Array.from(e.target.files);
+                  e.target.value = '';
                   onClose();
                   onImportFiles(selected, defaultBus, importMode);
                 }
@@ -570,12 +571,13 @@ export const StemImporterModal: React.FC<StemImporterModalProps> = ({
             type="file"
             multiple
             // @ts-expect-error webkitdirectory is standard for folder selection
-            webkitdirectory="true"
-            directory="true"
+            webkitdirectory=""
+            directory=""
             className="hidden"
             onChange={(e) => {
               if (e.target.files && e.target.files.length > 0) {
-                const selected = e.target.files;
+                const selected = Array.from(e.target.files);
+                e.target.value = '';
                 onClose();
                 onImportFiles(selected, defaultBus, importMode);
               }

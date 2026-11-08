@@ -24,9 +24,15 @@ export function isOpfsSupported(): boolean {
 export async function ensureStoragePersist(): Promise<boolean> {
   try {
     if (typeof navigator !== 'undefined' && navigator.storage && navigator.storage.persist) {
-      const isPersisted = await navigator.storage.persisted();
+      const isPersisted = await Promise.race([
+        navigator.storage.persisted(),
+        new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 200)),
+      ]);
       if (!isPersisted) {
-        return await navigator.storage.persist();
+        return await Promise.race([
+          navigator.storage.persist(),
+          new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 200)),
+        ]);
       }
       return true;
     }
