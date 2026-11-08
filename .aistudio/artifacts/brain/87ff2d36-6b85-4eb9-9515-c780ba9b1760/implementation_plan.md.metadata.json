@@ -1,6 +1,6 @@
 {
-  "summary":  "Plan técnico para resolver la lentitud de carga (30s), instrumentos faltantes y reproducción espontánea mediante un Caché Granular Inteligente en RAM (hasta 6 canciones con optimización de canales), decodificación paralela, escritura atómica en IndexedDB y bloqueo estricto de reproducción hasta el 100% de carga.",
-  "updatedAt":  "2026-11-08T06:08:58.078686874Z",
+  "summary":  "Plan de arquitectura de 6 etapas para evolucionar el motor de audio de LibreTracks hacia un motor híbrido REAPER-style ('buffer' con presupuesto de bytes en RAM + 'stream' desde disco vía OPFS e Int16 en Web Worker), entregando la Etapa 1 tras aprobar el plan y avanzando etapa por etapa con 'continúa'.",
+  "updatedAt":  "2026-11-08T16:57:45.850255611Z",
   "requestFeedback":  true,
   "userFacing":  true
 }

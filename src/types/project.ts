@@ -6,6 +6,15 @@ export type SplitRoutingMode = 'stereo' | 'split-mono';
 
 export type SetlistTransitionMode = 'stop' | 'cue-next' | 'auto-play';
 
+export type AudioEngineMode = 'buffer' | 'stream';
+
+export interface TrackPcmMetadata {
+  sampleRate: number;
+  channels: number;
+  frames: number;
+  version: 1;
+}
+
 export interface SongSection {
   id: string;
   name: string;
@@ -33,6 +42,7 @@ export interface TrackChannel {
   isCustomAudio?: boolean;
   fileName?: string;
   durationSec?: number;
+  pcm?: TrackPcmMetadata;
 }
 
 export type RepertoireFolder = 'imported' | 'setlist' | 'demos';
@@ -71,6 +81,9 @@ export interface SongRamCacheInfo {
   totalCount: number;
   isReady: boolean;
   isPreloading: boolean;
+  skippedByRamBudget?: boolean;
+  cachedBytes?: number;
+  estimatedBytes?: number;
 }
 
 export interface TransportState {

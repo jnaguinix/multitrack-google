@@ -14,8 +14,12 @@ import {
   Clock,
   ListMusic,
   Play,
+  Zap,
+  HardDrive,
 } from 'lucide-react';
 import { OutputBus, SongProject, SongSection, TrackChannel } from '../types/project';
+import { audioEngine } from '../audio/audioEngine';
+import { PcmOptimizationProgress } from '../storage/pcmOptimizer';
 import { formatMmSs } from './TransportDeck';
 
 interface LibraryViewProps {
@@ -28,6 +32,7 @@ interface LibraryViewProps {
   onExportJson: (project: SongProject) => void;
   onImportJsonFile: (file: File) => void;
   onOpenStemImporter: () => void;
+  onOptimizeProject: (project: SongProject) => void;
 }
 
 export const LibraryView: React.FC<LibraryViewProps> = ({
@@ -40,6 +45,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
   onExportJson,
   onImportJsonFile,
   onOpenStemImporter,
+  onOptimizeProject,
 }) => {
   const [newTitle, setNewTitle] = useState('');
   const [newArtist, setNewArtist] = useState('');
@@ -113,6 +119,9 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                 const isCurrent = proj.id === currentProjectId;
                 const durSec =
                   proj.durationSec || ((proj.totalBars || 24) * 4 * 60) / (proj.bpm || 120);
+                const isPcmReady = audioEngine.isProjectPcmReady(proj);
+                const pcmMB = audioEngine.getProjectPcmEstimatedMB(proj);
+
                 return (
                   <div
                     key={proj.id}
@@ -130,6 +139,23 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                         {isCurrent && (
                           <span className="text-xs font-medium text-cyan-400 flex items-center gap-1">
                             <CheckCircle2 className="w-3.5 h-3.5" /> En el DAW
+                          </span>
+                        )}
+                        {/* OPFS Streaming PCM Status Badge */}
+                        {isPcmReady ? (
+                          <span
+                            title={`Audio PCM Int16 optimizado en OPFS (~${pcmMB} MB en disco). Carga rápida y streaming por ventanas.`}
+                            className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 flex items-center gap-1"
+                          >
+                            <HardDrive className="w-3 h-3" />
+                            <span>PCM listo ({pcmMB} MB)</span>
+                          </span>
+                        ) : (
+                          <span
+                            title="Esta canción aún no tiene archivos PCM generados en OPFS. Pulsa 'Optimizar' para generar PCM en disco."
+                            className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-amber-500/20 text-amber-300 border border-amber-500/40 flex items-center gap-1"
+                          >
+                            <span>Sin optimizar</span>
                           </span>
                         )}
                       </div>
@@ -154,6 +180,19 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                     </div>
 
                     <div className="flex items-center gap-2 shrink-0">
+                      {/* Optimize for Streaming Button if not yet optimized */}
+                      {!isPcmReady && proj.tracks.length > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => onOptimizeProject(proj)}
+                          title="Convertir stems a PCM estéreo Int16 en OPFS para streaming estilo REAPER"
+                          className="px-3 py-2 rounded-lg bg-cyan-500/15 hover:bg-cyan-500/25 text-cyan-300 border border-cyan-500/40 text-xs font-semibold flex items-center gap-1.5 cursor-pointer transition-colors"
+                        >
+                          <Zap className="w-3.5 h-3.5 text-cyan-400" />
+                          <span>Optimizar para streaming</span>
+                        </button>
+                      )}
+
                       <button
                         type="button"
                         onClick={() => onAddToSetlist(proj.id)}
@@ -951,3 +990,103 @@ export function inferTrackRoleAndColor(
     bus: 'main',
   };
 }
+
+interface OptimizationProgressModalProps {
+  isOpen: boolean;
+  songTitle: string;
+  progress: PcmOptimizationProgress | null;
+  onCancel: () => void;
+}
+
+export const OptimizationProgressModal: React.FC<OptimizationProgressModalProps> = ({
+  isOpen,
+  songTitle,
+  progress,
+  onCancel,
+}) => {
+  if (!isOpen) return null;
+
+  const percent = progress?.percent ?? 0;
+  const isComplete = progress?.phase === 'complete';
+  const isCancelled = progress?.phase === 'cancelled';
+
+  return (
+    <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-xs flex items-center justify-center p-4">
+      <div className="bg-[#111827] border border-slate-700 rounded-2xl w-full max-w-md shadow-2xl p-6 space-y-5 animate-in fade-in zoom-in-95 duration-150">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2.5">
+            <div className="p-2 rounded-xl bg-cyan-500/20 text-cyan-400">
+              <Zap className="w-5 h-5" />
+            </div>
+            <div>
+              <h2 className="font-display text-base font-bold text-slate-100">
+                Optimizar para Streaming OPFS
+              </h2>
+              <p className="text-xs text-slate-400 truncate max-w-xs">{songTitle}</p>
+            </div>
+          </div>
+          {!isComplete && !isCancelled && (
+            <button
+              type="button"
+              onClick={onCancel}
+              className="text-slate-400 hover:text-slate-200 cursor-pointer"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          )}
+        </div>
+
+        {/* Status description */}
+        <div className="bg-[#0B0F17] border border-slate-800 rounded-xl p-3.5 space-y-2">
+          <div className="flex items-center justify-between text-xs font-mono">
+            <span className="text-slate-300 font-semibold truncate max-w-[240px]">
+              {progress?.phase === 'checking'
+                ? 'Verificando almacenamiento...'
+                : progress?.phase === 'converting'
+                ? `Pista ${progress.currentTrackIndex}/${progress.totalTracks}: ${progress.trackName}`
+                : progress?.phase === 'saving'
+                ? 'Guardando configuración...'
+                : progress?.phase === 'complete'
+                ? '¡Listo! Audio optimizado en OPFS'
+                : 'Cancelando...'}
+            </span>
+            <span className="text-cyan-400 font-bold">{percent}%</span>
+          </div>
+
+          {/* Progress bar */}
+          <div className="w-full h-2.5 bg-slate-800 rounded-full overflow-hidden">
+            <div
+              className={`h-full transition-all duration-200 rounded-full ${
+                isComplete
+                  ? 'bg-emerald-400'
+                  : isCancelled
+                  ? 'bg-red-400'
+                  : 'bg-gradient-to-r from-cyan-500 to-emerald-400'
+              }`}
+              style={{ width: `${percent}%` }}
+            />
+          </div>
+        </div>
+
+        <p className="text-[11px] text-slate-400 leading-relaxed">
+          Convierte cada pista a PCM Int16 entrelazado estéreo en disco OPFS (1 por vez para no
+          saturar la RAM). Tus audios originales en IndexedDB no se eliminan.
+        </p>
+
+        {/* Actions */}
+        <div className="flex items-center justify-end gap-2 pt-1">
+          {!isComplete && (
+            <button
+              type="button"
+              onClick={onCancel}
+              className="px-4 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-slate-300 cursor-pointer transition-colors"
+            >
+              Cancelar
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+};
+

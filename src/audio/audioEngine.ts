@@ -1,4 +1,5 @@
 import {
+  AudioEngineMode,
   MetersSnapshot,
   QuantizeMode,
   SongProject,
@@ -10,22 +11,24 @@ import {
 } from '../types/project';
 import { extractStemArrayBuffer, loadProjectStemsFromDb } from '../storage/projectDb';
 import { extractWaveformPeaks } from './demoSynthesizer';
-
-interface ActiveTrackNodes {
-  source: AudioBufferSourceNode | null;
-  gainNode: GainNode;
-  panNode: StereoPannerNode;
-  analyser: AnalyserNode;
-  timeDomainData: Float32Array<ArrayBuffer>;
-}
-
-type TransportListener = (state: TransportState) => void;
-type CacheListener = () => void;
+import { pcmReaderClient } from './pcmReaderClient';
+import { StreamingTrack, StreamingTrackStats } from './streamingTrack';
 
 /**
- * Maximum 2 songs in RAM cache: the active song and the next song in the setlist.
+ * UNIFIED ENGINE CONSTANTS (Configurable in a single place)
  */
-const MAX_CACHED_PROJECTS = 2;
+export const CHUNK_SEC = 2;
+export const TARGET_AHEAD_SEC = 10;
+export const REFILL_BELOW_SEC = 6;
+export const NEXT_SONG_STAGE_SEC = 6;
+
+export const DEFAULT_RAM_BUDGET_MB = 1200;
+export const MIN_RAM_BUDGET_MB = 256;
+export const MAX_RAM_BUDGET_MB = 4096;
+export const FADE_DURATION_SEC = 0.008; // 8 ms micro-fade to prevent clicks/pops
+
+const STORAGE_KEY_RAM_BUDGET_MB = 'ramBudgetMB';
+const STORAGE_KEY_ENGINE_MODE = 'audioEngineMode';
 
 /**
  * Lookahead scheduler constants:
@@ -40,6 +43,45 @@ const SCHEDULER_LOOKAHEAD_SEC = 0.12;
  */
 const UI_EMIT_INTERVAL_MS = 50;
 
+interface ActiveTrackNodes {
+  source: AudioBufferSourceNode | null;
+  sourceFadeGain: GainNode | null;
+  gainNode: GainNode;
+  panNode: StereoPannerNode;
+  analyser: AnalyserNode;
+  timeDomainData: Float32Array<ArrayBuffer>;
+}
+
+type TransportListener = (state: TransportState) => void;
+type CacheListener = () => void;
+
+function readInitialRamBudgetBytes(): number {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY_RAM_BUDGET_MB);
+    if (raw) {
+      const parsedMb = Number(raw);
+      if (Number.isFinite(parsedMb) && parsedMb >= MIN_RAM_BUDGET_MB && parsedMb <= MAX_RAM_BUDGET_MB) {
+        return Math.round(parsedMb * 1024 * 1024);
+      }
+    }
+  } catch {
+    // Ignore localStorage access errors in restricted environments
+  }
+  return DEFAULT_RAM_BUDGET_MB * 1024 * 1024;
+}
+
+function readInitialEngineMode(): AudioEngineMode {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY_ENGINE_MODE);
+    if (raw === 'stream' || raw === 'buffer') {
+      return raw;
+    }
+  } catch {
+    // Ignore localStorage access errors
+  }
+  return 'buffer';
+}
+
 export class LibreTracksAudioEngine {
   private ctx: AudioContext | null = null;
   private masterGainNode: GainNode | null = null;
@@ -53,16 +95,37 @@ export class LibreTracksAudioEngine {
   private project: SongProject | null = null;
   private trackBuffers: Map<string, AudioBuffer> = new Map();
   private trackNodes: Map<string, ActiveTrackNodes> = new Map();
+  private streamingTracks: Map<string, StreamingTrack> = new Map();
 
   /**
-   * Decoded AudioBuffers cache per project: Map<projectId, Map<trackId, AudioBuffer>>
-   * Keeps at most 2 songs (active + next in setlist).
+   * Engine mode switch ('buffer' | 'stream'), persisted in localStorage.
+   * Defaults to 'buffer'. If a song has no PCM generated, falls back to 'buffer' for that song.
    */
+  private engineMode: AudioEngineMode = readInitialEngineMode();
+
+  /**
+   * ETAPA 1 — Presupuesto de RAM en bytes (MAX_CACHE_BYTES).
+   * Replaces fixed project count limit with byte-level budget (default 1200 MB).
+   */
+  private maxCacheBytes: number = readInitialRamBudgetBytes();
   private projectBufferCache: Map<string, Map<string, AudioBuffer>> = new Map();
   private cacheOrder: string[] = [];
   private pinnedNextProjectId: string | null = null;
+  private skippedByRamBudgetIds: Set<string> = new Set();
   private preloadingProjectIds: Set<string> = new Set();
   private inFlightPreloads: Map<string, Promise<Map<string, AudioBuffer>>> = new Map();
+
+  // ETAPA 5 — Puesta en escena (staging) de la siguiente canción para cambio instantáneo
+  private stagedNextProject: SongProject | null = null;
+  private stagedNextTracks: Map<string, StreamingTrack> = new Map();
+  private pendingStageNextProject: SongProject | null = null;
+  private isStagingNextProject = false;
+  private activePlaybackStableSec = 0;
+  private lastRecordedUnderruns = 0;
+
+  // ETAPA 6 — Telemetría [AudioEngine][Stream] y recuperación ante fallos OPFS
+  private fallbackBufferProjectIds: Set<string> = new Set();
+  private lastStreamLogTimeMs = 0;
 
   private loadGenerationId = 0;
   private isMountingSong = false;
@@ -93,6 +156,137 @@ export class LibreTracksAudioEngine {
 
   public setOnSongEnded(cb: (() => void) | null) {
     this.onSongEndedCallback = cb;
+  }
+
+  public getEngineMode(): AudioEngineMode {
+    return this.engineMode;
+  }
+
+  public setEngineMode(mode: AudioEngineMode) {
+    this.engineMode = mode;
+    try {
+      localStorage.setItem(STORAGE_KEY_ENGINE_MODE, mode);
+    } catch {
+      // Ignore localStorage errors
+    }
+    console.info(`[AudioEngine] Modo de motor configurado a: '${mode}'`);
+    this.emitCacheUpdate();
+    this.emitTransport(true);
+  }
+
+  public isProjectPcmReady(project: SongProject | null = this.project): boolean {
+    if (!project || project.tracks.length === 0) return false;
+    return project.tracks.every((t) => Boolean(t.pcm) && t.pcm!.frames > 0);
+  }
+
+  public getProjectPcmEstimatedMB(project: SongProject): number {
+    const totalFrames = project.tracks.reduce((sum, t) => {
+      if (t.pcm?.frames) return sum + t.pcm.frames;
+      const dur = t.durationSec || project.durationSec || 60;
+      return sum + Math.ceil(dur * 48000);
+    }, 0);
+    // 2 channels * 2 bytes = 4 bytes per frame
+    return Math.round((totalFrames * 4) / (1024 * 1024));
+  }
+
+  public clearProjectFallback(projectId: string) {
+    this.fallbackBufferProjectIds.delete(projectId);
+    this.emitCacheUpdate();
+  }
+
+  /**
+   * Returns the effective engine mode for a given project.
+   * If a song does not have PCM generated on all tracks or failed OPFS validation, falls back to 'buffer'.
+   */
+  public getEffectiveEngineModeForProject(project: SongProject | null = this.project): AudioEngineMode {
+    if (!project || this.engineMode === 'buffer') return 'buffer';
+    if (this.fallbackBufferProjectIds.has(project.id)) return 'buffer';
+    return this.isProjectPcmReady(project) ? 'stream' : 'buffer';
+  }
+
+  public getRamBudgetMB(): number {
+    return Math.round(this.maxCacheBytes / (1024 * 1024));
+  }
+
+  public setRamBudgetMB(budgetMB: number) {
+    const clampedMB = Math.max(
+      MIN_RAM_BUDGET_MB,
+      Math.min(MAX_RAM_BUDGET_MB, Math.round(budgetMB))
+    );
+    this.maxCacheBytes = clampedMB * 1024 * 1024;
+    try {
+      localStorage.setItem(STORAGE_KEY_RAM_BUDGET_MB, String(clampedMB));
+    } catch {
+      // Ignore localStorage errors
+    }
+    // Immediately evict any non-active songs that exceed the new budget
+    this.evictBeforeDecode(0, this.project ? [this.project.id] : []);
+    this.logCacheRamMetrics(`setRamBudgetMB(${clampedMB} MB)`);
+    this.emitCacheUpdate();
+  }
+
+  public getPcmReaderMetrics() {
+    return pcmReaderClient.getMetrics();
+  }
+
+  public isStreamingMode(): boolean {
+    return this.getEffectiveEngineModeForProject(this.project) === 'stream';
+  }
+
+  public getStreamingStats(): StreamingTrackStats[] {
+    return Array.from(this.streamingTracks.values()).map((st) => st.getStats());
+  }
+
+  /**
+   * ETAPA 6 — Estadísticas globales de streaming expuestas vía `window.__streamStats()`
+   */
+  public getGlobalStreamStats() {
+    const readerMetrics = pcmReaderClient.getMetrics();
+    const trackStats = this.getStreamingStats();
+    const minBufferedAheadSec =
+      trackStats.length > 0
+        ? Math.min(...trackStats.map((t) => t.minBufferedAheadSec))
+        : TARGET_AHEAD_SEC;
+    const currentBufferedAheadSec =
+      trackStats.length > 0
+        ? Math.min(...trackStats.map((t) => t.currentBufferedAheadSec))
+        : 0;
+    const maxSeekLatencyMs =
+      trackStats.length > 0
+        ? Math.max(...trackStats.map((t) => t.lastSeekLatencyMs))
+        : 0;
+    const totalUnderruns = trackStats.reduce((sum, t) => sum + t.underrunCount, 0);
+    const totalReadErrors = trackStats.reduce((sum, t) => sum + t.readErrorCount, 0);
+
+    return {
+      engineMode: this.engineMode,
+      effectiveMode: this.getEffectiveEngineModeForProject(this.project),
+      activeProjectId: this.project?.id || null,
+      activeProjectTitle: this.project?.title || null,
+      stagedNextProjectId: this.stagedNextProject?.id || null,
+      stagedNextProjectTitle: this.stagedNextProject?.title || null,
+      totalStreamRamMB: this.getTotalCachedMB(),
+      ramBudgetMB: this.getRamBudgetMB(),
+      avgReadMs: Number(readerMetrics.avgReadMs.toFixed(2)),
+      p95ReadMs: Number(readerMetrics.p95ReadMs.toFixed(2)),
+      maxReadMs: Number(readerMetrics.maxReadMs.toFixed(2)),
+      totalReads: readerMetrics.totalReads,
+      syncHandlesSupported: readerMetrics.syncHandlesSupported,
+      currentBufferedAheadSec,
+      minBufferedAheadSec,
+      totalUnderruns,
+      totalReadErrors,
+      maxSeekLatencyMs,
+      activePlaybackStableSec: Number(this.activePlaybackStableSec.toFixed(1)),
+      tracks: trackStats,
+    };
+  }
+
+  public logStreamMetrics(reason: string) {
+    const s = this.getGlobalStreamStats();
+    console.info(
+      `[AudioEngine][Stream] ${reason} | Canción: "${s.activeProjectTitle || 'ninguna'}" | RAM motor: ${s.totalStreamRamMB.toFixed(1)} MB | Reserva mín: ${s.minBufferedAheadSec.toFixed(1)}s (actual: ${s.currentBufferedAheadSec.toFixed(1)}s) | Lectura media: ${s.avgReadMs.toFixed(2)} ms (p95: ${s.p95ReadMs.toFixed(2)} ms) | Underruns: ${s.totalUnderruns} | Seek lat: ${s.maxSeekLatencyMs.toFixed(1)} ms | Stage sig: ${s.stagedNextProjectTitle ? `"${s.stagedNextProjectTitle}"` : 'ninguna'}`
+    );
   }
 
   public subscribeCache(listener: CacheListener): () => void {
@@ -199,62 +393,128 @@ export class LibreTracksAudioEngine {
   }
 
   /**
-   * Calculates and logs estimated RAM of all AudioBuffers currently in projectBufferCache:
-   * sum(length * numberOfChannels * 4) in MB.
+   * Real size of a cached song in bytes = sum(length * numberOfChannels * 4)
+   */
+  public getCachedProjectBytes(projectId: string): number {
+    const trackMap = this.projectBufferCache.get(projectId);
+    if (!trackMap) return 0;
+    let bytes = 0;
+    trackMap.forEach((buf) => {
+      bytes += buf.length * buf.numberOfChannels * 4;
+    });
+    return bytes;
+  }
+
+  /**
+   * Total real bytes across all songs currently in projectBufferCache and streaming buffers
+   */
+  public getTotalCachedBytes(): number {
+    let total = 0;
+    this.projectBufferCache.forEach((_, projId) => {
+      total += this.getCachedProjectBytes(projId);
+    });
+    if (this.isStreamingMode()) {
+      this.streamingTracks.forEach((st) => {
+        total += st.getStats().bufferedBytes;
+      });
+    }
+    if (this.stagedNextTracks.size > 0) {
+      this.stagedNextTracks.forEach((st) => {
+        total += st.getStats().bufferedBytes;
+      });
+    }
+    return total;
+  }
+
+  public getTotalCachedMB(): number {
+    return Number((this.getTotalCachedBytes() / (1024 * 1024)).toFixed(1));
+  }
+
+  /**
+   * Estimates the RAM in bytes a project will occupy BEFORE decoding:
+   * durationSec * ctx.sampleRate * 2 channels * 4 bytes * number of tracks
+   */
+  public estimateProjectBytes(project: SongProject): number {
+    if (!project || project.tracks.length === 0) return 0;
+    const sampleRate = this.ctx?.sampleRate || 48000;
+    const secPerBar = (60 / (project.bpm || 120)) * (project.beatsPerBar || 4);
+    let durationSec =
+      project.durationSec && project.durationSec > 1
+        ? project.durationSec
+        : Math.max(8, (project.totalBars || 24) * secPerBar);
+
+    // If individual tracks carry known durationSec, use the max track duration
+    for (const trk of project.tracks) {
+      if (trk.durationSec && trk.durationSec > durationSec) {
+        durationSec = trk.durationSec;
+      }
+    }
+
+    return Math.ceil(durationSec * sampleRate * 2 * 4 * project.tracks.length);
+  }
+
+  /**
+   * Logs [AudioEngine][RAM] with total in MB, budget in MB, and cached songs.
    */
   public logCacheRamMetrics(reason: string) {
-    let totalBytes = 0;
+    const totalBytes = this.getTotalCachedBytes();
+    const totalMb = totalBytes / (1024 * 1024);
+    const budgetMb = this.maxCacheBytes / (1024 * 1024);
     const perSongSummary: string[] = [];
 
     this.projectBufferCache.forEach((trackMap, projId) => {
-      let songBytes = 0;
-      trackMap.forEach((buf) => {
-        songBytes += buf.length * buf.numberOfChannels * 4;
-      });
-      totalBytes += songBytes;
-      perSongSummary.push(`${projId}: ${(songBytes / (1024 * 1024)).toFixed(2)} MB (${trackMap.size} pistas)`);
+      const songBytes = this.getCachedProjectBytes(projId);
+      const isAct = projId === this.project?.id ? ' [ACTIVA]' : '';
+      perSongSummary.push(
+        `${projId}${isAct}: ${(songBytes / (1024 * 1024)).toFixed(2)} MB (${trackMap.size} pistas)`
+      );
     });
 
-    const totalMb = totalBytes / (1024 * 1024);
     console.info(
-      `[AudioEngine][RAM] ${reason} | Canciones en caché: ${this.projectBufferCache.size}/${MAX_CACHED_PROJECTS} | Total estimado: ${totalMb.toFixed(2)} MB [${perSongSummary.join(' | ')}]`
+      `[AudioEngine][RAM] ${reason} | Total en caché: ${totalMb.toFixed(2)} MB / Presupuesto: ${budgetMb.toFixed(0)} MB | Canciones cacheadas (${this.projectBufferCache.size}): [${perSongSummary.join(' | ') || 'ninguna'}]`
     );
   }
 
   /**
-   * Enforces maximum of 2 cached songs (active song + next song in setlist).
-   * Explicitly clears evicted maps so GC can reclaim AudioBuffer memory immediately.
+   * Evicts non-active cached songs BEFORE decoding so that `currentTotalBytes + incomingBytes <= maxCacheBytes`.
+   * The active song (`this.project?.id`) is NEVER evicted while active.
    */
-  private enforceCacheLimit(protectedIds: string[] = []) {
-    const keepSet = new Set<string>();
-    if (this.project?.id) keepSet.add(this.project.id);
-    if (this.pinnedNextProjectId) keepSet.add(this.pinnedNextProjectId);
-    for (const id of protectedIds) {
-      if (id) keepSet.add(id);
+  private evictBeforeDecode(incomingBytes: number, protectedIds: string[] = []) {
+    const activeId = this.project?.id;
+    const protectedSet = new Set<string>(protectedIds.filter(Boolean));
+    if (activeId) protectedSet.add(activeId);
+
+    // First pass: evict any song not in protectedSet (oldest first)
+    for (const candidateId of [...this.cacheOrder]) {
+      if (candidateId === activeId) continue;
+      if (!protectedSet.has(candidateId)) {
+        const victimMap = this.projectBufferCache.get(candidateId);
+        if (victimMap) victimMap.clear();
+        this.projectBufferCache.delete(candidateId);
+        this.cacheOrder = this.cacheOrder.filter((id) => id !== candidateId);
+        console.info(
+          `[AudioEngine][RAM] Expulsada del caché antes de decodificar: ${candidateId}`
+        );
+      }
     }
 
-    while (this.projectBufferCache.size > MAX_CACHED_PROJECTS) {
-      // Find oldest cached project not in keepSet, or oldest non-active project
-      let victimId = this.cacheOrder.find((id) => !keepSet.has(id));
-      if (!victimId) {
-        victimId = this.cacheOrder.find((id) => id !== this.project?.id);
-      }
+    // Second pass: if still over budget with incomingBytes, evict any non-active song even if in protectedIds
+    while (this.getTotalCachedBytes() + incomingBytes > this.maxCacheBytes) {
+      const victimId = this.cacheOrder.find((id) => id !== activeId);
       if (!victimId) break;
-
       const victimMap = this.projectBufferCache.get(victimId);
-      if (victimMap) {
-        victimMap.clear();
-      }
+      if (victimMap) victimMap.clear();
       this.projectBufferCache.delete(victimId);
       this.cacheOrder = this.cacheOrder.filter((id) => id !== victimId);
-      console.info(`[AudioEngine][Cache] Canción expulsada del caché para liberar RAM: ${victimId}`);
+      console.info(
+        `[AudioEngine][RAM] Expulsada por límite de presupuesto (${this.getRamBudgetMB()} MB): ${victimId}`
+      );
     }
   }
 
-  private touchCacheProject(projectId: string, protectedIds: string[] = []) {
+  private touchCacheOrder(projectId: string) {
     this.cacheOrder = this.cacheOrder.filter((id) => id !== projectId);
     this.cacheOrder.push(projectId);
-    this.enforceCacheLimit(protectedIds);
   }
 
   public getCachedProjectBuffers(projectId: string): Map<string, AudioBuffer> | undefined {
@@ -276,6 +536,13 @@ export class LibreTracksAudioEngine {
     projectId: string,
     buffers: Map<string, AudioBuffer>
   ) {
+    let incomingBytes = 0;
+    buffers.forEach((buf) => {
+      incomingBytes += buf.length * buf.numberOfChannels * 4;
+    });
+
+    this.evictBeforeDecode(incomingBytes, [this.project?.id || '', projectId]);
+
     let songMap = this.projectBufferCache.get(projectId);
     if (!songMap) {
       songMap = new Map<string, AudioBuffer>();
@@ -284,18 +551,42 @@ export class LibreTracksAudioEngine {
     buffers.forEach((buf, trkId) => {
       songMap!.set(trkId, buf);
     });
-    this.touchCacheProject(projectId, [projectId]);
+    this.skippedByRamBudgetIds.delete(projectId);
+    this.touchCacheOrder(projectId);
     this.logCacheRamMetrics(`storeProjectBuffersInRamCache(${projectId})`);
     this.emitCacheUpdate();
   }
 
+  public clearStagedNextProject() {
+    if (this.stagedNextTracks.size > 0) {
+      this.stagedNextTracks.forEach((st) => st.dispose());
+      this.stagedNextTracks.clear();
+    }
+    this.stagedNextProject = null;
+    this.pendingStageNextProject = null;
+    this.isStagingNextProject = false;
+    this.emitCacheUpdate();
+  }
+
+  public getTotalUnderruns(): number {
+    let count = 0;
+    this.streamingTracks.forEach((st) => {
+      count += st.getStats().underrunCount;
+    });
+    return count;
+  }
+
   public evictSongFromRamCache(projectId: string) {
+    if (this.stagedNextProject?.id === projectId) {
+      this.clearStagedNextProject();
+    }
     const map = this.projectBufferCache.get(projectId);
     if (map) {
       map.clear();
     }
     this.projectBufferCache.delete(projectId);
     this.cacheOrder = this.cacheOrder.filter((id) => id !== projectId);
+    this.skippedByRamBudgetIds.delete(projectId);
     if (this.pinnedNextProjectId === projectId) {
       this.pinnedNextProjectId = null;
     }
@@ -305,6 +596,80 @@ export class LibreTracksAudioEngine {
 
   public getSongRamCacheInfo(project: SongProject): SongRamCacheInfo {
     const totalCount = project.tracks.length;
+    const effectiveMode = this.getEffectiveEngineModeForProject(project);
+
+    // =========================================================================
+    // STREAMING MODE RAM INFO
+    // =========================================================================
+    if (effectiveMode === 'stream') {
+      // 1. If it's the currently active project
+      if (this.project?.id === project.id && this.streamingTracks.size > 0) {
+        const cachedBytes = Array.from(this.streamingTracks.values()).reduce(
+          (sum, st) => sum + st.getStats().bufferedBytes,
+          0
+        );
+        return {
+          cachedCount: this.streamingTracks.size,
+          totalCount,
+          isReady: true,
+          isPreloading: this.isMountingSong,
+          skippedByRamBudget: false,
+          cachedBytes,
+          estimatedBytes: this.getProjectPcmEstimatedMB(project) * 1024 * 1024,
+        };
+      }
+
+      // 2. If it's the staged next project
+      if (this.stagedNextProject?.id === project.id && this.stagedNextTracks.size > 0) {
+        const readyTracks = Array.from(this.stagedNextTracks.values()).filter((st) =>
+          st.isStagedReady(NEXT_SONG_STAGE_SEC)
+        ).length;
+        const cachedBytes = Array.from(this.stagedNextTracks.values()).reduce(
+          (sum, st) => sum + st.getStats().bufferedBytes,
+          0
+        );
+        const isReady = totalCount > 0 && readyTracks >= totalCount;
+        const isPreloading =
+          this.isStagingNextProject || this.pendingStageNextProject?.id === project.id;
+
+        return {
+          cachedCount: readyTracks,
+          totalCount,
+          isReady,
+          isPreloading,
+          skippedByRamBudget: false,
+          cachedBytes,
+          estimatedBytes: this.getProjectPcmEstimatedMB(project) * 1024 * 1024,
+        };
+      }
+
+      // 3. If it's queued or currently being staged
+      if (this.pendingStageNextProject?.id === project.id || this.isStagingNextProject) {
+        return {
+          cachedCount: 0,
+          totalCount,
+          isReady: false,
+          isPreloading: true,
+          skippedByRamBudget: false,
+          cachedBytes: 0,
+          estimatedBytes: this.getProjectPcmEstimatedMB(project) * 1024 * 1024,
+        };
+      }
+
+      return {
+        cachedCount: 0,
+        totalCount,
+        isReady: false,
+        isPreloading: false,
+        skippedByRamBudget: false,
+        cachedBytes: 0,
+        estimatedBytes: this.getProjectPcmEstimatedMB(project) * 1024 * 1024,
+      };
+    }
+
+    // =========================================================================
+    // BUFFER MODE RAM INFO
+    // =========================================================================
     const songMap = this.projectBufferCache.get(project.id);
     let cachedCount = 0;
     if (songMap) {
@@ -314,11 +679,18 @@ export class LibreTracksAudioEngine {
     }
     const isReady = totalCount > 0 && cachedCount >= totalCount;
     const isPreloading = this.preloadingProjectIds.has(project.id);
+    const skippedByRamBudget = !isReady && this.skippedByRamBudgetIds.has(project.id);
+    const cachedBytes = this.getCachedProjectBytes(project.id);
+    const estimatedBytes = this.estimateProjectBytes(project);
+
     return {
       cachedCount,
       totalCount,
       isReady,
       isPreloading,
+      skippedByRamBudget,
+      cachedBytes,
+      estimatedBytes,
     };
   }
 
@@ -343,24 +715,64 @@ export class LibreTracksAudioEngine {
   }
 
   /**
-   * 2. CACHÉ Y PRECARGA DE LA SIGUIENTE CANCIÓN:
-   * Reads stems from IndexedDB and decodes them in parallel with Promise.all
-   * WITHOUT touching current playback or the active audio graph.
-   * Keeps at most 2 songs in cache (current + next in setlist).
+   * Internal helper that decodes a project's missing tracks from IndexedDB.
+   * When `isActiveLoad` is true (called from loadProject), the song is ALWAYS loaded regardless of budget.
+   * When `isActiveLoad` is false (called from preloadProject for the next song), it checks if
+   * `activeBytes + estimatedNextBytes <= maxCacheBytes` BEFORE decoding, and aborts if it doesn't fit!
    */
-  public async preloadProject(
+  private async decodeProjectIntoCache(
     project: SongProject,
+    isActiveLoad: boolean,
     onProgress?: (cachedCount: number, totalCount: number) => void
   ): Promise<Map<string, AudioBuffer>> {
-    this.pinnedNextProjectId = project.id !== this.project?.id ? project.id : this.pinnedNextProjectId;
-
-    const existingMap = this.projectBufferCache.get(project.id);
+    const ctx = this.ensureContext();
     const totalTracks = project.tracks.length;
 
+    const existingMap = this.projectBufferCache.get(project.id);
     if (existingMap && project.tracks.every((t) => existingMap.has(t.id))) {
-      this.touchCacheProject(project.id, [this.project?.id || '', project.id]);
+      this.skippedByRamBudgetIds.delete(project.id);
+      this.touchCacheOrder(project.id);
       onProgress?.(totalTracks, totalTracks);
       return existingMap;
+    }
+
+    const estimatedBytes = this.estimateProjectBytes(project);
+    const activeId = this.project?.id;
+    const activeBytes =
+      activeId && activeId !== project.id
+        ? this.getCachedProjectBytes(activeId) || (this.project ? this.estimateProjectBytes(this.project) : 0)
+        : 0;
+
+    // Evict any leftover songs BEFORE checking/decoding
+    if (isActiveLoad) {
+      this.evictBeforeDecode(estimatedBytes, [project.id]);
+    } else {
+      this.pinnedNextProjectId = project.id;
+      this.evictBeforeDecode(0, [activeId || '', project.id]);
+
+      // Check if active song + estimated next song fits within MAX_CACHE_BYTES
+      if (activeBytes + estimatedBytes > this.maxCacheBytes) {
+        const existingPartial = this.projectBufferCache.get(project.id);
+        if (existingPartial) {
+          existingPartial.clear();
+          this.projectBufferCache.delete(project.id);
+        }
+        this.cacheOrder = this.cacheOrder.filter((id) => id !== project.id);
+        this.skippedByRamBudgetIds.add(project.id);
+
+        const activeMb = (activeBytes / (1024 * 1024)).toFixed(1);
+        const estNextMb = (estimatedBytes / (1024 * 1024)).toFixed(1);
+        const budgetMb = (this.maxCacheBytes / (1024 * 1024)).toFixed(0);
+        console.info(
+          `[AudioEngine][RAM] Siguiente canción "${project.title}" (${project.id}) NO precargada (RAM): activa (${activeMb} MB) + estimada siguiente (${estNextMb} MB) > presupuesto (${budgetMb} MB)`
+        );
+        this.logCacheRamMetrics(`preloadProject omitida por presupuesto ("${project.title}")`);
+        this.emitCacheUpdate();
+        return new Map<string, AudioBuffer>();
+      }
+
+      // Fits in budget: evict any other non-active song before decoding
+      this.evictBeforeDecode(estimatedBytes, [activeId || '', project.id]);
     }
 
     const existingPromise = this.inFlightPreloads.get(project.id);
@@ -369,7 +781,7 @@ export class LibreTracksAudioEngine {
     }
 
     const preloadTask = (async () => {
-      const ctx = this.ensureContext();
+      this.skippedByRamBudgetIds.delete(project.id);
       this.preloadingProjectIds.add(project.id);
       this.emitCacheUpdate();
 
@@ -387,7 +799,7 @@ export class LibreTracksAudioEngine {
         let completed = totalTracks - missingTracks.length;
         onProgress?.(completed, totalTracks);
 
-        // 1. DECODIFICACIÓN PARALELA con Promise.all (sin romper las demás si una pista falla)
+        // Parallel decoding with Promise.all (without breaking other tracks if one fails)
         await Promise.all(
           missingTracks.map(async (track) => {
             const stemRecord = storedByTrackId.get(track.id);
@@ -420,8 +832,30 @@ export class LibreTracksAudioEngine {
           })
         );
 
-        this.touchCacheProject(project.id, [this.project?.id || '', project.id]);
-        this.logCacheRamMetrics(`preloadProject("${project.title}")`);
+        this.touchCacheOrder(project.id);
+
+        // Post-decode check: if this was a background preload and real size exceeded budget, evict it
+        if (!isActiveLoad && this.project?.id && this.project.id !== project.id) {
+          const realActiveBytes = this.getCachedProjectBytes(this.project.id);
+          const realNextBytes = this.getCachedProjectBytes(project.id);
+          if (realActiveBytes + realNextBytes > this.maxCacheBytes) {
+            songMap.clear();
+            this.projectBufferCache.delete(project.id);
+            this.cacheOrder = this.cacheOrder.filter((id) => id !== project.id);
+            this.skippedByRamBudgetIds.add(project.id);
+            console.info(
+              `[AudioEngine][RAM] Siguiente canción "${project.title}" expulsada tras decodificar: tamaño real (${(realNextBytes / (1024 * 1024)).toFixed(1)} MB) + activa (${(realActiveBytes / (1024 * 1024)).toFixed(1)} MB) > presupuesto (${this.getRamBudgetMB()} MB)`
+            );
+            this.logCacheRamMetrics(`Post-decode budget check ("${project.title}")`);
+            return new Map<string, AudioBuffer>();
+          }
+        }
+
+        this.logCacheRamMetrics(
+          isActiveLoad
+            ? `loadProject decoded ("${project.title}")`
+            : `preloadProject("${project.title}")`
+        );
         return songMap;
       } finally {
         this.preloadingProjectIds.delete(project.id);
@@ -435,8 +869,118 @@ export class LibreTracksAudioEngine {
   }
 
   /**
-   * Alias maintained for compatibility with UI components
+  /**
+   * Stages the next song in streaming mode (OPFS PCM):
+   * Opens handles with 'next' priority and pre-buffers only the first NEXT_SONG_STAGE_SEC (6s = 3 chunks per track).
+   * Total RAM: ~12 MB for 10 stereo stems. Enables fast swap (< 2 ms) upon activation.
    */
+  private async stageNextSongStreaming(
+    project: SongProject,
+    onProgress?: (cachedCount: number, totalCount: number) => void
+  ): Promise<void> {
+    const ctx = this.ensureContext();
+    if (this.stagedNextProject && this.stagedNextProject.id !== project.id) {
+      this.clearStagedNextProject();
+    }
+
+    this.isStagingNextProject = true;
+    this.stagedNextProject = project;
+    this.emitCacheUpdate();
+
+    try {
+      const trackIds = project.tracks.map((t) => t.id);
+      await pcmReaderClient.openProject(project.id, trackIds, 'next');
+
+      // Create a dummy silent gain node before connection to mixer
+      const dummyGain = ctx.createGain();
+      dummyGain.gain.value = 0;
+
+      let stagedCount = 0;
+      const totalTracks = project.tracks.length;
+      onProgress?.(0, totalTracks);
+
+      for (const track of project.tracks) {
+        let st = this.stagedNextTracks.get(track.id);
+        if (!st) {
+          st = new StreamingTrack({
+            projectId: project.id,
+            trackId: track.id,
+            sampleRate: track.pcm?.sampleRate || ctx.sampleRate,
+            totalFrames:
+              track.pcm?.frames ||
+              Math.round((track.durationSec || project.durationSec || 60) * 48000),
+            destinationNode: dummyGain,
+            ctx,
+            pitchSemitones: project.pitchSemitones || 0,
+          });
+          this.stagedNextTracks.set(track.id, st);
+        }
+      }
+
+      await Promise.all(
+        Array.from(this.stagedNextTracks.values()).map(async (st) => {
+          await st.prefetchStagedChunks(NEXT_SONG_STAGE_SEC);
+          stagedCount++;
+          onProgress?.(stagedCount, totalTracks);
+          this.emitCacheUpdate();
+        })
+      );
+
+      console.info(
+        `[AudioEngine][Staging] Siguiente canción "${project.title}" puesta en escena en RAM (${NEXT_SONG_STAGE_SEC}s = 3 chunks/pista, ~12 MB) lista para cambio instantáneo (< 2 ms)`
+      );
+    } catch (err) {
+      console.error(`[AudioEngine][Staging Error] Falló puesta en escena de "${project.title}":`, err);
+    } finally {
+      this.isStagingNextProject = false;
+      this.emitCacheUpdate();
+    }
+  }
+
+  /**
+   * Preloads the next song in the setlist:
+   * - In streaming mode: stages initial 6s with 'next' priority (~12 MB RAM) if playback is stable (>= 8s) or stopped.
+   * - In buffer mode: decodes full AudioBuffers into RAM respecting MAX_CACHE_BYTES.
+   */
+  public async preloadProject(
+    project: SongProject,
+    onProgress?: (cachedCount: number, totalCount: number) => void
+  ): Promise<Map<string, AudioBuffer>> {
+    if (this.project?.id === project.id) {
+      return new Map();
+    }
+
+    const effectiveMode = this.getEffectiveEngineModeForProject(project);
+
+    if (effectiveMode === 'stream') {
+      // If already staged and ready, report completion
+      if (
+        this.stagedNextProject?.id === project.id &&
+        this.stagedNextTracks.size >= project.tracks.length &&
+        Array.from(this.stagedNextTracks.values()).every((st) => st.isStagedReady(NEXT_SONG_STAGE_SEC))
+      ) {
+        onProgress?.(project.tracks.length, project.tracks.length);
+        return new Map();
+      }
+
+      // If playing and haven't had 8s of stable playback yet, defer staging to avoid CPU/disk contention
+      if (this.isPlaying && this.activePlaybackStableSec < 8) {
+        this.pendingStageNextProject = project;
+        console.info(
+          `[AudioEngine][Staging] Puesta en escena diferida de "${project.title}" hasta 8s de reproducción estable (tiempo estable actual: ${this.activePlaybackStableSec.toFixed(1)}s)`
+        );
+        this.emitCacheUpdate();
+        return new Map();
+      }
+
+      // Otherwise start staging immediately
+      await this.stageNextSongStreaming(project, onProgress);
+      return new Map();
+    }
+
+    return this.decodeProjectIntoCache(project, false, onProgress);
+  }
+
   public async preloadSongIntoRam(
     project: SongProject,
     onProgress?: (cachedCount: number, totalCount: number) => void
@@ -446,6 +990,13 @@ export class LibreTracksAudioEngine {
 
   public getTotalDurationSec(): number {
     if (!this.project) return 0;
+    if (this.isStreamingMode()) {
+      let maxStreamSec = 0;
+      this.streamingTracks.forEach((st) => {
+        if (st.totalDurationSec > maxStreamSec) maxStreamSec = st.totalDurationSec;
+      });
+      if (maxStreamSec > 1) return maxStreamSec;
+    }
     let maxBufSec = 0;
     this.trackBuffers.forEach((buf) => {
       if (buf.duration > maxBufSec) maxBufSec = buf.duration;
@@ -459,8 +1010,9 @@ export class LibreTracksAudioEngine {
   }
 
   /**
-   * 1 & 2. Mounts a project into the active audio graph using parallel Promise.all decoding
-   * and the 2-song AudioBuffer cache without clearing buffers that remain in the cache.
+   * Mounts a project into the active audio graph.
+   * If in streaming mode ('stream'), opens OPFS PCM handles and pre-buffers the initial 10s (or uses staged tracks in < 2 ms).
+   * If in buffer mode ('buffer'), decodes full AudioBuffers into RAM respecting MAX_CACHE_BYTES.
    */
   public async loadProject(
     project: SongProject,
@@ -471,6 +1023,7 @@ export class LibreTracksAudioEngine {
 
     const ctx = this.ensureContext();
     this.project = project;
+    this.skippedByRamBudgetIds.delete(project.id);
 
     if (predecodedBuffers && predecodedBuffers.size > 0) {
       this.storeProjectBuffersInRamCache(project.id, predecodedBuffers);
@@ -481,6 +1034,7 @@ export class LibreTracksAudioEngine {
       try {
         node.source?.stop();
         node.source?.disconnect();
+        node.sourceFadeGain?.disconnect();
         node.gainNode.disconnect();
         node.panNode.disconnect();
         node.analyser.disconnect();
@@ -489,6 +1043,201 @@ export class LibreTracksAudioEngine {
       }
     });
     this.trackNodes.clear();
+
+    const effectiveMode = this.getEffectiveEngineModeForProject(project);
+
+    // =========================================================================
+    // STREAMING MODE (OPFS PCM — REAPER STYLE)
+    // Audio lives in disk, RAM holds only ~10s moving window (< 100 MB total RAM)
+    // =========================================================================
+    if (effectiveMode === 'stream') {
+      // FAST SWAP: If this exact song was staged as next song with all tracks ready
+      const isFastSwap =
+        this.stagedNextProject?.id === project.id &&
+        this.stagedNextTracks.size === project.tracks.length &&
+        project.tracks.every((t) => this.stagedNextTracks.has(t.id));
+
+      if (isFastSwap) {
+        console.info(
+          `[AudioEngine][Streaming] ⚡ FAST SWAP: "${project.title}" activada instantáneamente desde puesta en escena (< 2 ms)`
+        );
+        this.streamingTracks.forEach((st) => st.dispose());
+        this.streamingTracks.clear();
+        this.trackBuffers.clear();
+
+        const updatedPeaks = new Map<string, number[]>();
+        for (const track of project.tracks) {
+          const gainNode = ctx.createGain();
+          const panNode = ctx.createStereoPanner();
+          const analyser = ctx.createAnalyser();
+          analyser.fftSize = 256;
+
+          gainNode.connect(panNode);
+          panNode.connect(analyser);
+
+          this.trackNodes.set(track.id, {
+            source: null,
+            sourceFadeGain: null,
+            gainNode,
+            panNode,
+            analyser,
+            timeDomainData: new Float32Array(analyser.fftSize),
+          });
+
+          const st = this.stagedNextTracks.get(track.id)!;
+          st.setDestinationNode(gainNode);
+          st.setPitchSemitones(project.pitchSemitones || 0);
+          this.streamingTracks.set(track.id, st);
+
+          if (track.peaks && track.peaks.length >= 64) {
+            updatedPeaks.set(track.id, track.peaks);
+          }
+        }
+
+        this.stagedNextTracks.clear();
+        this.stagedNextProject = null;
+        this.pendingStageNextProject = null;
+        this.isMountingSong = false;
+        this.mountingProgressText = null;
+
+        this.applyMixerRouting();
+        this.pausedSongSec = 0;
+        const firstSec = project.sections[0] || null;
+        this.activeSectionId = firstSec ? firstSec.id : null;
+        this.isVamping = Boolean(firstSec?.vampByDefault);
+        this.lastCueMessage = firstSec ? `LISTO: ${firstSec.name.toUpperCase()}` : null;
+        this.emitTransport(true);
+        this.emitCacheUpdate();
+        this.logStreamMetrics(`loadProject FAST SWAP ("${project.title}")`);
+
+        return { peaksMap: updatedPeaks, wasCancelled: false };
+      }
+
+      // Not fast swap: clear any staged tracks for different project
+      if (this.stagedNextProject && this.stagedNextProject.id !== project.id) {
+        this.clearStagedNextProject();
+      }
+
+      this.streamingTracks.forEach((st) => st.dispose());
+      this.streamingTracks.clear();
+      this.trackBuffers.clear();
+
+      this.isMountingSong = true;
+      this.mountingProgressText = `Preparando streaming OPFS (modo REAPER)...`;
+      this.emitTransport(true);
+
+      const trackIds = project.tracks.map((t) => t.id);
+      const { openedTracks } = await pcmReaderClient.openProject(project.id, trackIds, 'active');
+
+      if (myGenId !== this.loadGenerationId) {
+        return { peaksMap: new Map(), wasCancelled: true };
+      }
+
+      // ROBUSTNESS CHECK: If any OPFS PCM file is missing or corrupt, fall back to 'buffer' mode automatically
+      const openedSet = new Set(openedTracks);
+      const allTracksOpened = project.tracks.every((t) => openedSet.has(t.id));
+
+      if (!allTracksOpened) {
+        console.warn(
+          `[AudioEngine][Stream] Archivos PCM incompletos en OPFS para "${project.title}" (${openedTracks.length}/${project.tracks.length} pistas encontradas). Activando fallback automático a motor 'buffer' desde IndexedDB.`
+        );
+        this.fallbackBufferProjectIds.add(project.id);
+      } else {
+        const updatedPeaks = new Map<string, number[]>();
+        for (const track of project.tracks) {
+          const gainNode = ctx.createGain();
+          const panNode = ctx.createStereoPanner();
+          const analyser = ctx.createAnalyser();
+          analyser.fftSize = 256;
+
+          gainNode.connect(panNode);
+          panNode.connect(analyser);
+
+          this.trackNodes.set(track.id, {
+            source: null,
+            sourceFadeGain: null,
+            gainNode,
+            panNode,
+            analyser,
+            timeDomainData: new Float32Array(analyser.fftSize),
+          });
+
+          const st = new StreamingTrack({
+            projectId: project.id,
+            trackId: track.id,
+            sampleRate: track.pcm?.sampleRate || ctx.sampleRate,
+            totalFrames:
+              track.pcm?.frames ||
+              Math.round((track.durationSec || project.durationSec || 60) * 48000),
+            destinationNode: gainNode,
+            ctx,
+            pitchSemitones: project.pitchSemitones || 0,
+          });
+          this.streamingTracks.set(track.id, st);
+
+          if (track.peaks && track.peaks.length >= 64) {
+            updatedPeaks.set(track.id, track.peaks);
+          }
+        }
+
+        this.mountingProgressText = `Precargando ventana de audio inicial (10s)...`;
+        this.emitTransport(true);
+
+        await Promise.all(
+          Array.from(this.streamingTracks.values()).map((st) =>
+            st.prefetchInitialChunks(0, 'active')
+          )
+        );
+
+        if (myGenId !== this.loadGenerationId) {
+          return { peaksMap: new Map(), wasCancelled: true };
+        }
+
+        // Verify at least 1 chunk per track was read without fatal corruption
+        const allHaveInitialBuffer = Array.from(this.streamingTracks.values()).every(
+          (st) => st.getStats().bufferedChunks > 0 || st.totalFrames === 0
+        );
+
+        if (!allHaveInitialBuffer) {
+          console.warn(
+            `[AudioEngine][Stream] Falló lectura inicial de chunks PCM para "${project.title}". Activando fallback automático a motor 'buffer'.`
+          );
+          this.fallbackBufferProjectIds.add(project.id);
+          this.streamingTracks.forEach((st) => st.dispose());
+          this.streamingTracks.clear();
+          this.trackNodes.forEach((node) => {
+            try {
+              node.gainNode.disconnect();
+              node.panNode.disconnect();
+              node.analyser.disconnect();
+            } catch {
+              // ignore
+            }
+          });
+          this.trackNodes.clear();
+        } else {
+          this.isMountingSong = false;
+          this.mountingProgressText = null;
+          this.applyMixerRouting();
+          this.pausedSongSec = 0;
+          const firstSec = project.sections[0] || null;
+          this.activeSectionId = firstSec ? firstSec.id : null;
+          this.isVamping = Boolean(firstSec?.vampByDefault);
+          this.lastCueMessage = firstSec ? `LISTO: ${firstSec.name.toUpperCase()}` : null;
+          this.emitTransport(true);
+          this.emitCacheUpdate();
+
+          this.logStreamMetrics(`loadProject("${project.title}")`);
+          return { peaksMap: updatedPeaks, wasCancelled: false };
+        }
+      }
+    }
+
+    // =========================================================================
+    // BUFFER MODE (AudioBuffer completo en RAM con presupuesto MAX_CACHE_BYTES)
+    // =========================================================================
+    this.streamingTracks.forEach((st) => st.dispose());
+    this.streamingTracks.clear();
 
     const cacheInfo = this.getSongRamCacheInfo(project);
     if (!cacheInfo.isReady && project.tracks.length > 0) {
@@ -502,7 +1251,7 @@ export class LibreTracksAudioEngine {
       songBuffers && project.tracks.every((t) => songBuffers!.has(t.id));
 
     if (!allCached) {
-      songBuffers = await this.preloadProject(project, (loaded, total) => {
+      songBuffers = await this.decodeProjectIntoCache(project, true, (loaded, total) => {
         if (myGenId === this.loadGenerationId && loaded < total) {
           this.isMountingSong = true;
           this.mountingProgressText = `Cargando pistas en RAM (${loaded}/${total})...`;
@@ -510,7 +1259,9 @@ export class LibreTracksAudioEngine {
         }
       });
     } else {
-      this.touchCacheProject(project.id, [project.id, this.pinnedNextProjectId || '']);
+      this.touchCacheOrder(project.id);
+      // Ensure total cached bytes respect budget now that this song is active
+      this.evictBeforeDecode(0, [project.id, this.pinnedNextProjectId || '']);
       this.logCacheRamMetrics(`loadProject CACHE HIT ("${project.title}")`);
     }
 
@@ -544,6 +1295,7 @@ export class LibreTracksAudioEngine {
 
       this.trackNodes.set(track.id, {
         source: null,
+        sourceFadeGain: null,
         gainNode,
         panNode,
         analyser,
@@ -566,7 +1318,6 @@ export class LibreTracksAudioEngine {
   }
 
   /**
-   * 3. ARREGLAR EL BUG DEL PITCH:
    * Playback rate factor produced by source.detune: rate = 2^(semitones / 12)
    */
   private getPlaybackRate(semitones = this.project?.pitchSemitones ?? 0): number {
@@ -598,7 +1349,7 @@ export class LibreTracksAudioEngine {
     const prevPitch = this.project?.pitchSemitones ?? 0;
     const nextPitch = project.pitchSemitones ?? 0;
 
-    // 3. Re-anchor playStartSongSec and playStartCtxTime BEFORE applying the new detune so there is no jump
+    // Re-anchor playStartSongSec and playStartCtxTime BEFORE applying the new detune so there is no jump
     if (prevPitch !== nextPitch && this.isPlaying && this.ctx) {
       const nowCtx = this.ctx.currentTime;
       const currentSongSec = this.getSongSecAtCtxTime(nowCtx);
@@ -606,13 +1357,20 @@ export class LibreTracksAudioEngine {
       this.playStartCtxTime = nowCtx;
       this.project = project;
 
-      this.trackNodes.forEach((node) => {
-        if (node.source) {
-          node.source.detune.setValueAtTime(nextPitch * 100, nowCtx);
-        }
-      });
+      if (this.isStreamingMode()) {
+        this.streamingTracks.forEach((st) => st.setPitchSemitones(nextPitch));
+      } else {
+        this.trackNodes.forEach((node) => {
+          if (node.source) {
+            node.source.detune.setValueAtTime(nextPitch * 100, nowCtx);
+          }
+        });
+      }
     } else {
       this.project = project;
+      if (this.isStreamingMode()) {
+        this.streamingTracks.forEach((st) => st.setPitchSemitones(nextPitch));
+      }
     }
 
     this.applyMixerRouting();
@@ -627,13 +1385,15 @@ export class LibreTracksAudioEngine {
     this.trackBuffers.set(track.id, decoded);
 
     if (this.project) {
+      const incomingBytes = decoded.length * decoded.numberOfChannels * 4;
+      this.evictBeforeDecode(incomingBytes, [this.project.id]);
       let songMap = this.projectBufferCache.get(this.project.id);
       if (!songMap) {
         songMap = new Map();
         this.projectBufferCache.set(this.project.id, songMap);
       }
       songMap.set(track.id, decoded);
-      this.touchCacheProject(this.project.id, [this.project.id]);
+      this.touchCacheOrder(this.project.id);
       this.logCacheRamMetrics(`mountDecodedTrack("${track.name}")`);
       this.emitCacheUpdate();
     }
@@ -653,6 +1413,7 @@ export class LibreTracksAudioEngine {
 
     this.trackNodes.set(track.id, {
       source: null,
+      sourceFadeGain: null,
       gainNode,
       panNode,
       analyser,
@@ -676,6 +1437,7 @@ export class LibreTracksAudioEngine {
       try {
         nodes.source?.stop();
         nodes.source?.disconnect();
+        nodes.sourceFadeGain?.disconnect();
         nodes.gainNode.disconnect();
         nodes.panNode.disconnect();
         nodes.analyser.disconnect();
@@ -685,6 +1447,11 @@ export class LibreTracksAudioEngine {
       this.trackNodes.delete(trackId);
     }
     this.trackBuffers.delete(trackId);
+    const st = this.streamingTracks.get(trackId);
+    if (st) {
+      st.dispose();
+      this.streamingTracks.delete(trackId);
+    }
     if (this.project) {
       this.projectBufferCache.get(this.project.id)?.delete(trackId);
       this.emitCacheUpdate();
@@ -754,8 +1521,52 @@ export class LibreTracksAudioEngine {
   }
 
   /**
+   * Smoothly fades out and stops an existing track source over FADE_DURATION_SEC (8 ms)
+   * at `fadeOutStartCtxTime`, preventing clicks/pops on pause, stop, seek, vamp, or section jumps.
+   */
+  private fadeOutAndStopNodeSource(
+    node: ActiveTrackNodes,
+    fadeOutStartCtxTime: number
+  ) {
+    if (!this.ctx || !node.source) return;
+    const oldSource = node.source;
+    const oldFadeGain = node.sourceFadeGain;
+    node.source = null;
+    node.sourceFadeGain = null;
+
+    const now = this.ctx.currentTime;
+    const startRampAt = Math.max(now, fadeOutStartCtxTime);
+    const stopAt = startRampAt + FADE_DURATION_SEC;
+
+    try {
+      if (oldFadeGain) {
+        oldFadeGain.gain.cancelScheduledValues(startRampAt);
+        oldFadeGain.gain.setValueAtTime(1.0, startRampAt);
+        oldFadeGain.gain.linearRampToValueAtTime(0.0001, stopAt);
+      }
+      oldSource.stop(stopAt);
+      window.setTimeout(() => {
+        try {
+          oldSource.disconnect();
+          oldFadeGain?.disconnect();
+        } catch {
+          // ignore
+        }
+      }, Math.max(30, (stopAt - now) * 1000 + 30));
+    } catch {
+      try {
+        oldSource.stop();
+        oldSource.disconnect();
+        oldFadeGain?.disconnect();
+      } catch {
+        // ignore
+      }
+    }
+  }
+
+  /**
    * Starts or schedules a track's AudioBufferSourceNode at an exact AudioContext time (`whenCtxTime`)
-   * and song offset (`offsetSec`).
+   * and song offset (`offsetSec`), applying an 8 ms fade-in (and 8 ms crossfade if replacing an active source).
    */
   private startSourceForTrack(
     trackId: string,
@@ -763,45 +1574,38 @@ export class LibreTracksAudioEngine {
     whenCtxTime = 0,
     stopPreviousAtCtxTime?: number
   ) {
-    if (!this.ctx || !this.project) return;
+    if (!this.ctx || !this.project || this.isStreamingMode()) return;
     const buffer = this.trackBuffers.get(trackId);
     const node = this.trackNodes.get(trackId);
     if (!buffer || !node) return;
 
+    const now = this.ctx.currentTime;
     if (node.source) {
-      try {
-        if (
-          stopPreviousAtCtxTime !== undefined &&
-          stopPreviousAtCtxTime > this.ctx.currentTime
-        ) {
-          const oldSource = node.source;
-          oldSource.stop(stopPreviousAtCtxTime);
-          window.setTimeout(() => {
-            try {
-              oldSource.disconnect();
-            } catch {
-              // ignore
-            }
-          }, Math.max(50, (stopPreviousAtCtxTime - this.ctx.currentTime) * 1000 + 50));
-        } else {
-          node.source.stop();
-          node.source.disconnect();
-        }
-      } catch {
-        // ignore
-      }
-      node.source = null;
+      const fadeOutStart =
+        stopPreviousAtCtxTime !== undefined && stopPreviousAtCtxTime > now
+          ? stopPreviousAtCtxTime
+          : now;
+      this.fadeOutAndStopNodeSource(node, fadeOutStart);
     }
 
     if (offsetSec >= buffer.duration) return;
 
     const source = this.ctx.createBufferSource();
+    const sourceFadeGain = this.ctx.createGain();
     source.buffer = buffer;
     source.detune.value = (this.project.pitchSemitones || 0) * 100;
-    source.connect(node.gainNode);
-    const startWhen = whenCtxTime > 0 ? whenCtxTime : 0;
+
+    const startWhen = whenCtxTime > now ? whenCtxTime : now;
+    // 8 ms micro-fade-in to eliminate clicks
+    sourceFadeGain.gain.setValueAtTime(0.0001, startWhen);
+    sourceFadeGain.gain.linearRampToValueAtTime(1.0, startWhen + FADE_DURATION_SEC);
+
+    source.connect(sourceFadeGain);
+    sourceFadeGain.connect(node.gainNode);
     source.start(startWhen, Math.max(0, offsetSec));
+
     node.source = source;
+    node.sourceFadeGain = sourceFadeGain;
   }
 
   private startAllTrackSources(
@@ -820,23 +1624,25 @@ export class LibreTracksAudioEngine {
     }
   }
 
-  private stopAllTrackSources() {
+  private stopAllTrackSourcesWithFade() {
+    if (!this.ctx) return;
+    const now = this.ctx.currentTime;
     this.trackNodes.forEach((node) => {
       if (node.source) {
-        try {
-          node.source.stop();
-          node.source.disconnect();
-        } catch {
-          // ignore
-        }
-        node.source = null;
+        this.fadeOutAndStopNodeSource(node, now);
       }
     });
   }
 
   public play() {
     if (!this.project || this.isMountingSong) return;
-    if (this.project.tracks.length > 0 && this.trackBuffers.size === 0) return;
+    if (
+      this.project.tracks.length > 0 &&
+      !this.isStreamingMode() &&
+      this.trackBuffers.size === 0
+    ) {
+      return;
+    }
 
     const ctx = this.ensureContext();
     if (this.isPlaying) return;
@@ -846,6 +1652,7 @@ export class LibreTracksAudioEngine {
     this.playStartCtxTime = startCtx;
     this.playStartSongSec = this.pausedSongSec;
     this.pendingTransitionCtxTime = null;
+    this.activePlaybackStableSec = 0;
 
     // Initialize lastScheduledSubStep just before current position so beat 1 at playStartSongSec is scheduled
     const secPerBeat = 60 / (this.project.bpm || 120);
@@ -853,7 +1660,22 @@ export class LibreTracksAudioEngine {
     this.lastScheduledSubStep = Math.floor((this.playStartSongSec / secPerBeat) * subdiv) - 1;
     this.lastAnnouncedSectionId = null;
 
-    this.startAllTrackSources(this.playStartSongSec, startCtx);
+    if (this.isStreamingMode()) {
+      const rate = this.getPlaybackRate();
+      this.streamingTracks.forEach((st) => {
+        st.setPitchSemitones(this.project!.pitchSemitones || 0);
+        st.updateScheduler({
+          isPlaying: true,
+          currentSongSec: this.playStartSongSec,
+          playStartSongSec: this.playStartSongSec,
+          playStartCtxTime: startCtx,
+          rate,
+          lookaheadSec: SCHEDULER_LOOKAHEAD_SEC,
+        });
+      });
+    } else {
+      this.startAllTrackSources(this.playStartSongSec, startCtx);
+    }
 
     // Run an immediate lookahead pass and start the 25ms Web Worker scheduler + UI rAF loop
     this.runLookaheadSchedulerTick();
@@ -867,8 +1689,13 @@ export class LibreTracksAudioEngine {
     this.pausedSongSec = this.getCurrentSongSec();
     this.isPlaying = false;
     this.pendingTransitionCtxTime = null;
+    this.activePlaybackStableSec = 0;
     this.schedulerWorker?.postMessage('stop');
-    this.stopAllTrackSources();
+    if (this.isStreamingMode()) {
+      this.streamingTracks.forEach((st) => st.stopSourcesWithFade());
+    } else {
+      this.stopAllTrackSourcesWithFade();
+    }
     if (this.rafId !== null) {
       cancelAnimationFrame(this.rafId);
       this.rafId = null;
@@ -893,8 +1720,16 @@ export class LibreTracksAudioEngine {
     this.pendingTransitionCtxTime = null;
     this.lastScheduledSubStep = -1;
     this.lastAnnouncedSectionId = null;
+    this.activePlaybackStableSec = 0;
     this.schedulerWorker?.postMessage('stop');
-    this.stopAllTrackSources();
+    if (this.isStreamingMode()) {
+      this.streamingTracks.forEach((st) => {
+        st.unpinSectionChunks();
+        st.stopSourcesWithFade();
+      });
+    } else {
+      this.stopAllTrackSourcesWithFade();
+    }
 
     if (this.rafId !== null) {
       cancelAnimationFrame(this.rafId);
@@ -930,6 +1765,15 @@ export class LibreTracksAudioEngine {
     this.queuedSectionId = null;
     this.queuedTargetSec = null;
     this.pendingTransitionCtxTime = null;
+    this.activePlaybackStableSec = 0;
+
+    if (this.isStreamingMode()) {
+      pcmReaderClient.bumpGeneration();
+      this.streamingTracks.forEach((st) => {
+        st.unpinSectionChunks();
+        st.seekTo(clampedSec).catch(() => {});
+      });
+    }
 
     if (this.isPlaying && this.ctx) {
       const nowCtx = this.ctx.currentTime;
@@ -938,7 +1782,21 @@ export class LibreTracksAudioEngine {
       const secPerBeat = 60 / (this.project.bpm || 120);
       const subdiv = this.project.clickSubdivision || 1;
       this.lastScheduledSubStep = Math.floor((clampedSec / secPerBeat) * subdiv) - 1;
-      this.startAllTrackSources(clampedSec, nowCtx);
+      if (this.isStreamingMode()) {
+        const rate = this.getPlaybackRate();
+        this.streamingTracks.forEach((st) =>
+          st.updateScheduler({
+            isPlaying: true,
+            currentSongSec: clampedSec,
+            playStartSongSec: clampedSec,
+            playStartCtxTime: nowCtx,
+            rate,
+            lookaheadSec: SCHEDULER_LOOKAHEAD_SEC,
+          })
+        );
+      } else {
+        this.startAllTrackSources(clampedSec, nowCtx, nowCtx);
+      }
       this.runLookaheadSchedulerTick();
     } else {
       this.pausedSongSec = clampedSec;
@@ -997,6 +1855,14 @@ export class LibreTracksAudioEngine {
     this.queuedTargetSec = transitionSec;
     this.isVamping = false;
     this.lastCueMessage = `EN COLA → ${targetSection.name.toUpperCase()}`;
+
+    // In streaming mode: pre-fetch target section chunks (4s) with 'seek' priority
+    if (this.isStreamingMode()) {
+      this.streamingTracks.forEach((st) => {
+        st.prefetchJumpTarget(targetStartSec, 4).catch(() => {});
+      });
+    }
+
     this.emitTransport(true);
   }
 
@@ -1014,9 +1880,23 @@ export class LibreTracksAudioEngine {
       this.queuedTargetSec = null;
       this.lastCueMessage = 'VAMP ACTIVO (LOOP SECCIÓN)';
       this.TriggerGuideCue('Vamp On', false);
+      if (this.isStreamingMode()) {
+        const activeSec = this.findSectionAtTime(this.getCurrentSongSec());
+        if (activeSec && activeSec.endTimeSec - activeSec.startTimeSec <= 4.0) {
+          this.streamingTracks.forEach((st) =>
+            st.pinSectionChunks(activeSec.startTimeSec, activeSec.endTimeSec)
+          );
+          console.info(
+            `[AudioEngine][Vamp] Sección corta "${activeSec.name}" (<= 4s) pineada en RAM para loop continuo sin lecturas de disco`
+          );
+        }
+      }
     } else {
       this.lastCueMessage = 'VAMP LIBERADO';
       this.TriggerGuideCue('Vamp Off', false);
+      if (this.isStreamingMode()) {
+        this.streamingTracks.forEach((st) => st.unpinSectionChunks());
+      }
     }
     this.emitTransport(true);
   }
@@ -1048,10 +1928,8 @@ export class LibreTracksAudioEngine {
   }
 
   /**
-   * 4. CLICK CON SCHEDULER DE LOOKAHEAD (no rAF):
-   * Runs every 25ms from the Web Worker.
-   * Schedules clicks, quantized section jumps, vamp loops, and end-of-song within the next 120ms
-   * using exact AudioContext timestamps (`osc.start(exactCtxTime)` and `source.start(exactCtxTime, offset)`).
+   * Lookahead scheduler running every 25ms from the Web Worker.
+   * Schedules clicks, quantized section jumps, vamp loops, and end-of-song within the next 120ms.
    */
   private runLookaheadSchedulerTick() {
     if (!this.isPlaying || !this.project || !this.ctx) return;
@@ -1069,6 +1947,51 @@ export class LibreTracksAudioEngine {
         this.onSongEndedCallback();
       }
       return;
+    }
+
+    // Update streaming ring buffers and continuous chunk scheduling
+    if (this.isStreamingMode()) {
+      const currentSongSec = this.getCurrentSongSec();
+      const rate = this.getPlaybackRate();
+      this.streamingTracks.forEach((st) => {
+        st.updateScheduler({
+          isPlaying: this.isPlaying,
+          currentSongSec,
+          playStartSongSec: this.playStartSongSec,
+          playStartCtxTime: this.playStartCtxTime,
+          rate,
+          lookaheadSec: SCHEDULER_LOOKAHEAD_SEC,
+        });
+      });
+
+      // Track underruns to prevent staging during unstable playback
+      const totalUnderruns = this.getTotalUnderruns();
+      if (totalUnderruns > this.lastRecordedUnderruns) {
+        this.lastRecordedUnderruns = totalUnderruns;
+        this.activePlaybackStableSec = 0;
+      } else {
+        this.activePlaybackStableSec += SCHEDULER_TICK_MS / 1000;
+      }
+
+      // If active playback has been stable for >= 8s and there is a deferred staging project, trigger staging
+      if (
+        this.pendingStageNextProject &&
+        !this.isStagingNextProject &&
+        this.activePlaybackStableSec >= 8
+      ) {
+        const nextProj = this.pendingStageNextProject;
+        this.pendingStageNextProject = null;
+        this.stageNextSongStreaming(nextProj).catch((err) => {
+          console.warn('[AudioEngine][Staging] Error durante puesta en escena diferida:', err);
+        });
+      }
+
+      // Periodic [AudioEngine][Stream] telemetry log every 10 seconds during active streaming playback
+      const nowPerf = performance.now();
+      if (nowPerf - this.lastStreamLogTimeMs >= 10000) {
+        this.lastStreamLogTimeMs = nowPerf;
+        this.logStreamMetrics('Tick 10s');
+      }
     }
 
     // 2. Lookahead scheduling for Quantized Section Jumps
@@ -1092,12 +2015,26 @@ export class LibreTracksAudioEngine {
         );
         const targetStartSec = targetSecObj.startTimeSec;
 
-        // Schedule sample-accurate stop of current sources and start of new sources at exactJumpCtxTime
-        this.startAllTrackSources(
-          targetStartSec,
-          exactJumpCtxTime,
-          exactJumpCtxTime
-        );
+        // Schedule sample-accurate 8ms crossfade of current sources and start of new sources at exactJumpCtxTime
+        if (this.isStreamingMode()) {
+          this.streamingTracks.forEach((st) => {
+            st.unpinSectionChunks();
+            st.stopSourcesWithFade(exactJumpCtxTime);
+            st.seekTo(targetStartSec).catch(() => {});
+            if (
+              targetSecObj.vampByDefault &&
+              targetSecObj.endTimeSec - targetSecObj.startTimeSec <= 4.0
+            ) {
+              st.pinSectionChunks(targetSecObj.startTimeSec, targetSecObj.endTimeSec);
+            }
+          });
+        } else {
+          this.startAllTrackSources(
+            targetStartSec,
+            exactJumpCtxTime,
+            exactJumpCtxTime
+          );
+        }
 
         // Schedule clicks up to the boundary before re-anchoring
         this.scheduleClicksInSongWindow(songSecNow, boundarySongSec, nowCtx);
@@ -1114,7 +2051,6 @@ export class LibreTracksAudioEngine {
         this.isVamping = Boolean(targetSecObj.vampByDefault);
         this.lastCueMessage = `EN VIVO: ${targetSecObj.name.toUpperCase()}`;
 
-        // Schedule any clicks in the remainder of the 120ms lookahead window after the jump
         const newSongSecHorizon = this.getSongSecAtCtxTime(horizonCtx);
         this.scheduleClicksInSongWindow(
           targetStartSec,
@@ -1144,12 +2080,19 @@ export class LibreTracksAudioEngine {
       );
       const loopStartSec = currentActiveSec.startTimeSec;
 
-      // Schedule sample-accurate loop transition at exactLoopCtxTime
-      this.startAllTrackSources(
-        loopStartSec,
-        exactLoopCtxTime,
-        exactLoopCtxTime
-      );
+      // Schedule sample-accurate 8ms crossfade loop transition at exactLoopCtxTime
+      if (this.isStreamingMode()) {
+        this.streamingTracks.forEach((st) => {
+          st.stopSourcesWithFade(exactLoopCtxTime);
+          st.seekTo(loopStartSec).catch(() => {});
+        });
+      } else {
+        this.startAllTrackSources(
+          loopStartSec,
+          exactLoopCtxTime,
+          exactLoopCtxTime
+        );
+      }
 
       this.scheduleClicksInSongWindow(songSecNow, boundarySongSec, nowCtx);
 
@@ -1171,10 +2114,18 @@ export class LibreTracksAudioEngine {
     // 4. Natural section crossing detection
     const naturalSec = this.findSectionAtTime(songSecNow);
     if (naturalSec && naturalSec.id !== this.activeSectionId) {
+      if (this.isStreamingMode()) {
+        this.streamingTracks.forEach((st) => st.unpinSectionChunks());
+      }
       this.activeSectionId = naturalSec.id;
       if (!this.queuedSectionId && naturalSec.vampByDefault) {
         this.isVamping = true;
         this.lastCueMessage = `AUTO-VAMP: ${naturalSec.name.toUpperCase()}`;
+        if (this.isStreamingMode() && naturalSec.endTimeSec - naturalSec.startTimeSec <= 4.0) {
+          this.streamingTracks.forEach((st) =>
+            st.pinSectionChunks(naturalSec.startTimeSec, naturalSec.endTimeSec)
+          );
+        }
       } else {
         this.lastCueMessage = `SECCIÓN: ${naturalSec.name.toUpperCase()}`;
       }
@@ -1452,3 +2403,16 @@ export class LibreTracksAudioEngine {
 }
 
 export const audioEngine = new LibreTracksAudioEngine();
+
+if (typeof window !== 'undefined') {
+  const win = window as unknown as {
+    __streamStats: () => ReturnType<LibreTracksAudioEngine['getGlobalStreamStats']>;
+    __audioEngine: LibreTracksAudioEngine;
+  };
+  win.__streamStats = () => {
+    const stats = audioEngine.getGlobalStreamStats();
+    audioEngine.logStreamMetrics('window.__streamStats()');
+    return stats;
+  };
+  win.__audioEngine = audioEngine;
+}

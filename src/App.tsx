@@ -17,6 +17,7 @@ import {
   StoredAudioStem,
 } from './storage/projectDb';
 import {
+  AudioEngineMode,
   MetersSnapshot,
   OutputBus,
   QuantizeMode,
@@ -35,9 +36,19 @@ import { TimelineArranger } from './components/TimelineArranger';
 import { MultitrackMixer } from './components/MultitrackMixer';
 import { StageRemoteView } from './components/StageRemoteView';
 import {
+  cleanOrphanPcmDirectories,
+  ensureStoragePersist,
+  writeTrackPcmFromAudioBuffer,
+} from './storage/opfsStorage';
+import {
+  optimizeProjectForStreaming,
+  PcmOptimizationProgress,
+} from './storage/pcmOptimizer';
+import {
   ConfirmSongActionModal,
   inferTrackRoleAndColor,
   LibraryView,
+  OptimizationProgressModal,
   SectionEditorModal,
   StemImporterModal,
 } from './components/LibraryAndModals';
@@ -100,12 +111,22 @@ export default function App() {
   const [currentProject, setCurrentProject] = useState<SongProject | null>(null);
   const [transport, setTransport] = useState<TransportState>(INITIAL_TRANSPORT);
   const [ramCacheVersion, setRamCacheVersion] = useState<number>(0);
+  const [engineMode, setEngineModeState] = useState<AudioEngineMode>(() =>
+    audioEngine.getEngineMode()
+  );
+  const [ramBudgetMB, setRamBudgetMBState] = useState<number>(() =>
+    audioEngine.getRamBudgetMB()
+  );
   // Default transition mode is 'cue-next' (mounts at 00:00 in pause) so songs never start playing on their own unexpectedly
   const [setlistTransitionMode, setSetlistTransitionMode] =
     useState<SetlistTransitionMode>('cue-next');
   const [confirmSongCandidate, setConfirmSongCandidate] = useState<SongProject | null>(
     null
   );
+  const [optimizingProject, setOptimizingProject] = useState<SongProject | null>(null);
+  const [optimizationProgress, setOptimizationProgress] =
+    useState<PcmOptimizationProgress | null>(null);
+  const optimizationAbortControllerRef = useRef<AbortController | null>(null);
 
   // 5. Medidores en un ref (no en el estado de App) para no recargar el hilo principal
   const metersRef = useRef<MetersSnapshot>({
@@ -179,7 +200,86 @@ export default function App() {
     return () => {
       window.clearTimeout(timerId);
     };
-  }, [setlistQueue, currentProject?.id]);
+  }, [setlistQueue, currentProject?.id, ramBudgetMB]);
+
+  const handleStartOptimizeProject = useCallback(
+    async (projectToOptimize: SongProject) => {
+      const controller = new AbortController();
+      optimizationAbortControllerRef.current = controller;
+      setOptimizingProject(projectToOptimize);
+      setOptimizationProgress({
+        currentTrackIndex: 0,
+        totalTracks: projectToOptimize.tracks.length,
+        trackName: 'Iniciando optimización OPFS...',
+        percent: 0,
+        phase: 'checking',
+      });
+
+      try {
+        const updated = await optimizeProjectForStreaming(
+          projectToOptimize,
+          (progress) => setOptimizationProgress(progress),
+          controller.signal
+        );
+
+        audioEngine.clearProjectFallback(updated.id);
+        setProjects((prev) =>
+          prev.map((p) => (p.id === updated.id ? updated : p))
+        );
+        if (currentProjectRef.current?.id === updated.id) {
+          setCurrentProject(updated);
+        }
+        showToast(`Canción "${updated.title}" optimizada para streaming OPFS`);
+        setTimeout(() => {
+          setOptimizingProject(null);
+          setOptimizationProgress(null);
+        }, 600);
+      } catch (err: unknown) {
+        const isAbort =
+          (err instanceof DOMException && err.name === 'AbortError') ||
+          (err as { name?: string })?.name === 'AbortError';
+        if (isAbort) {
+          showToast('Optimización cancelada por el usuario');
+        } else {
+          console.error('Error optimizando proyecto para streaming:', err);
+          const errMsg =
+            err instanceof Error ? err.message : 'Error durante la optimización OPFS';
+          showToast(errMsg);
+        }
+        setOptimizingProject(null);
+        setOptimizationProgress(null);
+      } finally {
+        optimizationAbortControllerRef.current = null;
+      }
+    },
+    [showToast]
+  );
+
+  const handleCancelOptimization = useCallback(() => {
+    optimizationAbortControllerRef.current?.abort();
+  }, []);
+
+  const handleChangeEngineMode = useCallback(
+    (mode: AudioEngineMode) => {
+      audioEngine.setEngineMode(mode);
+      setEngineModeState(audioEngine.getEngineMode());
+      showToast(
+        mode === 'stream'
+          ? 'Modo Stream seleccionado (usa Buffer como respaldo si la canción aún no tiene PCM)'
+          : 'Modo Buffer seleccionado (AudioBuffer completo en RAM con presupuesto)'
+      );
+    },
+    [showToast]
+  );
+
+  const handleChangeRamBudgetMB = useCallback(
+    (mb: number) => {
+      audioEngine.setRamBudgetMB(mb);
+      setRamBudgetMBState(audioEngine.getRamBudgetMB());
+      showToast(`Presupuesto de caché RAM ajustado a ${audioEngine.getRamBudgetMB()} MB`);
+    },
+    [showToast]
+  );
 
   // 2 & 6. Activate a project using cached AudioBuffers if available and log console.info metrics
   const activateProject = useCallback(
@@ -254,6 +354,9 @@ export default function App() {
         const saved = await loadAllProjectsFromDb();
         if (!mounted) return;
         setProjects(saved);
+        // Clean up orphan OPFS directories from projects that were previously deleted
+        const validIds = new Set(saved.map((p) => p.id));
+        cleanOrphanPcmDirectories(validIds).catch(() => {});
       } catch {
         // Keep empty repertoire if IndexedDB unavailable
       }
@@ -513,6 +616,7 @@ export default function App() {
       const secPerBar = (60 / bpm) * beatsPerBar;
 
       setImportStatusText(`Importando 0/${validFiles.length} pistas en RAM...`);
+      await ensureStoragePersist();
 
       const decodedTracks: TrackChannel[] = [];
       const decodedAudioBuffers = new Map<string, AudioBuffer>();
@@ -530,6 +634,23 @@ export default function App() {
             const rawBuf = await file.arrayBuffer();
             const { audioBuffer, peaks, durationSec } =
               await audioEngine.decodeStemBuffer(rawBuf, trackLabel);
+
+            // Write PCM to OPFS in parallel with decoding so it's stream-ready immediately
+            let pcmMeta:
+              | { sampleRate: number; channels: 2; frames: number; bytesWritten: number }
+              | undefined;
+            try {
+              pcmMeta = await writeTrackPcmFromAudioBuffer(
+                targetProjectId,
+                trackId,
+                audioBuffer
+              );
+            } catch (pcmErr) {
+              console.warn(
+                `[OPFS] No se pudo escribir PCM durante importación para "${trackLabel}":`,
+                pcmErr
+              );
+            }
 
             completedCount++;
             setImportStatusText(
@@ -551,6 +672,14 @@ export default function App() {
               soloed: false,
               bus: inferred.bus === 'cue-click' ? 'cue-click' : defaultBus,
               peaks,
+              pcm: pcmMeta
+                ? {
+                    sampleRate: pcmMeta.sampleRate,
+                    channels: 2,
+                    frames: pcmMeta.frames,
+                    version: 1,
+                  }
+                : undefined,
               isCustomAudio: true,
               fileName: file.name,
               durationSec,
@@ -986,6 +1115,11 @@ export default function App() {
       <TopBar
         activeView={activeView}
         setlistCount={setlistQueue.length}
+        engineMode={engineMode}
+        ramBudgetMB={ramBudgetMB}
+        cachedRamMB={audioEngine.getTotalCachedMB()}
+        onChangeEngineMode={handleChangeEngineMode}
+        onChangeRamBudgetMB={handleChangeRamBudgetMB}
         onSelectView={handleSelectView}
         onOpenImportModal={() => setIsImportModalOpen(true)}
       />
@@ -1092,6 +1226,7 @@ export default function App() {
               onRemoveFromSetlist={handleRemoveFromSetlist}
               onMoveInSetlist={handleMoveInSetlist}
               onReorderSetlist={handleReorderSetlist}
+              onOptimizeProject={handleStartOptimizeProject}
               onChangeSetlistTransitionMode={setSetlistTransitionMode}
               onChangeQuantize={handleChangeQuantize}
               onChangePitch={handleChangePitch}
@@ -1307,6 +1442,7 @@ export default function App() {
               onExportJson={handleExportJson}
               onImportJsonFile={handleImportJsonFile}
               onOpenStemImporter={() => setIsImportModalOpen(true)}
+              onOptimizeProject={handleStartOptimizeProject}
             />
           )}
         </div>
@@ -1349,6 +1485,14 @@ export default function App() {
           onSaveSections={handleSaveSections}
         />
       )}
+
+      {/* OPFS Streaming PCM Optimization Progress Modal */}
+      <OptimizationProgressModal
+        isOpen={Boolean(optimizingProject)}
+        songTitle={optimizingProject?.title || ''}
+        progress={optimizationProgress}
+        onCancel={handleCancelOptimization}
+      />
 
       {/* Non-intrusive Action Feedback Toast */}
       {toastMessage && (

@@ -17,6 +17,7 @@ import {
   ChevronRight,
   Trash2,
   Repeat,
+  Zap,
 } from 'lucide-react';
 import {
   MetersSnapshot,
@@ -70,6 +71,7 @@ interface SetlistPageViewProps {
   onChangeMasterGain: (gain: number) => void;
   onChangeCueMasterGain: (gain: number) => void;
   onResetMixer: () => void;
+  onOptimizeProject: (song: SongProject) => void;
 }
 
 export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
@@ -88,6 +90,7 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
   onRemoveFromSetlist,
   onMoveInSetlist,
   onReorderSetlist,
+  onOptimizeProject,
   onChangeSetlistTransitionMode,
   onChangeQuantize,
   onChangePitch,
@@ -434,6 +437,8 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
             const isCurrent = project?.id === song.id;
             const isPlayingThis = isCurrent && transport.isPlaying;
             const cacheInfo = audioEngine.getSongRamCacheInfo(song);
+            const isPcmReady = audioEngine.isProjectPcmReady(song);
+            const pcmMB = audioEngine.getProjectPcmEstimatedMB(song);
             const durSec =
               song.durationSec ||
               ((song.totalBars || 24) * 4 * 60) / (song.bpm || 120);
@@ -488,31 +493,62 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
                       : 'border-[#252d3c] bg-[#161c24] hover:border-slate-600'
                   }`}
                 >
-                  {/* Card Top: Grip + RAM Status Badge + Play Button + Menu */}
+                  {/* Card Top: Grip + RAM Status Badge + OPFS PCM Status + Play Button + Menu */}
                   <div className="flex items-center justify-between gap-1">
-                    <div className="flex items-center gap-1.5">
-                      <GripHorizontal className="w-3.5 h-3.5 text-[#7f8899] cursor-grab" />
+                    <div className="flex items-center gap-1 min-w-0 overflow-hidden">
+                      <GripHorizontal className="w-3.5 h-3.5 text-[#7f8899] cursor-grab shrink-0" />
                       {cacheInfo.totalCount > 0 && (
                         <span
                           title={
                             cacheInfo.isReady
-                              ? `100% en caché RAM (${cacheInfo.cachedCount}/${cacheInfo.totalCount} pistas) — Cambio instantáneo (0 ms)`
+                              ? `100% en caché RAM (${cacheInfo.cachedCount}/${cacheInfo.totalCount} pistas · ${((cacheInfo.cachedBytes || 0) / (1024 * 1024)).toFixed(0)} MB) — Cambio instantáneo (0 ms)`
+                              : cacheInfo.skippedByRamBudget
+                              ? `No precargada en segundo plano para proteger el presupuesto de RAM (estimado ~${((cacheInfo.estimatedBytes || 0) / (1024 * 1024)).toFixed(0)} MB; límite actual: ${audioEngine.getRamBudgetMB()} MB)`
                               : cacheInfo.isPreloading
                               ? `Precargando pistas en RAM en segundo plano (${cacheInfo.cachedCount}/${cacheInfo.totalCount})...`
                               : `${cacheInfo.cachedCount}/${cacheInfo.totalCount} pistas en RAM`
                           }
-                          className={`px-1.5 py-0.5 rounded text-[9px] font-mono font-semibold tracking-tight ${
+                          className={`px-1.5 py-0.5 rounded text-[9px] font-mono font-semibold tracking-tight truncate ${
                             cacheInfo.isReady
                               ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
+                              : cacheInfo.skippedByRamBudget
+                              ? 'bg-rose-500/15 text-rose-300 border border-rose-500/40'
                               : cacheInfo.isPreloading || cacheInfo.cachedCount > 0
                               ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
                               : 'bg-slate-800/80 text-slate-400 border border-slate-700'
                           }`}
                         >
                           {cacheInfo.isReady
-                            ? '● RAM'
+                            ? `● RAM (${Math.round((cacheInfo.cachedBytes || 0) / (1024 * 1024))}M)`
+                            : cacheInfo.skippedByRamBudget
+                            ? 'No precargada (RAM)'
                             : `◐ ${cacheInfo.cachedCount}/${cacheInfo.totalCount}`}
                         </span>
+                      )}
+
+                      {/* OPFS PCM Indicator */}
+                      {isPcmReady ? (
+                        <span
+                          title={`Audio PCM Int16 optimizado en OPFS (~${pcmMB} MB en disco)`}
+                          className="px-1 py-0.2 rounded text-[8px] font-mono font-bold bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 shrink-0"
+                        >
+                          PCM
+                        </span>
+                      ) : (
+                        song.tracks.length > 0 && (
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onOptimizeProject(song);
+                            }}
+                            title="Optimizar canción para streaming OPFS (REAPER mode)"
+                            className="px-1 py-0.2 rounded text-[8px] font-mono font-bold bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 cursor-pointer flex items-center gap-0.5 shrink-0"
+                          >
+                            <Zap className="w-2.5 h-2.5 text-amber-400" />
+                            <span>Opt</span>
+                          </button>
+                        )
                       )}
                     </div>
 
@@ -604,6 +640,18 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
                       >
                         Montar en consola (00:00)
                       </button>
+                      {!isPcmReady && song.tracks.length > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            onOptimizeProject(song);
+                            setOpenCardMenuId(null);
+                          }}
+                          className="w-full px-2.5 py-1.5 text-left rounded hover:bg-slate-800 text-amber-300 flex items-center gap-1.5 cursor-pointer font-medium"
+                        >
+                          <Zap className="w-3.5 h-3.5 text-amber-400" /> Optimizar (OPFS)
+                        </button>
+                      )}
                       <button
                         type="button"
                         disabled={idx === 0}

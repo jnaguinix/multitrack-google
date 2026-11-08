@@ -1,4 +1,5 @@
 import { SongProject, SongSection } from '../types/project';
+import { deleteProjectPcm } from './opfsStorage';
 
 const DB_NAME = 'LibreTracksWebDB';
 const DB_VERSION = 1;
@@ -150,7 +151,12 @@ export async function deleteProjectFromDb(projectId: string): Promise<void> {
       }
     };
 
-    tx.oncomplete = () => resolve();
+    tx.oncomplete = () => {
+      deleteProjectPcm(projectId).catch((err) =>
+        console.warn('[OPFS] Error deleting project PCM files:', err)
+      );
+      resolve();
+    };
     tx.onerror = () => reject(tx.error);
   });
 }
