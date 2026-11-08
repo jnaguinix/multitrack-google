@@ -1,6 +1,6 @@
 {
-  "summary":  "Plan actualizado para LibreTracks Web 2.0: importacion instantanea no bloqueante con creacion automatica de cancion al soltar carpetas o grupos de stems, auto-deteccion inteligente de compases, tempo y secciones a partir de la energia del audio, panel lateral acoplable con arbol de repertorio y buscador en vivo, y Modo Claro de estudio como tema principal con Modo Oscuro secundario.",
-  "updatedAt":  "2026-11-08T04:59:37.760861124Z",
+  "summary":  "Plan de integracion del nuevo Mixer rediseñado en Modo Oscuro: tiras de canal de 84px con cap superior de color, perilla giratoria de paneo (knob) con captura de puntero, fader tactil de precision (-60 dB a +6 dB) con barra de color y manija estilizada, doble medidor VU estereo L/R con gradiente verde-ambar-rojo conectado a Web Audio API, canales dedicados para Click y Cues mas los 2 Buses maestros (Main L/R y Click / Cue) a la derecha, disponible en la vista Mixer y acoplable debajo del Arranger.",
+  "updatedAt":  "2026-11-08T05:19:35.798059904Z",
   "requestFeedback":  true,
   "userFacing":  true
 }

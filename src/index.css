@@ -10,8 +10,6 @@
 
   body {
     font-family: var(--font-sans);
-    background-color: #0B0F17;
-    color: #F1F5F9;
     overflow-x: hidden;
   }
 
@@ -25,22 +23,23 @@
   }
 }
 
-/* Custom sleek studio scrollbars */
+/* Custom sleek studio scrollbars (Light & Dark adaptive) */
 ::-webkit-scrollbar {
   width: 6px;
   height: 6px;
 }
 
 ::-webkit-scrollbar-track {
-  background: #0B0F17;
+  background: transparent;
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #1E293B;
+  background: rgba(148, 163, 184, 0.45);
   border-radius: 3px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #334155;
+  background: rgba(100, 116, 139, 0.7);
 }
+
 

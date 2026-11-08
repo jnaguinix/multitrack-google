@@ -21,7 +21,7 @@ export const TopBar: React.FC<TopBarProps> = ({
   ];
 
   return (
-    <header className="flex items-center justify-between gap-8 px-6 py-3.5 bg-[#0B0F17] border-b border-slate-800/90 select-none">
+    <header className="flex items-center justify-between gap-8 px-6 py-3 bg-white dark:bg-[#0B0F17] border-b border-slate-200 dark:border-slate-800/90 select-none">
       {/* Zone 1: Single text element wordmark */}
       <a
         href="#arranger"
@@ -29,7 +29,7 @@ export const TopBar: React.FC<TopBarProps> = ({
           e.preventDefault();
           onSelectView('arranger');
         }}
-        className="font-display text-lg font-bold tracking-tight text-slate-100 whitespace-nowrap shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400 rounded"
+        className="font-display text-lg font-bold tracking-tight text-slate-900 dark:text-slate-100 whitespace-nowrap shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-500 rounded"
       >
         LibreTracks
       </a>
@@ -48,8 +48,8 @@ export const TopBar: React.FC<TopBarProps> = ({
               }}
               className={`whitespace-nowrap shrink-0 py-1 transition-colors border-b-2 ${
                 isActive
-                  ? 'text-cyan-400 border-cyan-400 font-semibold'
-                  : 'text-slate-400 border-transparent hover:text-slate-100 hover:border-slate-600'
+                  ? 'text-sky-600 dark:text-cyan-400 border-sky-600 dark:border-cyan-400 font-semibold'
+                  : 'text-slate-600 dark:text-slate-400 border-transparent hover:text-slate-900 dark:hover:text-slate-100 hover:border-slate-300 dark:hover:border-slate-600'
               }`}
             >
               {item.label}
@@ -63,7 +63,7 @@ export const TopBar: React.FC<TopBarProps> = ({
         <button
           type="button"
           onClick={onOpenImportModal}
-          className="px-4 py-2 text-xs font-semibold text-slate-950 bg-cyan-400 hover:bg-cyan-300 active:scale-[0.99] rounded-lg transition-all whitespace-nowrap shrink-0 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300"
+          className="px-4 py-2 text-xs font-semibold text-white dark:text-slate-950 bg-sky-600 dark:bg-cyan-400 hover:bg-sky-500 dark:hover:bg-cyan-300 active:scale-[0.99] rounded-lg transition-all whitespace-nowrap shrink-0 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-500"
         >
           Import Stems
         </button>

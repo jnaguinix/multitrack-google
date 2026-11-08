@@ -3,8 +3,13 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { Upload } from 'lucide-react';
 import { audioEngine } from './audio/audioEngine';
+import {
+  autoDetectSectionsFromTracks,
+  inferSongMetadataFromFiles,
+} from './audio/smartAnalyzer';
 import {
   DEFAULT_DEMO_PROJECTS,
   deleteProjectFromDb,
@@ -25,6 +30,7 @@ import {
 } from './types/project';
 import { TopBar, WorkspaceView } from './components/TopBar';
 import { TransportDeck } from './components/TransportDeck';
+import { RepertoireTreeSidebar } from './components/RepertoireTreeSidebar';
 import { TimelineArranger } from './components/TimelineArranger';
 import { MultitrackMixer } from './components/MultitrackMixer';
 import { StageRemoteView } from './components/StageRemoteView';
@@ -57,8 +63,18 @@ function getInitialViewFromHash(): WorkspaceView {
   return 'arranger';
 }
 
+function isAudioFileCandidate(file: File): boolean {
+  if (file.type && file.type.startsWith('audio/')) return true;
+  return /\.(wav|mp3|ogg|flac|m4a|aac|webm|opus|aiff|wma)$/i.test(file.name);
+}
+
 export default function App() {
+  useEffect(() => {
+    document.documentElement.classList.add('dark');
+  }, []);
+
   const [activeView, setActiveView] = useState<WorkspaceView>(getInitialViewFromHash);
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState<boolean>(false);
   const [projects, setProjects] = useState<SongProject[]>(DEFAULT_DEMO_PROJECTS);
   const [currentProject, setCurrentProject] = useState<SongProject>(DEFAULT_DEMO_PROJECTS[0]);
   const [transport, setTransport] = useState<TransportState>(INITIAL_TRANSPORT);
@@ -71,7 +87,8 @@ export default function App() {
   });
 
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
-  const [isImportingStems, setIsImportingStems] = useState(false);
+  const [importStatusText, setImportStatusText] = useState<string | null>(null);
+  const [isDraggingOverWindow, setIsDraggingOverWindow] = useState(false);
   const [isSectionEditorOpen, setIsSectionEditorOpen] = useState(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
@@ -83,20 +100,30 @@ export default function App() {
     setToastMessage(msg);
     setTimeout(() => {
       setToastMessage((prev) => (prev === msg ? null : prev));
-    }, 3200);
+    }, 3400);
   }, []);
 
-  // Load projects from IndexedDB on initial mount and initialize audio engine
+  // Activate a project in the audio engine
   const activateProject = useCallback(
-    async (projectToLoad: SongProject) => {
+    async (
+      projectToLoad: SongProject,
+      predecodedBuffers?: Map<string, AudioBuffer>
+    ) => {
       try {
-        const storedStems = await loadProjectStemsFromDb(projectToLoad.id);
-        const customMap = new Map<string, ArrayBuffer>();
-        for (const s of storedStems) {
-          customMap.set(s.trackId, s.arrayBuffer);
+        let customMap: Map<string, ArrayBuffer> | undefined;
+        if (!predecodedBuffers) {
+          const storedStems = await loadProjectStemsFromDb(projectToLoad.id);
+          customMap = new Map<string, ArrayBuffer>();
+          for (const s of storedStems) {
+            customMap.set(s.trackId, s.arrayBuffer);
+          }
         }
 
-        const calculatedPeaks = await audioEngine.loadProject(projectToLoad, customMap);
+        const calculatedPeaks = await audioEngine.loadProject(
+          projectToLoad,
+          customMap,
+          predecodedBuffers
+        );
         const enrichedTracks = projectToLoad.tracks.map((t) => ({
           ...t,
           peaks: calculatedPeaks.get(t.id) || t.peaks || [],
@@ -108,7 +135,7 @@ export default function App() {
         };
 
         setCurrentProject(updatedProject);
-        await saveProjectToDb(updatedProject);
+        saveProjectToDb(updatedProject).catch(() => {});
         setProjects((prev) => {
           const exists = prev.some((p) => p.id === updatedProject.id);
           if (!exists) return [updatedProject, ...prev];
@@ -121,6 +148,7 @@ export default function App() {
     []
   );
 
+  // Initial load from IndexedDB
   useEffect(() => {
     let mounted = true;
     (async () => {
@@ -132,7 +160,7 @@ export default function App() {
           await activateProject(saved[0]);
         } else {
           for (const demo of DEFAULT_DEMO_PROJECTS) {
-            await saveProjectToDb(demo);
+            saveProjectToDb(demo).catch(() => {});
           }
           setProjects(DEFAULT_DEMO_PROJECTS);
           await activateProject(DEFAULT_DEMO_PROJECTS[0]);
@@ -299,7 +327,194 @@ export default function App() {
     window.history.replaceState(null, '', `#${view}`);
   };
 
-  // Handlers for Transport & Mixer
+  /**
+   * INSTANT NON-BLOCKING STEM & FOLDER IMPORT PIPELINE
+   * - Creates a new song automatically (with inferred title, BPM, Key, real duration in bars, and auto-detected sections)
+   *   OR adds stems to the current song if requested.
+   * - Persists audio blobs to IndexedDB asynchronously in the background so the UI never freezes.
+   */
+  const handleInstantImportFiles = useCallback(
+    async (
+      fileList: FileList | File[],
+      defaultBus: OutputBus = 'main',
+      importMode: 'new-song' | 'current-song' = 'new-song'
+    ) => {
+      const rawArray = Array.from(fileList);
+      const validFiles = rawArray.filter(isAudioFileCandidate);
+
+      if (validFiles.length === 0) {
+        showToast('No se encontraron archivos de audio compatibles (.wav, .mp3, .ogg, .flac, .m4a)');
+        return;
+      }
+
+      const targetProjectId =
+        importMode === 'new-song'
+          ? `song-${Date.now()}`
+          : currentProjectRef.current.id;
+
+      const { songTitle, detectedBpm, detectedKey, cleanTrackNames } =
+        inferSongMetadataFromFiles(validFiles);
+
+      const bpm =
+        importMode === 'new-song'
+          ? detectedBpm || 120
+          : currentProjectRef.current.bpm;
+      const beatsPerBar =
+        importMode === 'new-song' ? 4 : currentProjectRef.current.beatsPerBar;
+      const secPerBar = (60 / bpm) * beatsPerBar;
+
+      // 1. If creating a new song, immediately switch to Arranger view and show progress
+      if (importMode === 'new-song') {
+        setActiveView('arranger');
+      }
+      setImportStatusText(`Importando 0/${validFiles.length} pistas...`);
+
+      const decodedTracks: TrackChannel[] = [];
+      const decodedAudioBuffers = new Map<string, AudioBuffer>();
+      let maxDurationSec = 0;
+      let completedCount = 0;
+
+      // 2. Decode all stems in parallel without blocking IndexedDB
+      await Promise.allSettled(
+        validFiles.map(async (file, idx) => {
+          const trackId = `stem-${Date.now()}-${idx}`;
+          const trackLabel = cleanTrackNames[idx] || file.name.replace(/\.[^/.]+$/, '');
+          const inferred = inferTrackRoleAndColor(trackLabel, idx);
+
+          const rawBuf = await file.arrayBuffer();
+          const { audioBuffer, peaks, durationSec } = await audioEngine.decodeStemBuffer(rawBuf);
+
+          completedCount++;
+          setImportStatusText(`Decodificando ${completedCount}/${validFiles.length}: ${trackLabel}`);
+
+          if (durationSec > maxDurationSec) {
+            maxDurationSec = durationSec;
+          }
+
+          const newTrack: TrackChannel = {
+            id: trackId,
+            name: trackLabel,
+            role: inferred.role,
+            color: inferred.color,
+            gain: 0.88,
+            pan: 0,
+            muted: false,
+            soloed: false,
+            bus: inferred.bus === 'cue-click' ? 'cue-click' : defaultBus,
+            peaks,
+            isCustomAudio: true,
+            fileName: file.name,
+            durationSec,
+          };
+
+          decodedTracks.push(newTrack);
+          decodedAudioBuffers.set(trackId, audioBuffer);
+
+          // Save to IndexedDB asynchronously in background (non-blocking)
+          saveStemAudioToDb({
+            key: `${targetProjectId}:${trackId}`,
+            projectId: targetProjectId,
+            trackId,
+            arrayBuffer: rawBuf,
+            mimeType: file.type || 'audio/wav',
+            fileName: file.name,
+          }).catch((err) => console.warn('Background IndexedDB stem save warning:', err));
+        })
+      );
+
+      setImportStatusText(null);
+
+      if (decodedTracks.length === 0) {
+        showToast('No se pudo decodificar el audio seleccionado');
+        return;
+      }
+
+      // Preserve original file order
+      decodedTracks.sort((a, b) => a.id.localeCompare(b.id));
+
+      // 3. Calculate exact totalBars from real audio duration and auto-detect sections!
+      const calculatedBars =
+        maxDurationSec > 2
+          ? Math.max(4, Math.ceil(maxDurationSec / secPerBar))
+          : 24;
+
+      if (importMode === 'new-song') {
+        const autoSections = autoDetectSectionsFromTracks(decodedTracks, calculatedBars);
+
+        const newSongProject: SongProject = {
+          id: targetProjectId,
+          title: songTitle,
+          artist: 'Sesión Importada',
+          folder: 'imported',
+          inSetlist: true,
+          bpm,
+          beatsPerBar: 4,
+          beatUnit: 4,
+          keySignature: detectedKey || 'C Major',
+          totalBars: calculatedBars,
+          durationSec: maxDurationSec,
+          quantizeMode: '1-bar',
+          splitRoutingMode: 'stereo',
+          clickEnabled: true,
+          clickGain: 0.75,
+          clickSubdivision: 1,
+          guideCuesEnabled: true,
+          guideVoiceReadout: true,
+          guideGain: 0.85,
+          masterGain: 0.95,
+          pitchSemitones: 0,
+          sections: autoSections,
+          tracks: decodedTracks,
+          updatedAt: Date.now(),
+        };
+
+        await activateProject(newSongProject, decodedAudioBuffers);
+        showToast(
+          `Canción "${songTitle}" creada (${decodedTracks.length} pistas · ${calculatedBars} compases · ${autoSections.length} secciones auto-detectadas)`
+        );
+      } else {
+        // Adding stems to current project
+        for (const trk of decodedTracks) {
+          const buf = decodedAudioBuffers.get(trk.id);
+          if (buf) {
+            audioEngine.mountDecodedTrack(trk, buf);
+          }
+        }
+
+        updateCurrentProject((prev) => {
+          const combinedTracks = [...prev.tracks, ...decodedTracks];
+          const nextTotalBars = Math.max(prev.totalBars, calculatedBars);
+          const nextDurationSec = Math.max(prev.durationSec || 0, maxDurationSec);
+          const autoSections = autoDetectSectionsFromTracks(combinedTracks, nextTotalBars);
+
+          return {
+            ...prev,
+            totalBars: nextTotalBars,
+            durationSec: nextDurationSec,
+            sections: prev.tracks.length === 0 ? autoSections : prev.sections,
+            tracks: combinedTracks,
+          };
+        });
+
+        showToast(`${decodedTracks.length} stem(s) añadidos a "${currentProjectRef.current.title}"`);
+      }
+    },
+    [activateProject, showToast, updateCurrentProject]
+  );
+
+  // Auto-Detect Sections on current song on-demand
+  const handleAutoDetectSectionsNow = () => {
+    updateCurrentProject((prev) => {
+      const detected = autoDetectSectionsFromTracks(prev.tracks, prev.totalBars);
+      return {
+        ...prev,
+        sections: detected,
+      };
+    });
+    showToast('Secciones recalculadas automáticamente según la energía del audio');
+  };
+
+  // Transport & Mixer Handlers
   const handlePlayPause = () => audioEngine.togglePlayPause();
   const handleStop = () => audioEngine.stop();
   const handleToggleVamp = () => audioEngine.toggleVamp();
@@ -307,7 +522,15 @@ export default function App() {
   const handleSeekSeconds = (sec: number) => audioEngine.seekToSeconds(sec);
 
   const handleChangeBpm = (bpm: number) => {
-    updateCurrentProject((p) => ({ ...p, bpm }));
+    updateCurrentProject((p) => {
+      if (p.durationSec && p.durationSec > 2) {
+        const secPerBar = (60 / bpm) * p.beatsPerBar;
+        const nextBars = Math.max(4, Math.ceil(p.durationSec / secPerBar));
+        const nextSections = autoDetectSectionsFromTracks(p.tracks, nextBars);
+        return { ...p, bpm, totalBars: nextBars, sections: nextSections };
+      }
+      return { ...p, bpm };
+    });
   };
 
   const handleChangePitch = (pitchSemitones: number) => {
@@ -398,83 +621,40 @@ export default function App() {
     showToast('Mezcla restablecida a valores nominales');
   };
 
-  // Stem Importer Handler
-  const handleImportStemFiles = async (files: FileList, defaultBus: OutputBus) => {
-    setIsImportingStems(true);
-    try {
-      const addedTracks: TrackChannel[] = [];
-
-      for (let i = 0; i < files.length; i++) {
-        const file = files[i];
-        const arrayBuf = await file.arrayBuffer();
-        const cleanName = file.name.replace(/\.[^/.]+$/, '');
-        const inferred = inferTrackRoleAndColor(
-          cleanName,
-          currentProject.tracks.length + i
-        );
-
-        const newTrack: TrackChannel = {
-          id: `stem-${Date.now()}-${i}`,
-          name: cleanName,
-          role: inferred.role,
-          color: inferred.color,
-          gain: 0.85,
-          pan: 0,
-          muted: false,
-          soloed: false,
-          bus: inferred.bus === 'cue-click' ? 'cue-click' : defaultBus,
-          peaks: [],
-          isCustomAudio: true,
-          fileName: file.name,
-        };
-
-        await saveStemAudioToDb({
-          key: `${currentProject.id}:${newTrack.id}`,
-          projectId: currentProject.id,
-          trackId: newTrack.id,
-          arrayBuffer: arrayBuf,
-          mimeType: file.type || 'audio/wav',
-          fileName: file.name,
-        });
-
-        const peaks = await audioEngine.addDecodedTrack(newTrack, arrayBuf);
-        newTrack.peaks = peaks;
-        addedTracks.push(newTrack);
-      }
-
-      if (addedTracks.length > 0) {
-        updateCurrentProject((p) => ({
-          ...p,
-          tracks: [...p.tracks, ...addedTracks],
-        }));
-        showToast(`${addedTracks.length} stem(s) importados y guardados en IndexedDB`);
-      }
-    } catch (err) {
-      console.error('Error importing stems:', err);
-      showToast('Error al decodificar uno de los archivos de audio');
-    } finally {
-      setIsImportingStems(false);
-    }
-  };
-
   // Section Arrangement Save Handler
   const handleSaveSections = (sections: SongSection[], totalBars: number) => {
-    const nextProject: SongProject = {
-      ...currentProject,
+    updateCurrentProject((prev) => ({
+      ...prev,
       sections,
       totalBars,
-    };
-    activateProject(nextProject);
+    }));
     showToast('Estructura de secciones actualizada');
   };
 
-  // Library Handlers
+  // Library & Tree Sidebar Handlers
   const handleSelectProjectFromLibrary = async (projectId: string) => {
+    if (projectId === currentProject.id) return;
     const found = projects.find((p) => p.id === projectId);
     if (!found) return;
     await activateProject(found);
-    handleSelectView('arranger');
-    showToast(`Proyecto cargado: ${found.title}`);
+    if (activeView === 'library') {
+      handleSelectView('arranger');
+    }
+    showToast(`Canción activa: ${found.title}`);
+  };
+
+  const handleToggleSetlistStar = (projectId: string) => {
+    setProjects((prev) =>
+      prev.map((p) => {
+        if (p.id !== projectId) return p;
+        const updated = { ...p, inSetlist: !p.inSetlist };
+        saveProjectToDb(updated).catch(() => {});
+        if (currentProject.id === projectId) {
+          setCurrentProject(updated);
+        }
+        return updated;
+      })
+    );
   };
 
   const handleCreateNewProject = async (
@@ -488,13 +668,16 @@ export default function App() {
       id: `proj-${Date.now()}`,
       title,
       artist,
+      folder: 'imported',
+      inSetlist: true,
       bpm,
       keySignature,
+      tracks: [],
       updatedAt: Date.now(),
     };
     await activateProject(newProj);
     handleSelectView('arranger');
-    showToast(`Nuevo proyecto creado: ${title}`);
+    showToast(`Nueva canción creada: ${title}`);
   };
 
   const handleDeleteProject = async (projectId: string) => {
@@ -505,7 +688,7 @@ export default function App() {
     if (currentProject.id === projectId && remaining[0]) {
       await activateProject(remaining[0]);
     }
-    showToast('Proyecto eliminado de la biblioteca');
+    showToast('Canción quitada de la biblioteca (tus archivos en disco no se modifican)');
   };
 
   const handleExportJson = (proj: SongProject) => {
@@ -532,6 +715,7 @@ export default function App() {
       const importedProj: SongProject = {
         ...parsed,
         id: `imported-${Date.now()}`,
+        folder: 'imported',
         updatedAt: Date.now(),
       };
       await activateProject(importedProj);
@@ -542,8 +726,50 @@ export default function App() {
     }
   };
 
+  // Global Window Drag-and-Drop Handlers for Instant Song Creation
+  const handleDragOverWindow = (e: React.DragEvent) => {
+    e.preventDefault();
+    if (e.dataTransfer.types.includes('Files')) {
+      setIsDraggingOverWindow(true);
+    }
+  };
+
+  const handleDragLeaveWindow = (e: React.DragEvent) => {
+    if (e.currentTarget === e.target) {
+      setIsDraggingOverWindow(false);
+    }
+  };
+
+  const handleDropOnWindow = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDraggingOverWindow(false);
+    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+      handleInstantImportFiles(e.dataTransfer.files, 'main', 'new-song');
+    }
+  };
+
   return (
-    <div className="min-h-screen h-screen flex flex-col bg-[#0B0F17] text-slate-100 overflow-hidden">
+    <div
+      onDragOver={handleDragOverWindow}
+      onDragLeave={handleDragLeaveWindow}
+      onDrop={handleDropOnWindow}
+      className="min-h-screen h-screen flex flex-col bg-[#0B0F17] text-slate-100 overflow-hidden relative"
+    >
+      {/* Global Drag-and-Drop Overlay */}
+      {isDraggingOverWindow && (
+        <div className="fixed inset-0 z-50 bg-cyan-500/20 backdrop-blur-xs border-4 border-dashed border-cyan-400 flex items-center justify-center p-8 pointer-events-none">
+          <div className="bg-[#111827] border border-slate-800 rounded-2xl p-8 text-center shadow-2xl max-w-md">
+            <Upload className="w-12 h-12 text-cyan-400 mx-auto mb-3" />
+            <h2 className="font-display text-xl font-bold text-slate-100">
+              Suelta tus Stems o Carpeta Aquí
+            </h2>
+            <p className="text-xs text-slate-400 mt-1">
+              Se guardará como una sola canción en tu repertorio con todas sus pistas listas.
+            </p>
+          </div>
+        </div>
+      )}
+
       {/* Top 3-Zone Navigation Bar */}
       <TopBar
         activeView={activeView}
@@ -555,6 +781,7 @@ export default function App() {
       <TransportDeck
         project={currentProject}
         transport={transport}
+        importStatusText={importStatusText}
         onPlayPause={handlePlayPause}
         onStop={handleStop}
         onToggleVamp={handleToggleVamp}
@@ -564,99 +791,125 @@ export default function App() {
         onToggleClick={handleToggleClick}
         onToggleGuide={handleToggleGuide}
         onToggleSplitRouting={handleToggleSplitRouting}
+        onAutoDetectSections={handleAutoDetectSectionsNow}
         onOpenSectionEditor={() => setIsSectionEditorOpen(true)}
       />
 
-      {/* Main Workspace Viewport */}
-      {activeView === 'arranger' && (
-        <TimelineArranger
-          project={currentProject}
-          transport={transport}
-          meters={meters.tracks}
-          onJumpSection={handleJumpSection}
-          onSeekSeconds={handleSeekSeconds}
-          onToggleTrackMute={handleToggleTrackMute}
-          onToggleTrackSolo={handleToggleTrackSolo}
-          onChangeTrackGain={handleChangeTrackGain}
-          onChangeTrackPan={handleChangeTrackPan}
-          onChangeTrackBus={handleChangeTrackBus}
-          onDeleteTrack={handleDeleteTrack}
-          onOpenImportModal={() => setIsImportModalOpen(true)}
-          onOpenSectionEditor={() => setIsSectionEditorOpen(true)}
-        />
-      )}
+      {/* Main Body: Dockable Left Repertoire Tree Sidebar + Active Workspace Viewport */}
+      <div className="flex-1 flex overflow-hidden">
+        {activeView !== 'remote' && (
+          <RepertoireTreeSidebar
+            projects={projects}
+            currentProjectId={currentProject.id}
+            isCollapsed={isSidebarCollapsed}
+            onToggleCollapse={() => setIsSidebarCollapsed((prev) => !prev)}
+            onSelectProject={handleSelectProjectFromLibrary}
+            onToggleSetlistStar={handleToggleSetlistStar}
+            onDeleteProject={handleDeleteProject}
+            onExportJson={handleExportJson}
+            onQuickImportNewSongFiles={(files) =>
+              handleInstantImportFiles(files, 'main', 'new-song')
+            }
+            onOpenNewSongModal={() => handleSelectView('library')}
+          />
+        )}
 
-      {activeView === 'mixer' && (
-        <MultitrackMixer
-          project={currentProject}
-          meters={meters}
-          onToggleTrackMute={handleToggleTrackMute}
-          onToggleTrackSolo={handleToggleTrackSolo}
-          onChangeTrackGain={handleChangeTrackGain}
-          onChangeTrackPan={handleChangeTrackPan}
-          onChangeTrackBus={handleChangeTrackBus}
-          onChangeClickGain={(gain) =>
-            updateCurrentProject((p) => ({ ...p, clickGain: gain }))
-          }
-          onChangeClickSubdivision={(clickSubdivision) =>
-            updateCurrentProject((p) => ({ ...p, clickSubdivision }))
-          }
-          onToggleClick={handleToggleClick}
-          onChangeGuideGain={(gain) =>
-            updateCurrentProject((p) => ({ ...p, guideGain: gain }))
-          }
-          onToggleGuide={handleToggleGuide}
-          onToggleGuideVoice={handleToggleGuideVoice}
-          onChangeMasterGain={(gain) =>
-            updateCurrentProject((p) => ({ ...p, masterGain: gain }))
-          }
-          onResetMixer={handleResetMixer}
-        />
-      )}
+        {activeView === 'arranger' && (
+          <TimelineArranger
+            project={currentProject}
+            transport={transport}
+            meters={meters.tracks}
+            isDarkMode={true}
+            onJumpSection={handleJumpSection}
+            onSeekSeconds={handleSeekSeconds}
+            onToggleTrackMute={handleToggleTrackMute}
+            onToggleTrackSolo={handleToggleTrackSolo}
+            onChangeTrackGain={handleChangeTrackGain}
+            onChangeTrackPan={handleChangeTrackPan}
+            onChangeTrackBus={handleChangeTrackBus}
+            onDeleteTrack={handleDeleteTrack}
+            onAddStemsToCurrentSong={(files) =>
+              handleInstantImportFiles(files, 'main', 'current-song')
+            }
+            onAutoDetectSections={handleAutoDetectSectionsNow}
+            onOpenImportModal={() => setIsImportModalOpen(true)}
+            onOpenSectionEditor={() => setIsSectionEditorOpen(true)}
+          />
+        )}
 
-      {activeView === 'remote' && (
-        <StageRemoteView
-          project={currentProject}
-          transport={transport}
-          onPlayPause={handlePlayPause}
-          onStop={handleStop}
-          onJumpSection={handleJumpSection}
-          onToggleVamp={handleToggleVamp}
-          onToggleClick={handleToggleClick}
-          onToggleGuide={handleToggleGuide}
-          onChangeQuantize={handleChangeQuantize}
-          onChangeClickGain={(gain) =>
-            updateCurrentProject((p) => ({ ...p, clickGain: gain }))
-          }
-          onChangeGuideGain={(gain) =>
-            updateCurrentProject((p) => ({ ...p, guideGain: gain }))
-          }
-          onChangeMasterGain={(gain) =>
-            updateCurrentProject((p) => ({ ...p, masterGain: gain }))
-          }
-          onToggleTrackMute={handleToggleTrackMute}
-        />
-      )}
+        {activeView === 'mixer' && (
+          <MultitrackMixer
+            project={currentProject}
+            meters={meters}
+            onToggleTrackMute={handleToggleTrackMute}
+            onToggleTrackSolo={handleToggleTrackSolo}
+            onChangeTrackGain={handleChangeTrackGain}
+            onChangeTrackPan={handleChangeTrackPan}
+            onChangeTrackBus={handleChangeTrackBus}
+            onChangeClickGain={(gain) =>
+              updateCurrentProject((p) => ({ ...p, clickGain: gain }))
+            }
+            onChangeClickSubdivision={(clickSubdivision) =>
+              updateCurrentProject((p) => ({ ...p, clickSubdivision }))
+            }
+            onToggleClick={handleToggleClick}
+            onChangeGuideGain={(gain) =>
+              updateCurrentProject((p) => ({ ...p, guideGain: gain }))
+            }
+            onToggleGuide={handleToggleGuide}
+            onToggleGuideVoice={handleToggleGuideVoice}
+            onChangeMasterGain={(gain) =>
+              updateCurrentProject((p) => ({ ...p, masterGain: gain }))
+            }
+            onResetMixer={handleResetMixer}
+          />
+        )}
 
-      {activeView === 'library' && (
-        <LibraryView
-          projects={projects}
-          currentProjectId={currentProject.id}
-          onSelectProject={handleSelectProjectFromLibrary}
-          onCreateNewProject={handleCreateNewProject}
-          onDeleteProject={handleDeleteProject}
-          onExportJson={handleExportJson}
-          onImportJsonFile={handleImportJsonFile}
-          onOpenStemImporter={() => setIsImportModalOpen(true)}
-        />
-      )}
+        {activeView === 'remote' && (
+          <StageRemoteView
+            project={currentProject}
+            transport={transport}
+            onPlayPause={handlePlayPause}
+            onStop={handleStop}
+            onJumpSection={handleJumpSection}
+            onToggleVamp={handleToggleVamp}
+            onToggleClick={handleToggleClick}
+            onToggleGuide={handleToggleGuide}
+            onChangeQuantize={handleChangeQuantize}
+            onChangeClickGain={(gain) =>
+              updateCurrentProject((p) => ({ ...p, clickGain: gain }))
+            }
+            onChangeGuideGain={(gain) =>
+              updateCurrentProject((p) => ({ ...p, guideGain: gain }))
+            }
+            onChangeMasterGain={(gain) =>
+              updateCurrentProject((p) => ({ ...p, masterGain: gain }))
+            }
+            onToggleTrackMute={handleToggleTrackMute}
+          />
+        )}
+
+        {activeView === 'library' && (
+          <LibraryView
+            projects={projects}
+            currentProjectId={currentProject.id}
+            onSelectProject={handleSelectProjectFromLibrary}
+            onCreateNewProject={handleCreateNewProject}
+            onDeleteProject={handleDeleteProject}
+            onExportJson={handleExportJson}
+            onImportJsonFile={handleImportJsonFile}
+            onOpenStemImporter={() => setIsImportModalOpen(true)}
+          />
+        )}
+      </div>
 
       {/* Modals */}
       <StemImporterModal
         isOpen={isImportModalOpen}
         onClose={() => setIsImportModalOpen(false)}
-        onImportFiles={handleImportStemFiles}
-        isImporting={isImportingStems}
+        onImportFiles={(files, defaultBus, importMode) =>
+          handleInstantImportFiles(files, defaultBus, importMode)
+        }
       />
 
       {isSectionEditorOpen && (
@@ -672,7 +925,7 @@ export default function App() {
       {toastMessage && (
         <div
           role="status"
-          className="fixed bottom-5 right-5 z-50 bg-slate-900 border border-cyan-500/50 text-slate-100 px-4 py-2.5 rounded-xl text-xs font-medium shadow-lg"
+          className="fixed bottom-5 right-5 z-50 bg-slate-900 dark:bg-slate-800 border border-sky-500/40 dark:border-cyan-500/50 text-white px-4 py-2.5 rounded-xl text-xs font-medium shadow-lg"
         >
           {toastMessage}
         </div>

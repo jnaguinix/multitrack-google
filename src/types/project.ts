@@ -28,17 +28,23 @@ export interface TrackChannel {
   peaks: number[]; // Normalized 0..1 envelope peaks for canvas waveform rendering
   isCustomAudio?: boolean;
   fileName?: string;
+  durationSec?: number;
 }
+
+export type RepertoireFolder = 'imported' | 'setlist' | 'demos';
 
 export interface SongProject {
   id: string;
   title: string;
   artist: string;
+  folder?: RepertoireFolder;
+  inSetlist?: boolean;
   bpm: number;
   beatsPerBar: number;
   beatUnit: number;
   keySignature: string;
   totalBars: number;
+  durationSec?: number;
   quantizeMode: QuantizeMode;
   splitRoutingMode: SplitRoutingMode;
   clickEnabled: boolean;

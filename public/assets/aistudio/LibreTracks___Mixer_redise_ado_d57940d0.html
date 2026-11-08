@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>LibreTracks · Mixer</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600;700&display=swap">
+<style>
+:root{
+  --bg:#f3f1ec;--panel:#ffffff;--strip:#faf9f6;--line:#dcd8cf;--text:#1b1d24;--mut:#7a7d88;
+  --track:#e4e1d8;--meter-bg:#e9e6de;--accent:#0a8f8f;--solo:#e0a100;--mute:#d6453d;--shadow:0 1px 0 rgba(0,0,0,.04);
+  box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);
+  color-scheme:light;
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --bg:#0e1118;--panel:#151a24;--strip:#171d29;--line:#252d3c;--text:#e9ecf2;--mut:#7f8899;
+    --track:#0a0d13;--meter-bg:#0a0d13;--accent:#2fd0c8;--solo:#ffc233;--mute:#ff5a50;--shadow:none;color-scheme:dark;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#0e1118;--panel:#151a24;--strip:#171d29;--line:#252d3c;--text:#e9ecf2;--mut:#7f8899;
+  --track:#0a0d13;--meter-bg:#0a0d13;--accent:#2fd0c8;--solo:#ffc233;--mute:#ff5a50;--shadow:none;color-scheme:dark;
+}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{background:var(--bg);color:var(--text);font-family:"Instrument Sans",system-ui,sans-serif;font-variant-numeric:tabular-nums;min-height:100vh}
+button{font:inherit;color:inherit;cursor:pointer}
+button:focus-visible,.fader:focus-visible,.knob:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+
+/* barra superior */
+.top{display:flex;align-items:center;gap:16px;padding:12px 20px;border-bottom:1px solid var(--line);background:var(--panel);flex-wrap:wrap}
+.logo{font-weight:700;font-size:18px;letter-spacing:-.02em;margin-right:8px}
+.tabs{display:flex;gap:2px;background:var(--bg);padding:3px;border-radius:10px}
+.tabs button{border:0;background:none;padding:6px 14px;border-radius:8px;color:var(--mut);font-weight:500}
+.tabs button[aria-current="true"]{background:var(--panel);color:var(--text);box-shadow:0 1px 3px rgba(0,0,0,.18)}
+.song{margin-left:auto;text-align:right;line-height:1.25}
+.song b{display:block;font-size:14px}.song span{font-size:12px;color:var(--mut)}
+.transport{display:flex;align-items:center;gap:10px;padding:10px 20px;border-bottom:1px solid var(--line);flex-wrap:wrap}
+.pill{border:1px solid var(--line);background:var(--panel);border-radius:999px;padding:7px 16px;font-weight:600;display:inline-flex;gap:8px;align-items:center}
+.pill.on{background:var(--accent);border-color:var(--accent);color:#04201f}
+.pos{margin-left:12px;font-size:26px;font-weight:600;letter-spacing:-.02em}
+.pos small{font-size:12px;font-weight:500;color:var(--mut);margin-left:8px}
+.reset{margin-left:auto;border:0;background:none;color:var(--mut);text-decoration:underline;text-underline-offset:3px}
+
+/* consola */
+.console{display:flex;gap:10px;padding:18px 20px 24px;align-items:stretch}
+.channels{display:flex;gap:6px;overflow-x:auto;padding-bottom:8px;flex:1;min-width:0;scrollbar-width:thin}
+.buses{display:flex;gap:8px;padding-left:14px;border-left:2px solid var(--line)}
+.strip{width:84px;flex:none;background:var(--strip);border:1px solid var(--line);border-radius:12px;padding:0 8px 10px;display:flex;flex-direction:column;align-items:center;gap:8px;box-shadow:var(--shadow);transition:opacity .15s}
+.strip.dim{opacity:.38}
+.strip .cap{height:4px;align-self:stretch;margin:0 -8px;border-radius:11px 11px 0 0;background:var(--c)}
+.name{font-size:12px;font-weight:600;text-align:center;width:100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:2px}
+.sub{font-size:10px;color:var(--mut);margin-top:-6px}
+
+/* knob de paneo */
+.knob{width:38px;height:38px;border-radius:50%;background:var(--panel);border:1px solid var(--line);position:relative;touch-action:none;cursor:ns-resize}
+.knob::after{content:"";position:absolute;left:50%;top:4px;width:3px;height:12px;margin-left:-1.5px;border-radius:2px;background:var(--text);transform-origin:50% 15px;transform:rotate(var(--r,0deg))}
+.panval{font-size:11px;color:var(--mut);margin-top:-4px}
+
+/* fader + medidor */
+.fx{display:flex;gap:5px;height:270px;align-items:stretch}
+.scale{display:flex;flex-direction:column;justify-content:space-between;font-size:9px;color:var(--mut);text-align:right;width:18px;padding:0}
+.fader{position:relative;width:30px;touch-action:none;cursor:ns-resize}
+.fader::before{content:"";position:absolute;left:50%;top:0;bottom:0;width:6px;margin-left:-3px;border-radius:3px;background:var(--track)}
+.fill{position:absolute;left:50%;bottom:0;width:6px;margin-left:-3px;border-radius:3px;background:var(--c);opacity:.85}
+.handle{position:absolute;left:0;right:0;height:26px;margin-bottom:-13px;border-radius:6px;background:var(--panel);border:1px solid var(--line);box-shadow:0 2px 5px rgba(0,0,0,.28)}
+.handle::after{content:"";position:absolute;left:5px;right:5px;top:50%;height:3px;margin-top:-1.5px;border-radius:2px;background:var(--c)}
+.meter{position:relative;width:8px;border-radius:3px;background:var(--meter-bg);overflow:hidden}
+.meter i{position:absolute;inset:0;background:linear-gradient(to top,#2fd07a 0%,#2fd07a 62%,#ffc233 82%,#ff5a50 100%)}
+.meter s{position:absolute;left:0;right:0;top:0;background:var(--meter-bg);height:100%;text-decoration:none;transition:height 60ms linear}
+.db{font-size:13px;font-weight:600;background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:3px 0;width:100%;text-align:center}
+
+/* botones */
+.ms{display:grid;grid-template-columns:1fr 1fr;gap:4px;width:100%}
+.ms button{border:1px solid var(--line);background:var(--panel);border-radius:6px;height:28px;font-weight:700;font-size:12px}
+.ms .m[aria-pressed="true"]{background:var(--mute);border-color:var(--mute);color:#fff}
+.ms .s[aria-pressed="true"]{background:var(--solo);border-color:var(--solo);color:#241a00}
+.route{width:100%;border:1px solid var(--line);background:var(--panel);border-radius:6px;height:28px;font-size:11px;font-weight:600;color:var(--mut)}
+.route[data-bus="cue"]{background:color-mix(in srgb,var(--accent) 18%,var(--panel));border-color:var(--accent);color:var(--text)}
+
+/* buses */
+.strip.bus{width:104px;background:var(--panel);border-width:2px}
+.strip.bus .name{font-size:13px}
+.strip.bus .handle{height:32px;margin-bottom:-16px}
+
+@media (max-width:640px){
+  .console{flex-direction:column;padding:12px}
+  .buses{border-left:0;border-top:2px solid var(--line);padding:12px 0 0;justify-content:center}
+  .song{display:none}
+}
+@media (prefers-reduced-motion:reduce){.meter s{transition:none}}
+</style>
+</head>
+<body>
+<header class="top">
+  <span class="logo">LibreTracks</span>
+  <nav class="tabs" aria-label="Secciones">
+    <button>Arranger</button><button aria-current="true">Mixer</button><button>Stage Remote</button><button>Library</button>
+  </nav>
+  <div class="song"><b>Catedral de Luz (Arena Set)</b><span>Sol mayor, 4/4, 20 compases</span></div>
+</header>
+
+<div class="transport">
+  <button class="pill on" id="play">▶ Play</button>
+  <button class="pill" id="stop">■ Stop</button>
+  <div class="pos" id="pos">002<small>Intro Atmos</small></div>
+  <button class="reset" id="reset">Restablecer mezcla a 0 dB</button>
+</div>
+
+<main class="console">
+  <section class="channels" id="channels" aria-label="Canales"></section>
+  <section class="buses" id="buses" aria-label="Buses de salida"></section>
+</main>
+
+<script>
+var DATA=[
+ ["Stadium Drums","#f59e0b",0,"main",-0.9],["Moog Taurus Bass","#ef4444",0,"main",-1.1],
+ ["Grand Piano & Rh…","#06b6d4",-30,"cue",-0.4],["Dotted 8th Swell","#10b981",35,"main",-1.7],
+ ["Warm Ambient Str…","#8b5cf6",15,"main",-2.2],["Bass","#ef4444",0,"main",-1.4],
+ ["Click","#22d3ee",0,"cue",-1.4],["Cues","#22d3ee",0,"cue",-1.4],
+ ["Drums","#f59e0b",0,"main",-1.4],["EG 2","#f59e0b",0,"main",-1.4],["Pad","#ec4899",0,"main",-1.4]
+];
+var MINDB=-60,MAXDB=6,H=270;
+var chs=[],playing=true;
+function posFromDb(d){return Math.max(0,Math.min(1,(d-MINDB)/(MAXDB-MINDB)))}
+function dbFromPos(p){return p<=0.004?-Infinity:MINDB+p*(MAXDB-MINDB)}
+function fmt(d){return d===-Infinity?"-∞ dB":(d>0?"+":"")+d.toFixed(1)+" dB"}
+function panTxt(p){return p===0?"C":(p<0?"L"+(-p):"R"+p)}
+function el(t,c,h){var e=document.createElement(t);if(c)e.className=c;if(h!==undefined)e.innerHTML=h;return e}
+
+function build(name,color,pan,bus,db,isBus){
+  var s={name:name,db:db,pan:pan,bus:bus,mute:false,solo:false,isBus:isBus};
+  var strip=el("div","strip"+(isBus?" bus":""));strip.style.setProperty("--c",color);
+  strip.appendChild(el("div","cap"));
+  strip.appendChild(el("div","name",name));
+  if(!isBus){
+    var k=el("div","knob");k.tabIndex=0;k.setAttribute("role","slider");k.setAttribute("aria-label","Pan "+name);
+    var pv=el("div","panval");
+    var setPan=function(v){s.pan=Math.max(-100,Math.min(100,Math.round(v)));k.style.setProperty("--r",(s.pan*1.35)+"deg");pv.textContent=panTxt(s.pan);k.setAttribute("aria-valuenow",s.pan)};
+    var sy=0,sp=0;
+    k.onpointerdown=function(e){k.setPointerCapture(e.pointerId);sy=e.clientY;sp=s.pan};
+    k.onpointermove=function(e){if(k.hasPointerCapture(e.pointerId))setPan(sp+(sy-e.clientY)*1.5)};
+    k.ondblclick=function(){setPan(0)};
+    k.onkeydown=function(e){if(e.key==="ArrowUp"||e.key==="ArrowRight")setPan(s.pan+5);if(e.key==="ArrowDown"||e.key==="ArrowLeft")setPan(s.pan-5)};
+    strip.appendChild(k);strip.appendChild(pv);setPan(pan);s.setPan=setPan;
+  }else{strip.appendChild(el("div","sub",bus==="main"?"Salida principal":"Auriculares banda"))}
+
+  var fx=el("div","fx");
+  var sc=el("div","scale","<span>+6</span><span>0</span><span>-10</span><span>-20</span><span>-40</span><span>-∞</span>");
+  var f=el("div","fader");f.tabIndex=0;f.setAttribute("role","slider");f.setAttribute("aria-label","Nivel "+name);
+  var fill=el("div","fill"),h=el("div","handle");f.appendChild(fill);f.appendChild(h);
+  var m1=el("div","meter","<i></i><s></s>"),m2=el("div","meter","<i></i><s></s>");
+  fx.appendChild(sc);fx.appendChild(f);fx.appendChild(m1);fx.appendChild(m2);strip.appendChild(fx);
+  var dbEl=el("div","db");strip.appendChild(dbEl);
+  var setDb=function(d){s.db=d;var p=posFromDb(d);h.style.bottom=(p*100)+"%";fill.style.height=(p*100)+"%";dbEl.textContent=fmt(d);f.setAttribute("aria-valuetext",fmt(d))};
+  var drag=function(e){var r=f.getBoundingClientRect();var p=1-(e.clientY-r.top)/r.height;p=Math.max(0,Math.min(1,p));var d=dbFromPos(p);if(Math.abs(d)<1.2)d=0;setDb(d===-Infinity?-Infinity:Math.round(d*10)/10)};
+  f.onpointerdown=function(e){f.setPointerCapture(e.pointerId);drag(e)};
+  f.onpointermove=function(e){if(f.hasPointerCapture(e.pointerId))drag(e)};
+  f.ondblclick=function(){setDb(0)};
+  f.onkeydown=function(e){var d=isFinite(s.db)?s.db:MINDB;if(e.key==="ArrowUp")setDb(Math.min(MAXDB,d+.5));if(e.key==="ArrowDown")setDb(Math.max(MINDB,d-.5))};
+  setDb(db);s.setDb=setDb;s.meters=[m1.querySelector("s"),m2.querySelector("s")];
+
+  if(!isBus){
+    var ms=el("div","ms");
+    var mb=el("button","m","M");mb.setAttribute("aria-pressed","false");mb.setAttribute("aria-label","Mute "+name);
+    var sb=el("button","s","S");sb.setAttribute("aria-pressed","false");sb.setAttribute("aria-label","Solo "+name);
+    mb.onclick=function(){s.mute=!s.mute;mb.setAttribute("aria-pressed",s.mute);refresh()};
+    sb.onclick=function(){s.solo=!s.solo;sb.setAttribute("aria-pressed",s.solo);refresh()};
+    ms.appendChild(mb);ms.appendChild(sb);strip.appendChild(ms);
+    var r=el("button","route");r.dataset.bus=bus;
+    var paint=function(){r.dataset.bus=s.bus;r.textContent=s.bus==="main"?"Main L/R":"Click / Cue"};
+    r.onclick=function(){s.bus=s.bus==="main"?"cue":"main";paint()};paint();strip.appendChild(r);
+  }
+  s.el=strip;return s;
+}
+function refresh(){
+  var any=chs.some(function(c){return c.solo});
+  chs.forEach(function(c){c.el.classList.toggle("dim",c.mute||(any&&!c.solo))});
+}
+DATA.forEach(function(d){var s=build(d[0],d[1],d[2],d[3],d[4],false);chs.push(s);document.getElementById("channels").appendChild(s.el)});
+var busMain=build("Main L/R","#f59e0b",0,"main",0,true),busCue=build("Click / Cue","#22d3ee",0,"cue",-3,true);
+document.getElementById("buses").appendChild(busMain.el);document.getElementById("buses").appendChild(busCue.el);
+
+var t=0;
+function level(s,bus){
+  if(s.mute||s.db===-Infinity)return 0;
+  var g=posFromDb(s.db);
+  var any=chs.some(function(c){return c.solo});
+  if(any&&!s.solo&&!s.isBus)return 0;
+  return g*(0.55+0.45*Math.abs(Math.sin(t*(1.3+(s.name.length%5)*.37)+s.name.length)))
+}
+function tick(){
+  t+=0.05;
+  var sums={main:0,cue:0};
+  chs.forEach(function(c){
+    var l=playing?level(c):0;
+    c.meters[0].style.height=((1-l)*100)+"%";c.meters[1].style.height=((1-l*(0.92+0.08*Math.sin(t*3)))*100)+"%";
+    if(l>0)sums[c.bus]=Math.max(sums[c.bus],l);
+  });
+  [[busMain,"main"],[busCue,"cue"]].forEach(function(b){
+    var l=playing?sums[b[1]]*posFromDb(b[0].db)*1.05:0;
+    b[0].meters[0].style.height=((1-l)*100)+"%";b[0].meters[1].style.height=((1-l*.95)*100)+"%";
+  });
+  requestAnimationFrame(tick);
+}
+tick();
+var bar=2;setInterval(function(){if(playing){bar=bar%20+1;document.getElementById("pos").firstChild.textContent=String(bar).padStart(3,"0")}},2500);
+document.getElementById("play").onclick=function(){playing=true;this.classList.add("on");document.getElementById("stop").classList.remove("on")};
+document.getElementById("stop").onclick=function(){playing=false;this.classList.add("on");document.getElementById("play").classList.remove("on")};
+document.getElementById("reset").onclick=function(){chs.forEach(function(c){c.setDb(0)});busMain.setDb(0);busCue.setDb(0)};
+</script>
+</body>
+</html>

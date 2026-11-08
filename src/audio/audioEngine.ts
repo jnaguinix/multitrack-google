@@ -94,9 +94,24 @@ export class LibreTracksAudioEngine {
     this.listeners.forEach((cb) => cb(state));
   }
 
+  public async decodeStemBuffer(
+    rawBuffer: ArrayBuffer
+  ): Promise<{ audioBuffer: AudioBuffer; peaks: number[]; durationSec: number }> {
+    const ctx = this.ensureContext();
+    const copy = rawBuffer.slice(0);
+    const decoded = await ctx.decodeAudioData(copy);
+    const peaks = extractWaveformPeaks(decoded, 320);
+    return {
+      audioBuffer: decoded,
+      peaks,
+      durationSec: decoded.duration,
+    };
+  }
+
   public async loadProject(
     project: SongProject,
-    customStems?: Map<string, ArrayBuffer>
+    customStems?: Map<string, ArrayBuffer>,
+    predecodedBuffers?: Map<string, AudioBuffer>
   ): Promise<Map<string, number[]>> {
     this.stop();
     const ctx = this.ensureContext();
@@ -120,10 +135,10 @@ export class LibreTracksAudioEngine {
     const updatedPeaks = new Map<string, number[]>();
 
     for (const track of project.tracks) {
-      let audioBuffer: AudioBuffer | null = null;
+      let audioBuffer: AudioBuffer | null = predecodedBuffers?.get(track.id) || null;
       const rawCustom = customStems?.get(track.id);
 
-      if (rawCustom) {
+      if (!audioBuffer && rawCustom) {
         try {
           // Copy slice because decodeAudioData detaches ArrayBuffer
           const copy = rawCustom.slice(0);
@@ -188,13 +203,14 @@ export class LibreTracksAudioEngine {
     this.emitTransport();
   }
 
-  public async addDecodedTrack(track: TrackChannel, arrayBuffer: ArrayBuffer): Promise<number[]> {
+  public mountDecodedTrack(track: TrackChannel, decoded: AudioBuffer): { peaks: number[]; durationSec: number } {
     const ctx = this.ensureContext();
-    const copy = arrayBuffer.slice(0);
-    const decoded = await ctx.decodeAudioData(copy);
     this.trackBuffers.set(track.id, decoded);
 
-    const peaks = extractWaveformPeaks(decoded, 320);
+    const peaks =
+      track.peaks && track.peaks.length >= 64
+        ? track.peaks
+        : extractWaveformPeaks(decoded, 320);
 
     const gainNode = ctx.createGain();
     const panNode = ctx.createStereoPanner();
@@ -220,6 +236,12 @@ export class LibreTracksAudioEngine {
       }
     }
 
+    return { peaks, durationSec: decoded.duration };
+  }
+
+  public async addDecodedTrack(track: TrackChannel, arrayBuffer: ArrayBuffer): Promise<number[]> {
+    const { audioBuffer } = await this.decodeStemBuffer(arrayBuffer);
+    const { peaks } = this.mountDecodedTrack(track, audioBuffer);
     return peaks;
   }
 

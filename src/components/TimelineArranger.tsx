@@ -5,6 +5,7 @@ import {
   Plus,
   Volume2,
   CornerDownRight,
+  Wand2,
 } from 'lucide-react';
 import {
   OutputBus,
@@ -19,6 +20,7 @@ interface TimelineArrangerProps {
   project: SongProject;
   transport: TransportState;
   meters: Record<string, TrackMeterReading>;
+  isDarkMode: boolean;
   onJumpSection: (sectionId: string) => void;
   onSeekSeconds: (seconds: number) => void;
   onToggleTrackMute: (trackId: string) => void;
@@ -27,6 +29,8 @@ interface TimelineArrangerProps {
   onChangeTrackPan: (trackId: string, pan: number) => void;
   onChangeTrackBus: (trackId: string, bus: OutputBus) => void;
   onDeleteTrack: (trackId: string) => void;
+  onAddStemsToCurrentSong: (files: FileList) => void;
+  onAutoDetectSections: () => void;
   onOpenImportModal: () => void;
   onOpenSectionEditor: () => void;
 }
@@ -41,6 +45,7 @@ interface WaveformCanvasProps {
   peaks: number[];
   color: string;
   muted: boolean;
+  isDarkMode: boolean;
   sections: SongSection[];
   totalBars: number;
   activeSectionId: string | null;
@@ -54,6 +59,7 @@ const WaveformCanvas: React.FC<WaveformCanvasProps> = ({
   peaks,
   color,
   muted,
+  isDarkMode,
   sections,
   totalBars,
   activeSectionId,
@@ -81,7 +87,7 @@ const WaveformCanvas: React.FC<WaveformCanvasProps> = ({
     ctx.scale(dpr, dpr);
     ctx.clearRect(0, 0, width, height);
 
-    // 1. Draw subtle section region backgrounds & bar grid lines
+    // 1. Draw subtle section region backgrounds
     for (const sec of sections) {
       const startX = ((sec.startBar - 1) / totalBars) * width;
       const secW = (sec.lengthBars / totalBars) * width;
@@ -89,21 +95,35 @@ const WaveformCanvas: React.FC<WaveformCanvasProps> = ({
       const isQueued = sec.id === queuedSectionId;
 
       if (isActive && isVamping) {
-        ctx.fillStyle = 'rgba(245, 158, 11, 0.09)';
+        ctx.fillStyle = isDarkMode
+          ? 'rgba(245, 158, 11, 0.11)'
+          : 'rgba(245, 158, 11, 0.14)';
         ctx.fillRect(startX, 0, secW, height);
       } else if (isActive) {
-        ctx.fillStyle = 'rgba(16, 185, 129, 0.05)';
+        ctx.fillStyle = isDarkMode
+          ? 'rgba(16, 185, 129, 0.06)'
+          : 'rgba(16, 185, 129, 0.09)';
         ctx.fillRect(startX, 0, secW, height);
       } else if (isQueued) {
-        ctx.fillStyle = 'rgba(245, 158, 11, 0.07)';
+        ctx.fillStyle = isDarkMode
+          ? 'rgba(245, 158, 11, 0.08)'
+          : 'rgba(245, 158, 11, 0.11)';
         ctx.fillRect(startX, 0, secW, height);
       }
     }
 
     // Bar vertical grid lines
-    for (let b = 1; b <= totalBars; b++) {
+    const barStride = totalBars > 64 ? 4 : 1;
+    for (let b = 1; b <= totalBars; b += barStride) {
       const x = ((b - 1) / totalBars) * width;
-      ctx.strokeStyle = b % 4 === 1 ? 'rgba(148, 163, 184, 0.16)' : 'rgba(148, 163, 184, 0.06)';
+      const isPhraseBoundary = b % 4 === 1;
+      ctx.strokeStyle = isDarkMode
+        ? isPhraseBoundary
+          ? 'rgba(148, 163, 184, 0.16)'
+          : 'rgba(148, 163, 184, 0.06)'
+        : isPhraseBoundary
+        ? 'rgba(100, 116, 139, 0.22)'
+        : 'rgba(148, 163, 184, 0.12)';
       ctx.lineWidth = 1;
       ctx.beginPath();
       ctx.moveTo(x, 0);
@@ -113,7 +133,9 @@ const WaveformCanvas: React.FC<WaveformCanvasProps> = ({
 
     // Center zero-crossing hairline
     const midY = height / 2;
-    ctx.strokeStyle = 'rgba(148, 163, 184, 0.12)';
+    ctx.strokeStyle = isDarkMode
+      ? 'rgba(148, 163, 184, 0.12)'
+      : 'rgba(148, 163, 184, 0.25)';
     ctx.beginPath();
     ctx.moveTo(0, midY);
     ctx.lineTo(width, midY);
@@ -131,18 +153,20 @@ const WaveformCanvas: React.FC<WaveformCanvasProps> = ({
       const halfH = amp * (height * 0.42);
 
       if (muted) {
-        ctx.fillStyle = 'rgba(100, 116, 139, 0.32)';
+        ctx.fillStyle = isDarkMode
+          ? 'rgba(100, 116, 139, 0.30)'
+          : 'rgba(148, 163, 184, 0.45)';
       } else if (x <= playheadX) {
         ctx.fillStyle = color;
       } else {
-        ctx.fillStyle = `${color}88`;
+        ctx.fillStyle = isDarkMode ? `${color}88` : `${color}99`;
       }
 
       ctx.fillRect(x, midY - halfH, barWidth, halfH * 2);
     }
 
     // 3. Draw Playhead Cursor
-    ctx.strokeStyle = '#22D3EE';
+    ctx.strokeStyle = isDarkMode ? '#22D3EE' : '#0284C7';
     ctx.lineWidth = 2;
     ctx.beginPath();
     ctx.moveTo(playheadX, 0);
@@ -154,6 +178,7 @@ const WaveformCanvas: React.FC<WaveformCanvasProps> = ({
     peaks,
     color,
     muted,
+    isDarkMode,
     sections,
     totalBars,
     activeSectionId,
@@ -181,19 +206,26 @@ export const TimelineArranger: React.FC<TimelineArrangerProps> = ({
   project,
   transport,
   meters,
+  isDarkMode,
   onJumpSection,
   onSeekSeconds,
   onToggleTrackMute,
   onToggleTrackSolo,
   onChangeTrackGain,
-  onChangeTrackPan,
   onChangeTrackBus,
   onDeleteTrack,
+  onAddStemsToCurrentSong,
+  onAutoDetectSections,
   onOpenImportModal,
   onOpenSectionEditor,
 }) => {
+  const addStemInputRef = useRef<HTMLInputElement | null>(null);
+
   const secPerBar = (60 / project.bpm) * project.beatsPerBar;
-  const totalDurationSec = Math.max(1, project.totalBars * secPerBar);
+  const totalDurationSec = Math.max(
+    1,
+    project.durationSec || project.totalBars * secPerBar
+  );
   const progressRatio = Math.max(0, Math.min(1, transport.currentTimeSec / totalDurationSec));
 
   const anySolo = project.tracks.some((t) => t.soloed);
@@ -202,13 +234,16 @@ export const TimelineArranger: React.FC<TimelineArrangerProps> = ({
     onSeekSeconds(ratio * totalDurationSec);
   };
 
+  // Determine readable bar ruler step when songs have many bars (e.g. 80+ bars)
+  const barLabelStep = project.totalBars > 80 ? 4 : project.totalBars > 40 ? 2 : 1;
+
   return (
-    <div className="flex-1 flex flex-col bg-[#0B0F17] overflow-hidden select-none">
+    <div className="flex-1 flex flex-col bg-slate-50 dark:bg-[#0B0F17] overflow-hidden select-none">
       {/* Section Jump Matrix Strip (Quick Stage Bar with Keyboard Numbers 1..9) */}
-      <div className="bg-[#0F1623] border-b border-slate-800 px-6 py-2.5 flex items-center justify-between gap-4 overflow-x-auto">
+      <div className="bg-white dark:bg-[#0F1623] border-b border-slate-200 dark:border-slate-800 px-5 py-2 flex items-center justify-between gap-4 overflow-x-auto">
         <div className="flex items-center gap-2 shrink-0">
-          <span className="text-xs font-medium text-slate-400">
-            Saltos de Sección (Teclas 1–{Math.min(9, project.sections.length)}):
+          <span className="text-xs font-medium text-slate-500 dark:text-slate-400">
+            Secciones (1–{Math.min(9, project.sections.length)}):
           </span>
           <div className="flex items-center gap-1.5">
             {project.sections.map((sec, idx) => {
@@ -221,26 +256,30 @@ export const TimelineArranger: React.FC<TimelineArrangerProps> = ({
                   key={sec.id}
                   type="button"
                   onClick={() => onJumpSection(sec.id)}
-                  className={`min-h-[36px] px-3 py-1.5 rounded-lg text-xs font-medium flex items-center gap-2 border transition-all whitespace-nowrap shrink-0 cursor-pointer ${
+                  className={`min-h-[34px] px-2.5 py-1 rounded-lg text-xs font-medium flex items-center gap-1.5 border transition-all whitespace-nowrap shrink-0 cursor-pointer ${
                     isQueued
-                      ? 'bg-amber-500/20 border-amber-400 text-amber-200'
+                      ? 'bg-amber-500/20 border-amber-500 text-amber-800 dark:text-amber-200 font-semibold'
                       : isVampHere
-                      ? 'bg-amber-500/15 border-amber-500/70 text-amber-300'
+                      ? 'bg-amber-500/15 border-amber-500/70 text-amber-800 dark:text-amber-300 font-semibold'
                       : isActive
-                      ? 'bg-emerald-500/15 border-emerald-500/70 text-emerald-300'
-                      : 'bg-slate-900/90 border-slate-800 text-slate-300 hover:bg-slate-800 hover:text-white'
+                      ? 'bg-emerald-500/15 border-emerald-500/70 text-emerald-800 dark:text-emerald-300 font-semibold'
+                      : 'bg-slate-100 dark:bg-slate-900/90 border-slate-200 dark:border-slate-800 text-slate-700 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-800'
                   }`}
                 >
-                  <span className="font-mono tabular-nums text-[11px] text-slate-400">
+                  <span className="font-mono tabular-nums text-[10px] text-slate-400">
                     {idx + 1}.
                   </span>
-                  <span className="font-semibold">{sec.name}</span>
-                  <span className="font-mono tabular-nums text-[11px] text-slate-400">
+                  <span
+                    style={{ backgroundColor: sec.color }}
+                    className="w-2 h-2 rounded-xs shrink-0"
+                  />
+                  <span>{sec.name}</span>
+                  <span className="font-mono tabular-nums text-[10px] text-slate-400">
                     c.{sec.startBar}
                   </span>
-                  {isVampHere && <Repeat className="w-3.5 h-3.5 text-amber-400" />}
+                  {isVampHere && <Repeat className="w-3 h-3 text-amber-600 dark:text-amber-400" />}
                   {isQueued && (
-                    <span className="font-mono tabular-nums text-[11px] text-amber-300 font-bold">
+                    <span className="font-mono tabular-nums text-[10px] text-amber-700 dark:text-amber-300 font-bold">
                       ({transport.countdownBeats}p)
                     </span>
                   )}
@@ -251,9 +290,9 @@ export const TimelineArranger: React.FC<TimelineArrangerProps> = ({
         </div>
 
         {/* Live Guide Cue Readout Banner */}
-        <div className="flex items-center gap-3 shrink-0">
+        <div className="flex items-center gap-2 shrink-0">
           {transport.lastCueMessage && (
-            <div className="text-xs font-mono tabular-nums text-cyan-300 bg-slate-900 border border-slate-800 px-3 py-1.5 rounded-md">
+            <div className="text-xs font-mono tabular-nums text-sky-700 dark:text-cyan-300 bg-sky-50 dark:bg-slate-900 border border-sky-200 dark:border-slate-800 px-2.5 py-1 rounded-md font-semibold">
               {transport.lastCueMessage}
             </div>
           )}
@@ -263,26 +302,42 @@ export const TimelineArranger: React.FC<TimelineArrangerProps> = ({
       {/* Main Multitrack Timeline Viewport */}
       <div className="flex-1 flex flex-col overflow-y-auto">
         {/* Sticky Timeline Header Row (Track Column Header + Section Blocks + Bar Ruler) */}
-        <div className="sticky top-0 z-20 flex bg-[#111827] border-b border-slate-800">
+        <div className="sticky top-0 z-20 flex bg-white dark:bg-[#111827] border-b border-slate-200 dark:border-slate-800">
           {/* Left Header matching Track Controls width */}
-          <div className="w-72 shrink-0 px-4 py-2.5 border-r border-slate-800 flex items-center justify-between">
-            <span className="text-xs font-semibold text-slate-300">
+          <div className="w-68 shrink-0 px-3.5 py-2 border-r border-slate-200 dark:border-slate-800 flex items-center justify-between">
+            <span className="text-xs font-bold text-slate-700 dark:text-slate-300">
               Pistas ({project.tracks.length})
             </span>
-            <button
-              type="button"
-              onClick={onOpenImportModal}
-              className="text-xs font-medium text-cyan-400 hover:text-cyan-300 flex items-center gap-1 cursor-pointer whitespace-nowrap shrink-0"
-            >
-              <Plus className="w-3.5 h-3.5" />
-              <span>Añadir Stem</span>
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => addStemInputRef.current?.click()}
+                className="text-xs font-semibold text-sky-600 dark:text-cyan-400 hover:text-sky-500 flex items-center gap-1 cursor-pointer whitespace-nowrap shrink-0"
+                title="Añadir archivo de audio a esta canción actual"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                <span>Añadir Stem</span>
+              </button>
+              <input
+                ref={addStemInputRef}
+                type="file"
+                multiple
+                accept="audio/*,.wav,.mp3,.ogg,.flac,.m4a"
+                className="hidden"
+                onChange={(e) => {
+                  if (e.target.files && e.target.files.length > 0) {
+                    onAddStemsToCurrentSong(e.target.files);
+                    e.target.value = '';
+                  }
+                }}
+              />
+            </div>
           </div>
 
           {/* Right Timeline Ruler & Section Arrangement Blocks */}
-          <div className="flex-1 flex flex-col min-w-[640px]">
+          <div className="flex-1 flex flex-col min-w-[600px]">
             {/* Section Regions Lane */}
-            <div className="relative h-8 border-b border-slate-800/80 bg-[#0B0F17]">
+            <div className="relative h-7 border-b border-slate-200 dark:border-slate-800/80 bg-slate-100 dark:bg-[#0B0F17]">
               {project.sections.map((sec) => {
                 const leftPct = ((sec.startBar - 1) / project.totalBars) * 100;
                 const widthPct = (sec.lengthBars / project.totalBars) * 100;
@@ -299,12 +354,12 @@ export const TimelineArranger: React.FC<TimelineArrangerProps> = ({
                       left: `${leftPct}%`,
                       width: `${widthPct}%`,
                     }}
-                    className={`absolute top-0 bottom-0 px-2 border-r border-slate-800 flex items-center justify-between text-xs font-medium transition-colors overflow-hidden cursor-pointer ${
+                    className={`absolute top-0 bottom-0 px-2 border-r border-slate-300 dark:border-slate-800 flex items-center justify-between text-xs font-medium transition-colors overflow-hidden cursor-pointer ${
                       isQueued
-                        ? 'bg-amber-500/25 text-amber-200'
+                        ? 'bg-amber-500/25 text-amber-900 dark:text-amber-200 font-semibold'
                         : isActive
-                        ? 'bg-emerald-500/20 text-emerald-200'
-                        : 'bg-slate-900/80 text-slate-300 hover:bg-slate-800/90'
+                        ? 'bg-emerald-500/20 text-emerald-900 dark:text-emerald-200 font-semibold'
+                        : 'bg-white/90 dark:bg-slate-900/80 text-slate-700 dark:text-slate-300 hover:bg-slate-200/80 dark:hover:bg-slate-800/90'
                     }`}
                   >
                     <span className="truncate font-semibold">{sec.name}</span>
@@ -323,10 +378,13 @@ export const TimelineArranger: React.FC<TimelineArrangerProps> = ({
                 const ratio = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
                 handleSeekByRatio(ratio);
               }}
-              className="relative h-6 bg-[#111827] cursor-pointer"
+              className="relative h-6 bg-white dark:bg-[#111827] cursor-pointer overflow-hidden"
             >
               {Array.from({ length: project.totalBars }).map((_, idx) => {
                 const barNum = idx + 1;
+                if (barNum % barLabelStep !== 1 && barLabelStep > 1 && barNum !== 1) {
+                  return null;
+                }
                 const leftPct = (idx / project.totalBars) * 100;
                 const isCurrentBar = transport.currentBar === barNum;
                 return (
@@ -335,10 +393,10 @@ export const TimelineArranger: React.FC<TimelineArrangerProps> = ({
                     style={{ left: `${leftPct}%` }}
                     className={`absolute top-0 bottom-0 border-l pl-1 flex items-center text-[10px] font-mono tabular-nums ${
                       isCurrentBar
-                        ? 'border-cyan-400 text-cyan-300 font-bold'
+                        ? 'border-sky-600 dark:border-cyan-400 text-sky-700 dark:text-cyan-300 font-bold'
                         : barNum % 4 === 1
-                        ? 'border-slate-700 text-slate-300'
-                        : 'border-slate-800/70 text-slate-500'
+                        ? 'border-slate-300 dark:border-slate-700 text-slate-600 dark:text-slate-300'
+                        : 'border-slate-200 dark:border-slate-800/70 text-slate-400 dark:text-slate-500'
                     }`}
                   >
                     {barNum}
@@ -346,10 +404,10 @@ export const TimelineArranger: React.FC<TimelineArrangerProps> = ({
                 );
               })}
 
-              {/* Playhead Triangle Marker on Ruler */}
+              {/* Playhead Line on Ruler */}
               <div
                 style={{ left: `${progressRatio * 100}%` }}
-                className="absolute top-0 bottom-0 w-0.5 bg-cyan-400 pointer-events-none"
+                className="absolute top-0 bottom-0 w-0.5 bg-sky-600 dark:bg-cyan-400 pointer-events-none"
               />
             </div>
           </div>
@@ -358,23 +416,23 @@ export const TimelineArranger: React.FC<TimelineArrangerProps> = ({
         {/* Track Rows */}
         {project.tracks.length === 0 ? (
           <div className="flex-1 flex flex-col items-center justify-center p-12 text-center">
-            <Volume2 className="w-10 h-10 text-slate-600 mb-3" />
-            <h3 className="font-display text-base font-semibold text-slate-200 mb-1">
+            <Volume2 className="w-10 h-10 text-slate-400 mb-3" />
+            <h3 className="font-display text-base font-semibold text-slate-800 dark:text-slate-200 mb-1">
               No hay pistas en este proyecto
             </h3>
-            <p className="text-sm text-slate-400 max-w-md mb-4">
-              Importa tus archivos multipista (.wav, .mp3, .ogg) o carga uno de los proyectos de demostración.
+            <p className="text-sm text-slate-500 dark:text-slate-400 max-w-md mb-4">
+              Arrastra y suelta tus archivos de audio (.wav, .mp3, .ogg) en cualquier parte de la pantalla o usa el botón de importación.
             </p>
             <button
               type="button"
               onClick={onOpenImportModal}
-              className="px-4 py-2 bg-cyan-400 hover:bg-cyan-300 text-slate-950 font-semibold text-xs rounded-lg cursor-pointer"
+              className="px-4 py-2 bg-sky-600 dark:bg-cyan-400 hover:bg-sky-500 text-white dark:text-slate-950 font-semibold text-xs rounded-lg cursor-pointer"
             >
               Importar Archivos de Audio
             </button>
           </div>
         ) : (
-          <div className="divide-y divide-slate-800/90">
+          <div className="divide-y divide-slate-200 dark:divide-slate-800/90">
             {project.tracks.map((track: TrackChannel) => {
               const isAudible = anySolo ? track.soloed && !track.muted : !track.muted;
               const meter = meters[track.id] || { rms: 0, peak: 0, clipping: false };
@@ -382,10 +440,10 @@ export const TimelineArranger: React.FC<TimelineArrangerProps> = ({
               return (
                 <div
                   key={track.id}
-                  className="flex h-20 bg-[#0B0F17] hover:bg-[#0E1420] transition-colors"
+                  className="flex h-19 bg-slate-50/70 dark:bg-[#0B0F17] hover:bg-slate-100/60 dark:hover:bg-[#0E1420] transition-colors"
                 >
-                  {/* Left Track Control Strip (288px) */}
-                  <div className="w-72 shrink-0 px-4 py-2.5 border-r border-slate-800 bg-[#111827]/90 flex flex-col justify-between">
+                  {/* Left Track Control Strip (272px) */}
+                  <div className="w-68 shrink-0 px-3.5 py-2 border-r border-slate-200 dark:border-slate-800 bg-white dark:bg-[#111827]/95 flex flex-col justify-between">
                     {/* Top Row: Track Name, Mute, Solo, Delete */}
                     <div className="flex items-center justify-between gap-2">
                       <div className="flex items-center gap-2 min-w-0">
@@ -395,8 +453,11 @@ export const TimelineArranger: React.FC<TimelineArrangerProps> = ({
                         />
                         <span
                           className={`text-xs font-semibold truncate ${
-                            isAudible ? 'text-slate-100' : 'text-slate-500 line-through'
+                            isAudible
+                              ? 'text-slate-900 dark:text-slate-100'
+                              : 'text-slate-400 dark:text-slate-500 line-through'
                           }`}
+                          title={track.name}
                         >
                           {track.name}
                         </span>
@@ -407,10 +468,10 @@ export const TimelineArranger: React.FC<TimelineArrangerProps> = ({
                           type="button"
                           onClick={() => onToggleTrackMute(track.id)}
                           title="Silenciar Pista (Mute)"
-                          className={`w-6 h-6 rounded text-[11px] font-mono font-bold transition-colors cursor-pointer ${
+                          className={`w-6 h-5.5 rounded text-[10px] font-mono font-bold transition-colors cursor-pointer ${
                             track.muted
-                              ? 'bg-red-500 text-slate-950'
-                              : 'bg-slate-800 text-slate-400 hover:text-slate-100'
+                              ? 'bg-red-600 text-white'
+                              : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100 border border-slate-200 dark:border-transparent'
                           }`}
                         >
                           M
@@ -419,28 +480,26 @@ export const TimelineArranger: React.FC<TimelineArrangerProps> = ({
                           type="button"
                           onClick={() => onToggleTrackSolo(track.id)}
                           title="Aislar Pista (Solo)"
-                          className={`w-6 h-6 rounded text-[11px] font-mono font-bold transition-colors cursor-pointer ${
+                          className={`w-6 h-5.5 rounded text-[10px] font-mono font-bold transition-colors cursor-pointer ${
                             track.soloed
                               ? 'bg-amber-400 text-slate-950'
-                              : 'bg-slate-800 text-slate-400 hover:text-slate-100'
+                              : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100 border border-slate-200 dark:border-transparent'
                           }`}
                         >
                           S
                         </button>
-                        {track.isCustomAudio && (
-                          <button
-                            type="button"
-                            onClick={() => onDeleteTrack(track.id)}
-                            title="Eliminar pista"
-                            className="w-6 h-6 rounded bg-slate-900 hover:bg-red-500/20 text-slate-500 hover:text-red-400 flex items-center justify-center transition-colors cursor-pointer"
-                          >
-                            <Trash2 className="w-3 h-3" />
-                          </button>
-                        )}
+                        <button
+                          type="button"
+                          onClick={() => onDeleteTrack(track.id)}
+                          title="Quitar pista de esta canción"
+                          className="w-6 h-5.5 rounded bg-slate-100 dark:bg-slate-900 hover:bg-red-100 dark:hover:bg-red-500/20 text-slate-400 hover:text-red-600 dark:hover:text-red-400 flex items-center justify-center transition-colors cursor-pointer"
+                        >
+                          <Trash2 className="w-3 h-3" />
+                        </button>
                       </div>
                     </div>
 
-                    {/* Bottom Row: Gain Fader, dB Readout, Bus Selector & Live Meter Bar */}
+                    {/* Bottom Row: Gain Fader, dB Readout, Bus Selector */}
                     <div className="flex items-center gap-2">
                       <input
                         type="range"
@@ -450,9 +509,9 @@ export const TimelineArranger: React.FC<TimelineArrangerProps> = ({
                         step={0.01}
                         value={track.gain}
                         onChange={(e) => onChangeTrackGain(track.id, Number(e.target.value))}
-                        className="w-24 accent-cyan-400 h-1.5 bg-slate-800 rounded-lg cursor-pointer"
+                        className="w-22 accent-sky-600 dark:accent-cyan-400 h-1.5 bg-slate-200 dark:bg-slate-800 rounded-lg cursor-pointer"
                       />
-                      <span className="font-mono tabular-nums text-[11px] text-slate-400 w-14 text-right shrink-0">
+                      <span className="font-mono tabular-nums text-[10px] text-slate-500 dark:text-slate-400 w-13 text-right shrink-0">
                         {gainToDbText(track.gain)}
                       </span>
 
@@ -462,7 +521,7 @@ export const TimelineArranger: React.FC<TimelineArrangerProps> = ({
                         onChange={(e) =>
                           onChangeTrackBus(track.id, e.target.value as OutputBus)
                         }
-                        className="bg-slate-900 border border-slate-800 rounded px-1.5 py-0.5 text-[10px] font-medium text-slate-300 focus:outline-none focus:border-cyan-500 cursor-pointer ml-auto"
+                        className="bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded px-1.5 py-0.5 text-[10px] font-medium text-slate-700 dark:text-slate-300 focus:outline-none focus:border-sky-500 cursor-pointer ml-auto"
                       >
                         <option value="main">Main</option>
                         <option value="cue-click">Cue</option>
@@ -471,7 +530,7 @@ export const TimelineArranger: React.FC<TimelineArrangerProps> = ({
                     </div>
 
                     {/* Horizontal Mini VU Meter */}
-                    <div className="w-full h-1 bg-slate-900 rounded-full overflow-hidden">
+                    <div className="w-full h-1 bg-slate-200 dark:bg-slate-900 rounded-full overflow-hidden">
                       <div
                         style={{
                           width: `${Math.min(100, meter.rms * 100)}%`,
@@ -480,19 +539,20 @@ export const TimelineArranger: React.FC<TimelineArrangerProps> = ({
                           meter.clipping
                             ? 'bg-red-500'
                             : meter.rms > 0.75
-                            ? 'bg-amber-400'
-                            : 'bg-emerald-400'
+                            ? 'bg-amber-500'
+                            : 'bg-emerald-500'
                         }`}
                       />
                     </div>
                   </div>
 
                   {/* Right Waveform Canvas Area */}
-                  <div className="flex-1 min-w-[640px] relative">
+                  <div className="flex-1 min-w-[600px] relative">
                     <WaveformCanvas
                       peaks={track.peaks}
                       color={track.color}
                       muted={!isAudible}
+                      isDarkMode={isDarkMode}
                       sections={project.sections}
                       totalBars={project.totalBars}
                       activeSectionId={transport.activeSectionId}
@@ -510,28 +570,32 @@ export const TimelineArranger: React.FC<TimelineArrangerProps> = ({
       </div>
 
       {/* Bottom Compact Live Bus & Arrangement Summary Footer */}
-      <div className="bg-[#111827] border-t border-slate-800 px-6 py-2.5 flex flex-wrap items-center justify-between gap-4 text-xs text-slate-400">
-        <div className="flex items-center gap-4">
+      <div className="bg-white dark:bg-[#111827] border-t border-slate-200 dark:border-slate-800 px-5 py-2 flex flex-wrap items-center justify-between gap-4 text-xs text-slate-500 dark:text-slate-400">
+        <div className="flex items-center gap-3">
           <span className="flex items-center gap-1.5">
-            <CornerDownRight className="w-3.5 h-3.5 text-cyan-400" />
+            <CornerDownRight className="w-3.5 h-3.5 text-sky-600 dark:text-cyan-400" />
             <span>
-              Haz clic en cualquier sección durante la reproducción para agendar un salto cuantizado al compás.
+              Suelta una carpeta o grupo de stems en cualquier parte para crear una canción nueva con secciones automáticas.
             </span>
           </span>
         </div>
 
-        <div className="flex items-center gap-4">
-          <span>
-            Paneo y ruteo detallado disponible en la vista{' '}
-            <strong className="text-slate-200 font-medium">Mixer</strong>
-          </span>
+        <div className="flex items-center gap-3">
+          <button
+            type="button"
+            onClick={onAutoDetectSections}
+            className="text-sky-600 dark:text-cyan-400 hover:underline font-medium flex items-center gap-1 cursor-pointer"
+          >
+            <Wand2 className="w-3.5 h-3.5" />
+            <span>Recalcular Auto-Secciones</span>
+          </button>
           <span aria-hidden="true">·</span>
           <button
             type="button"
             onClick={onOpenSectionEditor}
-            className="text-cyan-400 hover:text-cyan-300 font-medium cursor-pointer"
+            className="text-slate-700 dark:text-slate-300 hover:underline font-medium cursor-pointer"
           >
-            Configurar Compases y Secciones ({project.sections.length})
+            Editar Secciones ({project.sections.length})
           </button>
         </div>
       </div>

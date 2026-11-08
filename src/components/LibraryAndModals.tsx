@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import {
   FolderOpen,
   Upload,
@@ -9,6 +9,8 @@ import {
   Music,
   CheckCircle2,
   Repeat,
+  FolderPlus,
+  Wand2,
 } from 'lucide-react';
 import { OutputBus, SongProject, SongSection, TrackChannel } from '../types/project';
 
@@ -52,22 +54,22 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
   };
 
   return (
-    <div className="flex-1 bg-[#0B0F17] p-6 overflow-y-auto">
+    <div className="flex-1 bg-slate-50 dark:bg-[#0B0F17] p-6 overflow-y-auto">
       <div className="max-w-6xl mx-auto space-y-8">
         {/* Header & JSON Project Import/Export */}
-        <div className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-800 pb-5">
+        <div className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-200 dark:border-slate-800 pb-5">
           <div>
-            <h1 className="font-display text-2xl font-bold text-slate-100">
-              Biblioteca de Proyectos y Setlist Local (IndexedDB)
+            <h1 className="font-display text-2xl font-bold text-slate-900 dark:text-slate-100">
+              Gestión de Repertorio y Copias de Seguridad
             </h1>
-            <p className="text-sm text-slate-400 mt-1">
-              Tus canciones, marcadores de sección y stems de audio se guardan localmente en este navegador.
+            <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">
+              Todas tus canciones también están accesibles desde el árbol de repertorio lateral izquierdo.
             </p>
           </div>
 
           <div className="flex items-center gap-3">
-            <label className="px-4 py-2 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 text-xs font-semibold text-slate-200 flex items-center gap-2 cursor-pointer transition-colors">
-              <Upload className="w-4 h-4 text-cyan-400" />
+            <label className="px-4 py-2 rounded-lg bg-white dark:bg-slate-900 hover:bg-slate-100 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-800 text-xs font-semibold text-slate-700 dark:text-slate-200 flex items-center gap-2 cursor-pointer transition-colors">
+              <Upload className="w-4 h-4 text-sky-600 dark:text-cyan-400" />
               <span>Importar .libretracks.json</span>
               <input
                 type="file"
@@ -84,10 +86,10 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
             <button
               type="button"
               onClick={onOpenStemImporter}
-              className="px-4 py-2 rounded-lg bg-cyan-400 hover:bg-cyan-300 text-slate-950 text-xs font-semibold flex items-center gap-2 cursor-pointer transition-colors"
+              className="px-4 py-2 rounded-lg bg-sky-600 dark:bg-cyan-400 hover:bg-sky-500 dark:hover:bg-cyan-300 text-white dark:text-slate-950 text-xs font-semibold flex items-center gap-2 cursor-pointer transition-colors"
             >
               <Music className="w-4 h-4" />
-              <span>Importar Stems al Proyecto Actual</span>
+              <span>Importar Nueva Canción o Stems</span>
             </button>
           </div>
         </div>
@@ -96,8 +98,8 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
           {/* Saved Songs List (8 cols) */}
           <div className="lg:col-span-8 space-y-3">
-            <h2 className="font-display text-base font-semibold text-slate-200">
-              Canciones Disponibles ({projects.length})
+            <h2 className="font-display text-base font-semibold text-slate-800 dark:text-slate-200">
+              Canciones en tu Biblioteca ({projects.length})
             </h2>
 
             <div className="space-y-3">
@@ -108,23 +110,23 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                     key={proj.id}
                     className={`p-4 rounded-xl border transition-colors flex flex-wrap items-center justify-between gap-4 ${
                       isCurrent
-                        ? 'bg-[#111827] border-cyan-500/60'
-                        : 'bg-[#111827]/70 border-slate-800 hover:border-slate-700'
+                        ? 'bg-white dark:bg-[#111827] border-sky-500 dark:border-cyan-500/60'
+                        : 'bg-white/80 dark:bg-[#111827]/70 border-slate-200 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-700'
                     }`}
                   >
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-2">
-                        <h3 className="font-display text-base font-bold text-slate-100 truncate">
+                        <h3 className="font-display text-base font-bold text-slate-900 dark:text-slate-100 truncate">
                           {proj.title}
                         </h3>
                         {isCurrent && (
-                          <span className="text-xs font-medium text-cyan-400 flex items-center gap-1">
+                          <span className="text-xs font-medium text-sky-600 dark:text-cyan-400 flex items-center gap-1">
                             <CheckCircle2 className="w-3.5 h-3.5" /> Activo
                           </span>
                         )}
                       </div>
 
-                      <div className="flex flex-wrap items-center gap-2 text-xs text-slate-400 mt-1">
+                      <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500 dark:text-slate-400 mt-1">
                         <span>{proj.artist}</span>
                         <span aria-hidden="true">·</span>
                         <span className="font-mono tabular-nums">{proj.bpm} BPM</span>
@@ -136,7 +138,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                         </span>
                         <span aria-hidden="true">·</span>
                         <span className="font-mono tabular-nums">
-                          {proj.sections.length} secciones
+                          {proj.sections.length} secciones ({proj.totalBars} comp.)
                         </span>
                       </div>
                     </div>
@@ -147,8 +149,8 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                         onClick={() => onSelectProject(proj.id)}
                         className={`px-3.5 py-2 rounded-lg text-xs font-semibold flex items-center gap-1.5 cursor-pointer transition-colors ${
                           isCurrent
-                            ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
-                            : 'bg-cyan-400 text-slate-950 hover:bg-cyan-300'
+                            ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border border-emerald-500/40'
+                            : 'bg-sky-600 dark:bg-cyan-400 text-white dark:text-slate-950 hover:bg-sky-500'
                         }`}
                       >
                         <FolderOpen className="w-3.5 h-3.5" />
@@ -159,7 +161,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                         type="button"
                         onClick={() => onExportJson(proj)}
                         title="Exportar configuración del proyecto en JSON"
-                        className="p-2 rounded-lg bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-800 cursor-pointer"
+                        className="p-2 rounded-lg bg-slate-100 dark:bg-slate-900 hover:bg-slate-200 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-800 cursor-pointer"
                       >
                         <Download className="w-4 h-4" />
                       </button>
@@ -169,7 +171,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                           type="button"
                           onClick={() => onDeleteProject(proj.id)}
                           title="Eliminar proyecto"
-                          className="p-2 rounded-lg bg-slate-900 hover:bg-red-500/20 text-slate-400 hover:text-red-400 border border-slate-800 cursor-pointer"
+                          className="p-2 rounded-lg bg-slate-100 dark:bg-slate-900 hover:bg-red-100 dark:hover:bg-red-500/20 text-slate-500 dark:text-slate-400 hover:text-red-600 dark:hover:text-red-400 border border-slate-200 dark:border-slate-800 cursor-pointer"
                         >
                           <Trash2 className="w-4 h-4" />
                         </button>
@@ -184,17 +186,17 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
           {/* Create New Song Project Card (4 cols) */}
           <form
             onSubmit={handleCreate}
-            className="lg:col-span-4 bg-[#111827] border border-slate-800 rounded-xl p-5 space-y-4"
+            className="lg:col-span-4 bg-white dark:bg-[#111827] border border-slate-200 dark:border-slate-800 rounded-xl p-5 space-y-4"
           >
-            <h2 className="font-display text-base font-bold text-slate-100">
+            <h2 className="font-display text-base font-bold text-slate-900 dark:text-slate-100">
               Crear Nueva Canción Multipista
             </h2>
-            <p className="text-xs text-slate-400">
-              Inicia una sesión con estructura de secciones base lista para importar tus stems.
+            <p className="text-xs text-slate-500 dark:text-slate-400">
+              Inicia una sesión con estructura base o suelta directamente tus archivos de audio para crearla automáticamente.
             </p>
 
             <div>
-              <label className="block text-xs font-medium text-slate-300 mb-1">
+              <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
                 Título de la Canción
               </label>
               <input
@@ -203,12 +205,12 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                 placeholder="Ej. Amanecer Eléctrico (Live)"
                 value={newTitle}
                 onChange={(e) => setNewTitle(e.target.value)}
-                className="w-full bg-[#0B0F17] border border-slate-800 rounded-lg px-3 py-2 text-sm text-slate-100 focus:outline-none focus:border-cyan-400"
+                className="w-full bg-slate-50 dark:bg-[#0B0F17] border border-slate-200 dark:border-slate-800 rounded-lg px-3 py-2 text-sm text-slate-900 dark:text-slate-100 focus:outline-none focus:border-sky-500"
               />
             </div>
 
             <div>
-              <label className="block text-xs font-medium text-slate-300 mb-1">
+              <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
                 Artista / Ensamble
               </label>
               <input
@@ -216,13 +218,13 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                 placeholder="Ej. Banda Principal"
                 value={newArtist}
                 onChange={(e) => setNewArtist(e.target.value)}
-                className="w-full bg-[#0B0F17] border border-slate-800 rounded-lg px-3 py-2 text-sm text-slate-100 focus:outline-none focus:border-cyan-400"
+                className="w-full bg-slate-50 dark:bg-[#0B0F17] border border-slate-200 dark:border-slate-800 rounded-lg px-3 py-2 text-sm text-slate-900 dark:text-slate-100 focus:outline-none focus:border-sky-500"
               />
             </div>
 
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <label className="block text-xs font-medium text-slate-300 mb-1">
+                <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
                   Tempo (BPM)
                 </label>
                 <input
@@ -231,26 +233,26 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                   max={220}
                   value={newBpm}
                   onChange={(e) => setNewBpm(Number(e.target.value))}
-                  className="w-full bg-[#0B0F17] border border-slate-800 rounded-lg px-3 py-2 text-sm font-mono tabular-nums text-slate-100 focus:outline-none focus:border-cyan-400"
+                  className="w-full bg-slate-50 dark:bg-[#0B0F17] border border-slate-200 dark:border-slate-800 rounded-lg px-3 py-2 text-sm font-mono tabular-nums text-slate-900 dark:text-slate-100 focus:outline-none focus:border-sky-500"
                 />
               </div>
 
               <div>
-                <label className="block text-xs font-medium text-slate-300 mb-1">
+                <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
                   Tonalidad
                 </label>
                 <input
                   type="text"
                   value={newKey}
                   onChange={(e) => setNewKey(e.target.value)}
-                  className="w-full bg-[#0B0F17] border border-slate-800 rounded-lg px-3 py-2 text-sm text-slate-100 focus:outline-none focus:border-cyan-400"
+                  className="w-full bg-slate-50 dark:bg-[#0B0F17] border border-slate-200 dark:border-slate-800 rounded-lg px-3 py-2 text-sm text-slate-900 dark:text-slate-100 focus:outline-none focus:border-sky-500"
                 />
               </div>
             </div>
 
             <button
               type="submit"
-              className="w-full py-2.5 bg-cyan-400 hover:bg-cyan-300 text-slate-950 font-semibold text-xs rounded-lg flex items-center justify-center gap-1.5 cursor-pointer transition-colors"
+              className="w-full py-2.5 bg-sky-600 dark:bg-cyan-400 hover:bg-sky-500 dark:hover:bg-cyan-300 text-white dark:text-slate-950 font-semibold text-xs rounded-lg flex items-center justify-center gap-1.5 cursor-pointer transition-colors"
             >
               <Plus className="w-4 h-4" />
               <span>Crear Proyecto y Abrir Consola</span>
@@ -263,95 +265,161 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
 };
 
 /* ============================================================================
- * STEM IMPORTER MODAL
+ * INSTANT STEM & FOLDER IMPORTER MODAL
  * ============================================================================ */
 
 interface StemImporterModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onImportFiles: (files: FileList, defaultBus: OutputBus) => Promise<void>;
-  isImporting: boolean;
+  onImportFiles: (
+    files: FileList,
+    defaultBus: OutputBus,
+    importMode: 'new-song' | 'current-song'
+  ) => void;
 }
 
 export const StemImporterModal: React.FC<StemImporterModalProps> = ({
   isOpen,
   onClose,
   onImportFiles,
-  isImporting,
 }) => {
   const [defaultBus, setDefaultBus] = useState<OutputBus>('main');
+  const [importMode, setImportMode] = useState<'new-song' | 'current-song'>('new-song');
+  const folderInputRef = useRef<HTMLInputElement | null>(null);
 
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-xs flex items-center justify-center p-4">
-      <div className="bg-[#111827] border border-slate-800 rounded-2xl max-w-lg w-full p-6 space-y-5">
+    <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
+      <div className="bg-white dark:bg-[#111827] border border-slate-200 dark:border-slate-800 rounded-2xl max-w-lg w-full p-6 space-y-5 shadow-xl">
         <div className="flex items-center justify-between">
-          <h2 className="font-display text-lg font-bold text-slate-100">
-            Importar Stems de Audio Multipista
+          <h2 className="font-display text-lg font-bold text-slate-900 dark:text-slate-100">
+            Importación Instantánea de Canción o Stems
           </h2>
           <button
             type="button"
             onClick={onClose}
-            className="text-slate-400 hover:text-white p-1 cursor-pointer"
+            className="text-slate-400 hover:text-slate-800 dark:hover:text-white p-1 cursor-pointer"
           >
             <X className="w-5 h-5" />
           </button>
         </div>
 
-        <p className="text-xs text-slate-400 leading-relaxed">
-          Selecciona uno o varios archivos de audio (<code className="text-slate-200">.wav</code>,{' '}
-          <code className="text-slate-200">.mp3</code>, <code className="text-slate-200">.ogg</code>,{' '}
-          <code className="text-slate-200">.flac</code>). Si el nombre del archivo incluye{' '}
-          <strong className="text-cyan-300">Click</strong> o{' '}
-          <strong className="text-cyan-300">Guide / Cue</strong>, se asignará automáticamente al bus de monitoreo.
+        {/* Mode Selection: Create New Song Automatically (Default) vs Add to Current */}
+        <div className="grid grid-cols-2 gap-2 bg-slate-100 dark:bg-[#0B0F17] p-1 rounded-xl border border-slate-200 dark:border-slate-800">
+          <button
+            type="button"
+            onClick={() => setImportMode('new-song')}
+            className={`py-2 px-3 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors cursor-pointer ${
+              importMode === 'new-song'
+                ? 'bg-white dark:bg-slate-800 text-sky-700 dark:text-cyan-300 shadow-2xs'
+                : 'text-slate-600 dark:text-slate-400'
+            }`}
+          >
+            <Wand2 className="w-3.5 h-3.5" />
+            <span>Crear Canción Nueva (Auto)</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setImportMode('current-song')}
+            className={`py-2 px-3 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors cursor-pointer ${
+              importMode === 'current-song'
+                ? 'bg-white dark:bg-slate-800 text-sky-700 dark:text-cyan-300 shadow-2xs'
+                : 'text-slate-600 dark:text-slate-400'
+            }`}
+          >
+            <Plus className="w-3.5 h-3.5" />
+            <span>Añadir a Canción Actual</span>
+          </button>
+        </div>
+
+        <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed">
+          Selecciona tus pistas (<code className="text-slate-800 dark:text-slate-200">.wav</code>,{' '}
+          <code className="text-slate-800 dark:text-slate-200">.mp3</code>,{' '}
+          <code className="text-slate-800 dark:text-slate-200">.ogg</code>,{' '}
+          <code className="text-slate-800 dark:text-slate-200">.flac</code>,{' '}
+          <code className="text-slate-800 dark:text-slate-200">.m4a</code>). La canción se abrirá{' '}
+          <strong className="text-slate-800 dark:text-slate-200">de inmediato</strong> calculando automáticamente los compases y las secciones musicales.
         </p>
 
         <div>
-          <label className="block text-xs font-medium text-slate-300 mb-1.5">
-            Bus de Salida Predeterminado para Pistas Musicales
+          <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1.5">
+            Bus de Salida Predeterminado
           </label>
           <select
             value={defaultBus}
             onChange={(e) => setDefaultBus(e.target.value as OutputBus)}
-            className="w-full bg-[#0B0F17] border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-100 focus:outline-none focus:border-cyan-400"
+            className="w-full bg-slate-50 dark:bg-[#0B0F17] border border-slate-200 dark:border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-900 dark:text-slate-100 focus:outline-none focus:border-sky-500"
           >
-            <option value="main">Main L/R (Mezcla Principal)</option>
+            <option value="main">Main L/R (Pistas Click/Guide van a Cue automáticamente)</option>
             <option value="cue-click">Click / Cue Bus (Solo Monitoreo)</option>
             <option value="both">Ambos Buses (Main + Cue)</option>
           </select>
         </div>
 
-        <label className="border-2 border-dashed border-slate-700 hover:border-cyan-400 rounded-xl p-8 flex flex-col items-center justify-center text-center cursor-pointer transition-colors bg-[#0B0F17]/60">
-          <Upload className="w-8 h-8 text-cyan-400 mb-2" />
-          <span className="text-sm font-semibold text-slate-200">
-            {isImporting
-              ? 'Decodificando formas de onda y guardando en IndexedDB...'
-              : 'Haz clic para elegir tus archivos de audio'}
-          </span>
-          <span className="text-xs text-slate-400 mt-1">
-            Soporta selección múltiple de stems sincronizados
-          </span>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          {/* Multi-file Picker */}
+          <label className="border-2 border-dashed border-slate-300 dark:border-slate-700 hover:border-sky-500 dark:hover:border-cyan-400 rounded-xl p-6 flex flex-col items-center justify-center text-center cursor-pointer transition-colors bg-slate-50 dark:bg-[#0B0F17]/60">
+            <Upload className="w-7 h-7 text-sky-600 dark:text-cyan-400 mb-2" />
+            <span className="text-xs font-bold text-slate-800 dark:text-slate-200">
+              Elegir Archivos de Audio
+            </span>
+            <span className="text-[11px] text-slate-500 dark:text-slate-400 mt-1">
+              Selección múltiple (.wav, .mp3...)
+            </span>
+            <input
+              type="file"
+              multiple
+              accept="audio/*,.wav,.mp3,.ogg,.flac,.m4a"
+              className="hidden"
+              onChange={(e) => {
+                if (e.target.files && e.target.files.length > 0) {
+                  const selected = e.target.files;
+                  onClose();
+                  onImportFiles(selected, defaultBus, importMode);
+                }
+              }}
+            />
+          </label>
+
+          {/* Directory / Folder Picker */}
+          <button
+            type="button"
+            onClick={() => folderInputRef.current?.click()}
+            className="border-2 border-dashed border-slate-300 dark:border-slate-700 hover:border-sky-500 dark:hover:border-cyan-400 rounded-xl p-6 flex flex-col items-center justify-center text-center cursor-pointer transition-colors bg-slate-50 dark:bg-[#0B0F17]/60"
+          >
+            <FolderPlus className="w-7 h-7 text-emerald-600 dark:text-emerald-400 mb-2" />
+            <span className="text-xs font-bold text-slate-800 dark:text-slate-200">
+              Importar Carpeta Completa
+            </span>
+            <span className="text-[11px] text-slate-500 dark:text-slate-400 mt-1">
+              Detecta título y todos los stems
+            </span>
+          </button>
+
           <input
+            ref={folderInputRef}
             type="file"
             multiple
-            accept="audio/*,.wav,.mp3,.ogg,.flac,.m4a"
-            disabled={isImporting}
+            // @ts-expect-error webkitdirectory is standard for folder selection
+            webkitdirectory="true"
+            directory="true"
             className="hidden"
-            onChange={async (e) => {
+            onChange={(e) => {
               if (e.target.files && e.target.files.length > 0) {
-                await onImportFiles(e.target.files, defaultBus);
+                const selected = e.target.files;
                 onClose();
+                onImportFiles(selected, defaultBus, importMode);
               }
             }}
           />
-        </label>
+        </div>
 
         <div className="flex justify-end">
           <button
             type="button"
             onClick={onClose}
-            className="px-4 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs font-medium text-slate-200 cursor-pointer"
+            className="px-4 py-2 rounded-lg bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-xs font-medium text-slate-700 dark:text-slate-200 cursor-pointer"
           >
             Cerrar
           </button>
@@ -373,13 +441,13 @@ interface SectionEditorModalProps {
 }
 
 const SECTION_COLORS = [
-  '#06B6D4',
-  '#3B82F6',
-  '#10B981',
-  '#F59E0B',
-  '#8B5CF6',
-  '#EC4899',
-  '#EF4444',
+  '#0891B2',
+  '#2563EB',
+  '#059669',
+  '#D97706',
+  '#7C3AED',
+  '#DB2777',
+  '#DC2626',
 ];
 
 export const SectionEditorModal: React.FC<SectionEditorModalProps> = ({
@@ -439,21 +507,21 @@ export const SectionEditorModal: React.FC<SectionEditorModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-xs flex items-center justify-center p-4">
-      <div className="bg-[#111827] border border-slate-800 rounded-2xl max-w-2xl w-full p-6 space-y-5 max-h-[88vh] flex flex-col">
+    <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
+      <div className="bg-white dark:bg-[#111827] border border-slate-200 dark:border-slate-800 rounded-2xl max-w-2xl w-full p-6 space-y-5 max-h-[88vh] flex flex-col shadow-xl">
         <div className="flex items-center justify-between">
           <div>
-            <h2 className="font-display text-lg font-bold text-slate-100">
+            <h2 className="font-display text-lg font-bold text-slate-900 dark:text-slate-100">
               Editor de Estructura de Secciones y Vamps
             </h2>
-            <p className="text-xs text-slate-400">
+            <p className="text-xs text-slate-500 dark:text-slate-400">
               Define los compases de cada sección y cuáles entran en bucle automático (Vamp).
             </p>
           </div>
           <button
             type="button"
             onClick={onClose}
-            className="text-slate-400 hover:text-white p-1 cursor-pointer"
+            className="text-slate-400 hover:text-slate-800 dark:hover:text-white p-1 cursor-pointer"
           >
             <X className="w-5 h-5" />
           </button>
@@ -463,7 +531,7 @@ export const SectionEditorModal: React.FC<SectionEditorModalProps> = ({
           {sections.map((sec) => (
             <div
               key={sec.id}
-              className="bg-[#0B0F17] border border-slate-800 rounded-xl p-3 flex flex-wrap items-center gap-3"
+              className="bg-slate-50 dark:bg-[#0B0F17] border border-slate-200 dark:border-slate-800 rounded-xl p-3 flex flex-wrap items-center gap-3"
             >
               <input
                 type="color"
@@ -477,7 +545,7 @@ export const SectionEditorModal: React.FC<SectionEditorModalProps> = ({
                 value={sec.code}
                 maxLength={3}
                 onChange={(e) => handleUpdateField(sec.id, 'code', e.target.value.toUpperCase())}
-                className="w-12 bg-slate-900 border border-slate-800 rounded px-2 py-1 text-xs font-mono font-bold text-slate-100 text-center"
+                className="w-12 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded px-2 py-1 text-xs font-mono font-bold text-slate-900 dark:text-slate-100 text-center"
                 title="Código corto (ej. IN, V1, CH)"
               />
 
@@ -485,21 +553,21 @@ export const SectionEditorModal: React.FC<SectionEditorModalProps> = ({
                 type="text"
                 value={sec.name}
                 onChange={(e) => handleUpdateField(sec.id, 'name', e.target.value)}
-                className="flex-1 min-w-[140px] bg-slate-900 border border-slate-800 rounded px-2.5 py-1 text-xs text-slate-100"
+                className="flex-1 min-w-[140px] bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded px-2.5 py-1 text-xs text-slate-900 dark:text-slate-100"
                 placeholder="Nombre de sección"
               />
 
-              <div className="flex items-center gap-1.5 text-xs text-slate-400">
+              <div className="flex items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400">
                 <span>Compases:</span>
                 <input
                   type="number"
                   min={1}
-                  max={64}
+                  max={128}
                   value={sec.lengthBars}
                   onChange={(e) =>
                     handleUpdateField(sec.id, 'lengthBars', Math.max(1, Number(e.target.value)))
                   }
-                  className="w-14 bg-slate-900 border border-slate-800 rounded px-2 py-1 text-xs font-mono tabular-nums text-slate-100 text-right"
+                  className="w-14 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded px-2 py-1 text-xs font-mono tabular-nums text-slate-900 dark:text-slate-100 text-right"
                 />
               </div>
 
@@ -508,8 +576,8 @@ export const SectionEditorModal: React.FC<SectionEditorModalProps> = ({
                 onClick={() => handleUpdateField(sec.id, 'vampByDefault', !sec.vampByDefault)}
                 className={`px-2.5 py-1 rounded text-xs font-medium flex items-center gap-1 border cursor-pointer ${
                   sec.vampByDefault
-                    ? 'bg-amber-500/20 border-amber-400 text-amber-300'
-                    : 'bg-slate-900 border-slate-800 text-slate-400'
+                    ? 'bg-amber-500/20 border-amber-500 text-amber-800 dark:text-amber-300'
+                    : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 text-slate-500 dark:text-slate-400'
                 }`}
               >
                 <Repeat className="w-3 h-3" />
@@ -520,7 +588,7 @@ export const SectionEditorModal: React.FC<SectionEditorModalProps> = ({
                 type="button"
                 onClick={() => handleRemoveSection(sec.id)}
                 disabled={sections.length <= 1}
-                className="p-1.5 rounded bg-slate-900 hover:bg-red-500/20 text-slate-500 hover:text-red-400 disabled:opacity-30 cursor-pointer"
+                className="p-1.5 rounded bg-white dark:bg-slate-900 hover:bg-red-100 dark:hover:bg-red-500/20 text-slate-500 hover:text-red-600 dark:hover:text-red-400 disabled:opacity-30 cursor-pointer"
               >
                 <Trash2 className="w-3.5 h-3.5" />
               </button>
@@ -528,11 +596,11 @@ export const SectionEditorModal: React.FC<SectionEditorModalProps> = ({
           ))}
         </div>
 
-        <div className="flex items-center justify-between pt-3 border-t border-slate-800">
+        <div className="flex items-center justify-between pt-3 border-t border-slate-200 dark:border-slate-800">
           <button
             type="button"
             onClick={handleAddSection}
-            className="px-3.5 py-2 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 text-xs font-semibold text-cyan-400 flex items-center gap-1.5 cursor-pointer"
+            className="px-3.5 py-2 rounded-lg bg-slate-100 dark:bg-slate-900 hover:bg-slate-200 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-800 text-xs font-semibold text-sky-600 dark:text-cyan-400 flex items-center gap-1.5 cursor-pointer"
           >
             <Plus className="w-4 h-4" />
             <span>Añadir Sección</span>
@@ -542,14 +610,14 @@ export const SectionEditorModal: React.FC<SectionEditorModalProps> = ({
             <button
               type="button"
               onClick={onClose}
-              className="px-4 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs font-medium text-slate-300 cursor-pointer"
+              className="px-4 py-2 rounded-lg bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-xs font-medium text-slate-700 dark:text-slate-300 cursor-pointer"
             >
               Cancelar
             </button>
             <button
               type="button"
               onClick={handleSave}
-              className="px-4 py-2 rounded-lg bg-cyan-400 hover:bg-cyan-300 text-slate-950 text-xs font-semibold cursor-pointer"
+              className="px-4 py-2 rounded-lg bg-sky-600 dark:bg-cyan-400 hover:bg-sky-500 dark:hover:bg-cyan-300 text-white dark:text-slate-950 text-xs font-semibold cursor-pointer"
             >
               Guardar Estructura
             </button>
@@ -566,27 +634,27 @@ export function inferTrackRoleAndColor(
 ): Pick<TrackChannel, 'role' | 'color' | 'bus'> {
   const lower = fileName.toLowerCase();
   if (lower.includes('click') || lower.includes('metro')) {
-    return { role: 'click', color: '#06B6D4', bus: 'cue-click' };
+    return { role: 'click', color: '#0891B2', bus: 'cue-click' };
   }
   if (lower.includes('guide') || lower.includes('cue') || lower.includes('guia')) {
-    return { role: 'guide', color: '#22D3EE', bus: 'cue-click' };
+    return { role: 'guide', color: '#0284C7', bus: 'cue-click' };
   }
   if (lower.includes('drum') || lower.includes('bateria') || lower.includes('kick')) {
-    return { role: 'drums', color: '#F59E0B', bus: 'main' };
+    return { role: 'drums', color: '#D97706', bus: 'main' };
   }
   if (lower.includes('bass') || lower.includes('bajo') || lower.includes('sub')) {
-    return { role: 'bass', color: '#EF4444', bus: 'main' };
+    return { role: 'bass', color: '#DC2626', bus: 'main' };
   }
   if (lower.includes('key') || lower.includes('piano') || lower.includes('rhodes')) {
-    return { role: 'keys', color: '#06B6D4', bus: 'main' };
+    return { role: 'keys', color: '#0891B2', bus: 'main' };
   }
   if (lower.includes('gtr') || lower.includes('guitar')) {
-    return { role: 'guitar', color: '#10B981', bus: 'main' };
+    return { role: 'guitar', color: '#059669', bus: 'main' };
   }
   if (lower.includes('vox') || lower.includes('choir') || lower.includes('coro')) {
-    return { role: 'vox', color: '#EC4899', bus: 'main' };
+    return { role: 'vox', color: '#DB2777', bus: 'main' };
   }
-  const palette = ['#3B82F6', '#8B5CF6', '#10B981', '#F59E0B', '#EC4899', '#06B6D4'];
+  const palette = ['#2563EB', '#7C3AED', '#059669', '#D97706', '#DB2777', '#0891B2'];
   return {
     role: 'custom',
     color: palette[index % palette.length],
