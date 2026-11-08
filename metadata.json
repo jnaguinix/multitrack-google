@@ -1,0 +1,6 @@
+{
+  "name": "LibreTracks Web",
+  "description": "Estación multipista de reproducción en vivo (DAW & Backing Tracks) con saltos de sección al compás, vamps dinámicos, mezclador con bus de Click/Guía y vista de Control Remoto para escenario.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

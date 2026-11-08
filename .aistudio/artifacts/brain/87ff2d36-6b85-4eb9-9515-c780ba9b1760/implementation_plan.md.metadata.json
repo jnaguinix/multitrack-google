@@ -1,0 +1,6 @@
+{
+  "summary":  "Plan actualizado para LibreTracks Web 2.0: importacion instantanea no bloqueante con creacion automatica de cancion al soltar carpetas o grupos de stems, auto-deteccion inteligente de compases, tempo y secciones a partir de la energia del audio, panel lateral acoplable con arbol de repertorio y buscador en vivo, y Modo Claro de estudio como tema principal con Modo Oscuro secundario.",
+  "updatedAt":  "2026-11-08T04:59:37.760861124Z",
+  "requestFeedback":  true,
+  "userFacing":  true
+}
