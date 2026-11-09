@@ -4,6 +4,7 @@
  */
 
 import { SongProject, TrackChannel } from '../types/project';
+import { pcmReaderClient } from '../audio/pcmReaderClient';
 
 const OPFS_ROOT_DIR = 'pcm';
 
@@ -100,8 +101,19 @@ export async function getProjectPcmDir(
  * Calculates the exact PCM size for a given track in bytes:
  * frames * 2 channels * 2 bytes/sample (Int16) = frames * 4 bytes
  */
-export function calculateTrackPcmBytes(frames: number): number {
-  return frames * 4;
+export function calculateTrackPcmBytes(frames: number, channels: number = 2): number {
+  return frames * (channels === 1 ? 2 : 4);
+}
+
+/**
+ * Returns true when L and R are (almost) identical, i.e. a "dual-mono" stereo file.
+ */
+function isDualMono(left: Float32Array, right: Float32Array, threshold = 1e-4): boolean {
+  if (left.length !== right.length) return false;
+  for (let i = 0; i < left.length; i++) {
+    if (Math.abs(left[i] - right[i]) > threshold) return false;
+  }
+  return true;
 }
 
 /**
@@ -121,8 +133,8 @@ export function estimateProjectPcmBytes(project: SongProject): number {
  *
  * Characteristics:
  * - Int16 little-endian
- * - Interleaved stereo (L0, R0, L1, R1...)
- * - If original buffer is mono, duplicated to L and R for a uniform 2-channel format
+ * - Mono (or dual-mono) sources are stored as 1 channel (2 bytes/frame)
+ * - Real stereo sources are stored interleaved (L0, R0, L1, R1...) (4 bytes/frame)
  * - Chunked streaming write (e.g. 65,536 frames / 256 KB) to prevent RAM spikes
  */
 export async function writeTrackPcmFromAudioBuffer(
@@ -132,7 +144,7 @@ export async function writeTrackPcmFromAudioBuffer(
   signal?: AbortSignal
 ): Promise<{
   sampleRate: number;
-  channels: 2;
+  channels: 1 | 2;
   frames: number;
   bytesWritten: number;
 }> {
@@ -142,7 +154,16 @@ export async function writeTrackPcmFromAudioBuffer(
   }
 
   const fileHandle = await projDir.getFileHandle(`${trackId}.pcm`, { create: true });
-  const writable = await fileHandle.createWritable();
+  let writable: FileSystemWritableFileStream;
+  try {
+    writable = await fileHandle.createWritable();
+  } catch (err) {
+    // The streaming worker keeps sync access handles open on this project's files and OPFS
+    // refuses writes while they exist: release them and retry once.
+    if ((err as { name?: string })?.name !== 'NoModificationAllowedError') throw err;
+    await pcmReaderClient.closeProject(projectId);
+    writable = await fileHandle.createWritable();
+  }
 
   const sampleRate = audioBuffer.sampleRate;
   const frames = audioBuffer.length;
@@ -150,6 +171,8 @@ export async function writeTrackPcmFromAudioBuffer(
 
   const leftChannel = audioBuffer.getChannelData(0);
   const rightChannel = numChannels > 1 ? audioBuffer.getChannelData(1) : leftChannel;
+  const outChannels: 1 | 2 = numChannels > 1 && !isDualMono(leftChannel, rightChannel) ? 2 : 1;
+  const bytesPerFrame = outChannels * 2;
 
   // Process and write in 1M frame chunks (4 MB per write) to minimize IPC overhead
   const CHUNK_FRAMES = 1048576;
@@ -164,7 +187,7 @@ export async function writeTrackPcmFromAudioBuffer(
 
       const end = Math.min(frames, offset + CHUNK_FRAMES);
       const sliceFrames = end - offset;
-      const buffer = new ArrayBuffer(sliceFrames * 4); // 2 channels * 2 bytes
+      const buffer = new ArrayBuffer(sliceFrames * bytesPerFrame);
       const int16View = new Int16Array(buffer);
 
       let outIdx = 0;
@@ -173,9 +196,10 @@ export async function writeTrackPcmFromAudioBuffer(
         const l = Math.max(-1.0, Math.min(1.0, leftChannel[i] || 0));
         int16View[outIdx++] = l < 0 ? Math.round(l * 0x8000) : Math.round(l * 0x7fff);
 
-        // Clamp & quantize Right channel (or duplicate if mono)
-        const r = Math.max(-1.0, Math.min(1.0, rightChannel[i] || 0));
-        int16View[outIdx++] = r < 0 ? Math.round(r * 0x8000) : Math.round(r * 0x7fff);
+        if (outChannels === 2) {
+          const r = Math.max(-1.0, Math.min(1.0, rightChannel[i] || 0));
+          int16View[outIdx++] = r < 0 ? Math.round(r * 0x8000) : Math.round(r * 0x7fff);
+        }
       }
 
       await writable.write(buffer);
@@ -195,7 +219,7 @@ export async function writeTrackPcmFromAudioBuffer(
 
   return {
     sampleRate,
-    channels: 2,
+    channels: outChannels,
     frames,
     bytesWritten,
   };
@@ -218,7 +242,7 @@ export async function isProjectPcmComplete(project: SongProject): Promise<boolea
     try {
       const fileHandle = await projDir.getFileHandle(`${track.id}.pcm`, { create: false });
       const file = await fileHandle.getFile();
-      const expectedBytes = calculateTrackPcmBytes(track.pcm.frames);
+      const expectedBytes = calculateTrackPcmBytes(track.pcm.frames, track.pcm.channels);
       if (file.size < expectedBytes) {
         return false;
       }
@@ -260,6 +284,8 @@ export async function deleteProjectPcm(projectId: string): Promise<void> {
   try {
     const pcmRoot = await getOpfsPcmRoot();
     if (!pcmRoot) return;
+    // Release the worker's sync access handles first, otherwise removeEntry fails silently
+    await pcmReaderClient.closeProject(projectId);
     await pcmRoot.removeEntry(projectId, { recursive: true });
     console.info(`[OPFS] Directorio PCM eliminado para proyecto ${projectId}`);
   } catch {

@@ -328,6 +328,7 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
             const isPlayingThis = isCurrent && transport.isPlaying;
             const cacheInfo = audioEngine.getSongRamCacheInfo(song);
             const isPcmReady = audioEngine.isProjectPcmReady(song);
+            const isStreamSong = audioEngine.getEffectiveEngineModeForProject(song) === 'stream';
             const pcmMB = audioEngine.getProjectPcmEstimatedMB(song);
             const durSec =
               song.durationSec ||
@@ -455,7 +456,11 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
                       {cacheInfo.totalCount > 0 && (
                         <span
                           title={
-                            cacheInfo.isReady
+                            isStreamSong
+                              ? cacheInfo.isReady
+                                ? `Lista: suena desde el disco (streaming). En RAM solo hay ${((cacheInfo.cachedBytes || 0) / (1024 * 1024)).toFixed(0)} MB (los primeros segundos de cada pista).`
+                                : 'Se reproduce desde el disco (streaming); se prepara al acercarse su turno.'
+                              : cacheInfo.isReady
                               ? `100% en caché RAM (${cacheInfo.cachedCount}/${cacheInfo.totalCount} pistas · ${((cacheInfo.cachedBytes || 0) / (1024 * 1024)).toFixed(0)} MB)`
                               : `${cacheInfo.cachedCount}/${cacheInfo.totalCount} pistas en RAM`
                           }
@@ -469,7 +474,11 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
                               : 'bg-slate-800/80 text-slate-400 border border-slate-700'
                           }`}
                         >
-                          {cacheInfo.isReady
+                          {isStreamSong
+                            ? cacheInfo.isReady
+                              ? 'Lista'
+                              : 'Disco'
+                            : cacheInfo.isReady
                             ? `RAM`
                             : cacheInfo.skippedByRamBudget
                             ? 'Lím'
@@ -479,7 +488,7 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
 
                       {isPcmReady ? (
                         <span
-                          title={`Audio PCM Int16 optimizado en OPFS (~${pcmMB} MB en disco)`}
+                          title={`Guardada en el disco del navegador (OPFS, ~${pcmMB} MB)`}
                           className="px-1.5 py-0.2 rounded text-[10px] font-mono font-bold bg-cyan-500/20 text-cyan-300 border border-cyan-500/40"
                         >
                           PCM

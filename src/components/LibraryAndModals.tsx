@@ -20,6 +20,7 @@ import {
 import { OutputBus, SongProject, SongSection, TrackChannel } from '../types/project';
 import { audioEngine } from '../audio/audioEngine';
 import { PcmOptimizationProgress } from '../storage/pcmOptimizer';
+import { isFsAccessSupported, pickAudioSources } from '../storage/sourceFiles';
 import { formatMmSs } from './TransportDeck';
 
 interface LibraryViewProps {
@@ -33,6 +34,7 @@ interface LibraryViewProps {
   onImportJsonFile: (file: File) => void;
   onOpenStemImporter: () => void;
   onOptimizeProject: (project: SongProject) => void;
+  onRelinkProject?: (project: SongProject) => void;
 }
 
 export const LibraryView: React.FC<LibraryViewProps> = ({
@@ -46,6 +48,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
   onImportJsonFile,
   onOpenStemImporter,
   onOptimizeProject,
+  onRelinkProject,
 }) => {
   const [newTitle, setNewTitle] = useState('');
   const [newArtist, setNewArtist] = useState('');
@@ -180,6 +183,19 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                     </div>
 
                     <div className="flex items-center gap-2 shrink-0">
+                      {/* Relink original files (moved/renamed folder or permission lost) */}
+                      {!isPcmReady && onRelinkProject && isFsAccessSupported() && (
+                        <button
+                          type="button"
+                          onClick={() => onRelinkProject(proj)}
+                          title="Elegir la carpeta donde están ahora los stems originales de esta canción"
+                          className="px-3 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-semibold flex items-center gap-1.5 cursor-pointer transition-colors"
+                        >
+                          <FolderPlus className="w-3.5 h-3.5 text-emerald-400" />
+                          <span>Reubicar archivos</span>
+                        </button>
+                      )}
+
                       {/* Optimize for Streaming Button if not yet optimized */}
                       {!isPcmReady && proj.tracks.length > 0 && (
                         <button
@@ -527,7 +543,17 @@ export const StemImporterModal: React.FC<StemImporterModalProps> = ({
 
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           {/* Multi-file Picker */}
-          <label className="border-2 border-dashed border-slate-700 hover:border-cyan-400 rounded-xl p-6 flex flex-col items-center justify-center text-center cursor-pointer transition-colors bg-[#0B0F17]/60">
+          <label
+            onClick={(e) => {
+              if (!isFsAccessSupported()) return;
+              e.preventDefault();
+              pickAudioSources('files', null, (files) => {
+                onClose();
+                onImportFiles(files, defaultBus, importMode);
+              });
+            }}
+            className="border-2 border-dashed border-slate-700 hover:border-cyan-400 rounded-xl p-6 flex flex-col items-center justify-center text-center cursor-pointer transition-colors bg-[#0B0F17]/60"
+          >
             <Upload className="w-7 h-7 text-cyan-400 mb-2" />
             <span className="text-xs font-bold text-slate-200">
               Elegir Archivos de Audio
@@ -554,7 +580,12 @@ export const StemImporterModal: React.FC<StemImporterModalProps> = ({
           {/* Directory / Folder Picker */}
           <button
             type="button"
-            onClick={() => folderInputRef.current?.click()}
+            onClick={() =>
+              pickAudioSources('folder', folderInputRef.current, (files) => {
+                onClose();
+                onImportFiles(files, defaultBus, importMode);
+              })
+            }
             className="border-2 border-dashed border-slate-700 hover:border-cyan-400 rounded-xl p-6 flex flex-col items-center justify-center text-center cursor-pointer transition-colors bg-[#0B0F17]/60"
           >
             <FolderPlus className="w-7 h-7 text-emerald-400 mb-2" />
@@ -998,6 +1029,8 @@ interface OptimizationProgressModalProps {
   songTitle: string;
   progress: PcmOptimizationProgress | null;
   onCancel: () => void;
+  /** Hides the dialog; the job keeps running in the background */
+  onHide?: () => void;
 }
 
 export const OptimizationProgressModal: React.FC<OptimizationProgressModalProps> = ({
@@ -1005,6 +1038,7 @@ export const OptimizationProgressModal: React.FC<OptimizationProgressModalProps>
   songTitle,
   progress,
   onCancel,
+  onHide,
 }) => {
   if (!isOpen) return null;
 
@@ -1030,7 +1064,8 @@ export const OptimizationProgressModal: React.FC<OptimizationProgressModalProps>
           {!isComplete && !isCancelled && (
             <button
               type="button"
-              onClick={onCancel}
+              onClick={onHide ?? onCancel}
+              title={onHide ? 'Ocultar (sigue en segundo plano)' : 'Cancelar'}
               className="text-slate-400 hover:text-slate-200 cursor-pointer"
             >
               <X className="w-4 h-4" />
@@ -1071,9 +1106,7 @@ export const OptimizationProgressModal: React.FC<OptimizationProgressModalProps>
         </div>
 
         <p className="text-[11px] text-slate-400 leading-relaxed">
-          Convierte cada pista a PCM Int16 entrelazado estéreo en disco OPFS (1 por vez para no
-          saturar la RAM). Tus audios originales en IndexedDB no se eliminan.
-        </p>
+          Guarda cada pista una sola vez en el disco del navegador (OPFS) para reproducirla en streaming sin ocupar RAM. Se procesan varias pistas en paralelo; puedes cerrar esta ventana y seguirá en segundo plano.</p>
 
         {/* Actions */}
         <div className="flex items-center justify-end gap-2 pt-1">

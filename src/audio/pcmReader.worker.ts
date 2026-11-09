@@ -28,6 +28,8 @@ export interface ReadChunkRequest {
   trackId: string;
   startFrame: number;
   frameCount: number;
+  /** 1 = mono Int16, 2 = interleaved stereo Int16 (default 2) */
+  channels?: 1 | 2;
 }
 
 export interface OpenProjectRequest {
@@ -277,11 +279,13 @@ async function executeChunkRead(req: ReadChunkRequest) {
   }
 
   const requestedFrames = req.frameCount;
-  const requestedBytes = requestedFrames * 4; // 2 channels * 2 bytes/sample
-  const byteOffset = req.startFrame * 4;
+  const channels = req.channels === 1 ? 1 : 2;
+  const bytesPerFrame = channels * 2; // Int16 per channel
+  const requestedBytes = requestedFrames * bytesPerFrame;
+  const byteOffset = req.startFrame * bytesPerFrame;
 
   let actualBytesRead = 0;
-  const targetInt16 = getSharedInt16Buffer(requestedFrames * 2);
+  const targetInt16 = getSharedInt16Buffer(requestedFrames * channels);
 
   try {
     if (entry.syncHandle) {
@@ -314,18 +318,26 @@ async function executeChunkRead(req: ReadChunkRequest) {
     return;
   }
 
-  const actualFramesRead = Math.floor(actualBytesRead / 4);
+  const actualFramesRead = Math.floor(actualBytesRead / bytesPerFrame);
 
   // Convert interleaved Int16 [L0, R0, L1, R1, ...] into planar Float32
+  // Mono files return an empty rightChannel (the consumer builds a 1-channel AudioBuffer)
   const leftChannel = new Float32Array(actualFramesRead);
-  const rightChannel = new Float32Array(actualFramesRead);
+  const rightChannel = new Float32Array(channels === 2 ? actualFramesRead : 0);
   const inv32768 = 1.0 / 32768.0;
 
-  for (let i = 0; i < actualFramesRead; i++) {
-    const l = targetInt16[i * 2];
-    const r = targetInt16[i * 2 + 1];
-    leftChannel[i] = l < 0 ? l * inv32768 : l / 32767.0;
-    rightChannel[i] = r < 0 ? r * inv32768 : r / 32767.0;
+  if (channels === 1) {
+    for (let i = 0; i < actualFramesRead; i++) {
+      const l = targetInt16[i];
+      leftChannel[i] = l < 0 ? l * inv32768 : l / 32767.0;
+    }
+  } else {
+    for (let i = 0; i < actualFramesRead; i++) {
+      const l = targetInt16[i * 2];
+      const r = targetInt16[i * 2 + 1];
+      leftChannel[i] = l < 0 ? l * inv32768 : l / 32767.0;
+      rightChannel[i] = r < 0 ? r * inv32768 : r / 32767.0;
+    }
   }
 
   const readMs = performance.now() - t0;
@@ -368,6 +380,7 @@ self.onmessage = function (e: MessageEvent<WorkerInMessage>) {
 
     case 'CLOSE_PROJECT':
       closeProjectHandles(msg.projectId);
+      self.postMessage({ type: 'PROJECT_CLOSED', projectId: msg.projectId });
       break;
 
     case 'CANCEL_GENERATION':

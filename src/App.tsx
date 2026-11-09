@@ -11,6 +11,9 @@ import {
   createEmptyProjectTemplate,
   deleteProjectFromDb,
   loadAllProjectsFromDb,
+  loadProjectStemsFromDb,
+  relinkProjectSources,
+  requestProjectSourceAccess,
   normalizeProjectSectionsToTime,
   saveProjectToDb,
   saveStemsBatchToDb,
@@ -38,7 +41,15 @@ import { StageRemoteView } from './components/StageRemoteView';
 import {
   cleanOrphanPcmDirectories,
   ensureStoragePersist,
+  isOpfsSupported,
+  isProjectPcmComplete,
 } from './storage/opfsStorage';
+import { pruneOpfsCache } from './storage/cachePolicy';
+import {
+  extractAudioFilesWithHandlesFromDataTransfer,
+  getRegisteredHandle,
+  isFsAccessSupported,
+} from './storage/sourceFiles';
 import {
   optimizeProjectForStreaming,
   PcmOptimizationProgress,
@@ -104,7 +115,9 @@ export default function App() {
   }, []);
 
   const [activeView, setActiveView] = useState<WorkspaceView>(getInitialViewFromHash);
-  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState<boolean>(false);
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState<boolean>(
+    () => typeof window !== 'undefined' && window.innerWidth < 1280
+  );
   const [isDockedMixerOpen, setIsDockedMixerOpen] = useState<boolean>(false);
   const [projects, setProjects] = useState<SongProject[]>([]);
   const [currentProject, setCurrentProject] = useState<SongProject | null>(null);
@@ -126,6 +139,15 @@ export default function App() {
   const [optimizationProgress, setOptimizationProgress] =
     useState<PcmOptimizationProgress | null>(null);
   const optimizationAbortControllerRef = useRef<AbortController | null>(null);
+  // Counts in-flight activateProject() calls so next-song preload waits for the active song to finish decoding
+  const activationCountRef = useRef(0);
+  const runAutoOptimizeRef = useRef<(projectId: string) => void>(() => {});
+  const applyPruneRef = useRef<() => void>(() => {});
+  const activateProjectRef = useRef<(p: SongProject) => void>(() => {});
+  const autoAbortRef = useRef<Map<string, AbortController>>(new Map());
+  const modalProjectIdRef = useRef<string | null>(null);
+  const queuedOptimizeIdsRef = useRef<Set<string>>(new Set());
+  const [isActivatingProject, setIsActivatingProject] = useState(false);
 
   // 5. Medidores en un ref (no en el estado de App) para no recargar el hilo principal
   const metersRef = useRef<MetersSnapshot>({
@@ -175,6 +197,8 @@ export default function App() {
   // y llama a preloadProject(nextSong) en segundo plano (manteniendo máx. 2 canciones en caché: actual + siguiente).
   useEffect(() => {
     if (setlistQueue.length === 0) return;
+    // Wait until loadProject() has finished: avoids competing for decodeAudioData / eviction
+    if (isActivatingProject) return;
 
     const activeId = currentProject?.id;
     const activeIdx = activeId
@@ -189,6 +213,8 @@ export default function App() {
         : null;
 
     if (!nextSong || nextSong.id === activeId) return;
+    // Don't decode the next song into RAM while it is still being converted into the OPFS cache
+    if (isOpfsSupported() && queuedOptimizeIdsRef.current.has(nextSong.id)) return;
 
     const timerId = window.setTimeout(() => {
       audioEngine.preloadProject(nextSong).catch((err) => {
@@ -199,64 +225,260 @@ export default function App() {
     return () => {
       window.clearTimeout(timerId);
     };
-  }, [setlistQueue, currentProject?.id, ramBudgetMB]);
+  }, [setlistQueue, currentProject?.id, ramBudgetMB, isActivatingProject]);
 
-  const handleStartOptimizeProject = useCallback(
-    async (projectToOptimize: SongProject) => {
+  // Surface engine notices (play blocked, still loading...) instead of failing silently
+  useEffect(() => {
+    audioEngine.setOnNotice(showToast);
+    return () => audioEngine.setOnNotice(null);
+  }, [showToast]);
+
+  // Keep the active song + the next setlist song as eviction-protected (priority) in RAM.
+  // With nothing active yet, the first two songs of the setlist are the priority pair.
+  useEffect(() => {
+    const activeIdx = currentProject
+      ? setlistQueue.findIndex((s) => s.id === currentProject.id)
+      : -1;
+    const ids: string[] = [];
+    if (currentProject) ids.push(currentProject.id);
+    const nextIdx = activeIdx >= 0 ? activeIdx + 1 : 0;
+    if (setlistQueue[nextIdx]) ids.push(setlistQueue[nextIdx].id);
+    if (!currentProject && setlistQueue[1]) ids.push(setlistQueue[1].id);
+    audioEngine.setPriorityProjectIds(ids);
+  }, [setlistQueue, currentProject?.id]);
+
+  // The manual "Optimizar" button and the automatic background cache are ONE job:
+  // pressing the button while the song is already being prepared just shows its progress.
+  const handleStartOptimizeProject = useCallback((projectToOptimize: SongProject) => {
+    modalProjectIdRef.current = projectToOptimize.id;
+    setOptimizingProject(projectToOptimize);
+    setOptimizationProgress({
+      currentTrackIndex: 0,
+      totalTracks: projectToOptimize.tracks.length,
+      trackName: queuedOptimizeIdsRef.current.has(projectToOptimize.id)
+        ? 'Ya se está preparando en segundo plano…'
+        : 'En cola…',
+      percent: 0,
+      phase: 'checking',
+    });
+    runAutoOptimizeRef.current(projectToOptimize.id);
+  }, []);
+
+  const handleCancelOptimization = useCallback(() => {
+    const id = modalProjectIdRef.current;
+    if (id) autoAbortRef.current.get(id)?.abort();
+    optimizationAbortControllerRef.current?.abort();
+  }, []);
+
+  // ---------------------------------------------------------------------------
+  // Reference-based library + automatic OPFS cache
+  // ---------------------------------------------------------------------------
+  const projectsRef = useRef<SongProject[]>([]);
+  useEffect(() => {
+    projectsRef.current = projects;
+  }, [projects]);
+
+  const autoOptimizeChainRef = useRef<Promise<void>>(Promise.resolve());
+  const accessPromisesRef = useRef<Map<string, Promise<void>>>(new Map());
+
+  const applyPrune = useCallback(async () => {
+    try {
+      const result = await pruneOpfsCache(
+        projectsRef.current,
+        currentProjectRef.current ? [currentProjectRef.current.id] : []
+      );
+      if (result.prunedIds.length === 0) return;
+      const pruned = new Set(result.prunedIds);
+      const strip = (p: SongProject): SongProject =>
+        pruned.has(p.id)
+          ? { ...p, tracks: p.tracks.map(({ pcm: _pcm, ...rest }) => rest) }
+          : p;
+      setProjects((prev) => prev.map(strip));
+      showToast(
+        `Caché liberada: ${result.prunedIds.length} canción(es) fuera del setlist (${(result.freedBytes / 1048576).toFixed(0)} MB). Siguen en la biblioteca.`
+      );
+    } catch (err) {
+      console.warn('[CachePolicy] Error limpiando caché OPFS:', err);
+    }
+  }, [showToast]);
+  useEffect(() => {
+    applyPruneRef.current = applyPrune;
+  }, [applyPrune]);
+
+  // Copies a song's audio into OPFS once (sequential queue, silent, in the background)
+  const runAutoOptimize = useCallback(
+    (projectId: string) => {
+      if (!isOpfsSupported()) return;
+      if (queuedOptimizeIdsRef.current.has(projectId)) return;
+      queuedOptimizeIdsRef.current.add(projectId);
       const controller = new AbortController();
-      optimizationAbortControllerRef.current = controller;
-      setOptimizingProject(projectToOptimize);
-      setOptimizationProgress({
-        currentTrackIndex: 0,
-        totalTracks: projectToOptimize.tracks.length,
-        trackName: 'Iniciando optimización OPFS...',
-        percent: 0,
-        phase: 'checking',
+      autoAbortRef.current.set(projectId, controller);
+
+      autoOptimizeChainRef.current = autoOptimizeChainRef.current.then(async () => {
+        try {
+          if (controller.signal.aborted) {
+            throw new DOMException('cancelado', 'AbortError');
+          }
+          const proj = projectsRef.current.find((p) => p.id === projectId);
+          if (!proj || proj.tracks.length === 0) return;
+          if (await isProjectPcmComplete(proj)) return;
+
+          const stems = await loadProjectStemsFromDb(projectId);
+          if (!stems.some((s) => !s.unavailable)) {
+            showToast(
+              `"${proj.title}": no se pudo leer el audio original. Usa "Reubicar archivos" en la Biblioteca.`
+            );
+            return;
+          }
+
+          const patchTrack = (
+            p: SongProject,
+            trackId: string,
+            info: { peaks: number[]; durationSec: number }
+          ): SongProject =>
+            p.id !== projectId
+              ? p
+              : {
+                  ...p,
+                  tracks: p.tracks.map((t) =>
+                    t.id === trackId ? { ...t, peaks: info.peaks, durationSec: info.durationSec } : t
+                  ),
+                };
+
+          const updated = await optimizeProjectForStreaming(
+            proj,
+            (progress) => {
+              setImportStatusText(
+                `Preparando "${proj.title}": ${progress.percent}% (pista ${progress.currentTrackIndex}/${progress.totalTracks})`
+              );
+              if (modalProjectIdRef.current === projectId) setOptimizationProgress(progress);
+            },
+            controller.signal,
+            {
+              onlyMissing: true,
+              onTrackDone: (trackId, info) => {
+                setProjects((prev) => prev.map((p) => patchTrack(p, trackId, info)));
+                setCurrentProject((prev) => (prev ? patchTrack(prev, trackId, info) : prev));
+              },
+            }
+          );
+
+          // Merge pcm + peaks + exact duration into the latest project state (keeps edits made meanwhile)
+          const latest = projectsRef.current.find((p) => p.id === projectId) || updated;
+          const byId = new Map(updated.tracks.map((t) => [t.id, t]));
+          const maxDur = Math.max(0, ...updated.tracks.map((t) => t.durationSec || 0));
+          const secPerBar = (60 / (latest.bpm || 120)) * (latest.beatsPerBar || 4);
+          const merged: SongProject = {
+            ...latest,
+            durationSec: maxDur > 1 ? maxDur : latest.durationSec,
+            totalBars: maxDur > 1 ? Math.max(4, Math.ceil(maxDur / secPerBar)) : latest.totalBars,
+            tracks: latest.tracks.map((t) => {
+              const u = byId.get(t.id);
+              return u?.pcm
+                ? { ...t, pcm: u.pcm, peaks: u.peaks, durationSec: u.durationSec }
+                : t;
+            }),
+          };
+          audioEngine.clearProjectFallback(projectId);
+          setProjects((prev) => prev.map((p) => (p.id === projectId ? merged : p)));
+          saveProjectToDb(merged).catch(() => {});
+
+          if (!(await isProjectPcmComplete(merged))) {
+            showToast(
+              `"${merged.title}": algunas pistas no se pudieron convertir. Revisa que los archivos originales existan (Biblioteca → Reubicar archivos).`
+            );
+          } else {
+            showToast(`"${merged.title}" lista para tocar`);
+          }
+
+          // The song is mounted in the console as an empty shell: load it from the new cache
+          if (currentProjectRef.current?.id === projectId) {
+            if (!audioEngine.hasPlayableAudio()) {
+              activateProjectRef.current(merged);
+            } else {
+              setCurrentProject(merged);
+            }
+          }
+          applyPruneRef.current();
+        } catch (err) {
+          if ((err as { name?: string })?.name === 'AbortError') {
+            showToast('Preparación cancelada. Puedes reanudarla con "Optimizar para streaming".');
+          } else {
+            console.error('[AutoOptimize] Falló la copia a OPFS:', err);
+            showToast(
+              `No se pudo preparar la canción: ${err instanceof Error ? err.message : String(err)}`
+            );
+          }
+        } finally {
+          queuedOptimizeIdsRef.current.delete(projectId);
+          autoAbortRef.current.delete(projectId);
+          setImportStatusText(null);
+          if (modalProjectIdRef.current === projectId) {
+            modalProjectIdRef.current = null;
+            setOptimizingProject(null);
+            setOptimizationProgress(null);
+          }
+        }
       });
+    },
+    [showToast]
+  );
+  useEffect(() => {
+    runAutoOptimizeRef.current = runAutoOptimize;
+  }, [runAutoOptimize]);
 
-      try {
-        const updated = await optimizeProjectForStreaming(
-          projectToOptimize,
-          (progress) => setOptimizationProgress(progress),
-          controller.signal
-        );
-
-        audioEngine.clearProjectFallback(updated.id);
-        setProjects((prev) =>
-          prev.map((p) => (p.id === updated.id ? updated : p))
-        );
-        if (currentProjectRef.current?.id === updated.id) {
-          setCurrentProject(updated);
+  // Makes the original files of a song readable (one permission prompt per folder); de-duplicated
+  const ensureSourceAccess = useCallback(
+    (projectId: string): Promise<void> => {
+      const existing = accessPromisesRef.current.get(projectId);
+      if (existing) return existing;
+      const task = (async () => {
+        try {
+          const res = await requestProjectSourceAccess(projectId);
+          if (res.total === 0) return;
+          if (res.missing.length > 0) {
+            showToast(
+              `No se encuentran ${res.missing.length} archivo(s) originales. Usa "Reubicar archivos" en la Biblioteca.`
+            );
+          } else if (res.denied.length > 0) {
+            showToast('Falta permiso para leer la carpeta original de esta canción.');
+          }
+        } catch (err) {
+          console.warn('[SourceAccess] Error solicitando acceso:', err);
+        } finally {
+          accessPromisesRef.current.delete(projectId);
         }
-        showToast(`Canción "${updated.title}" optimizada para streaming OPFS`);
-        setTimeout(() => {
-          setOptimizingProject(null);
-          setOptimizationProgress(null);
-        }, 600);
-      } catch (err: unknown) {
-        const isAbort =
-          (err instanceof DOMException && err.name === 'AbortError') ||
-          (err as { name?: string })?.name === 'AbortError';
-        if (isAbort) {
-          showToast('Optimización cancelada por el usuario');
-        } else {
-          console.error('Error optimizando proyecto para streaming:', err);
-          const errMsg =
-            err instanceof Error ? err.message : 'Error durante la optimización OPFS';
-          showToast(errMsg);
-        }
-        setOptimizingProject(null);
-        setOptimizationProgress(null);
-      } finally {
-        optimizationAbortControllerRef.current = null;
-      }
+      })();
+      accessPromisesRef.current.set(projectId, task);
+      return task;
     },
     [showToast]
   );
 
-  const handleCancelOptimization = useCallback(() => {
-    optimizationAbortControllerRef.current?.abort();
-  }, []);
+  const handleRelinkProject = useCallback(
+    async (proj: SongProject) => {
+      if (!isFsAccessSupported()) {
+        showToast('Tu navegador no permite reubicar carpetas (usa Chrome o Edge).');
+        return;
+      }
+      try {
+        const dir = await (window as any).showDirectoryPicker({ mode: 'read' });
+        const { relinked, total } = await relinkProjectSources(proj.id, dir);
+        if (relinked === 0) {
+          showToast(`No se encontró ningún stem de "${proj.title}" en esa carpeta.`);
+          return;
+        }
+        showToast(`Reubicados ${relinked}/${total} stems de "${proj.title}"`);
+        runAutoOptimize(proj.id);
+      } catch (err) {
+        if ((err as { name?: string })?.name !== 'AbortError') {
+          console.warn('[Relink] Error reubicando archivos:', err);
+          showToast('No se pudo reubicar la carpeta');
+        }
+      }
+    },
+    [runAutoOptimize, showToast]
+  );
 
   const handleChangeEngineMode = useCallback(
     (mode: AudioEngineMode) => {
@@ -288,6 +510,8 @@ export default function App() {
       explicitPlayIfAlreadyInRam = false
     ) => {
       const t0 = performance.now();
+      activationCountRef.current++;
+      setIsActivatingProject(true);
       try {
         const normalizedProj = normalizeProjectSectionsToTime(projectToLoad);
         const cachedBuffers =
@@ -307,6 +531,12 @@ export default function App() {
 
         // If user switched to another song while this one was still decoding, abort
         if (wasCancelled) return;
+
+        if (normalizedProj.tracks.length > 0 && !audioEngine.hasPlayableAudio()) {
+          showToast(
+            `No se pudo cargar el audio de "${normalizedProj.title}". Revisa que los archivos originales existan y estén permitidos (Biblioteca → Reubicar archivos).`
+          );
+        }
 
         const elapsedMs = performance.now() - t0;
         console.info(
@@ -340,10 +570,19 @@ export default function App() {
         }
       } catch (err) {
         console.error('Error loading project into engine:', err);
+      } finally {
+        activationCountRef.current = Math.max(0, activationCountRef.current - 1);
+        if (activationCountRef.current === 0) setIsActivatingProject(false);
       }
     },
-    []
+    [showToast]
   );
+
+  useEffect(() => {
+    activateProjectRef.current = (p) => {
+      activateProject(p);
+    };
+  }, [activateProject]);
 
   // Initial load from IndexedDB: ONLY loads the Repertoire list, NEVER auto-loads a song into the DAW
   useEffect(() => {
@@ -356,6 +595,8 @@ export default function App() {
         // Clean up orphan OPFS directories from projects that were previously deleted
         const validIds = new Set(saved.map((p) => p.id));
         cleanOrphanPcmDirectories(validIds).catch(() => {});
+        projectsRef.current = saved;
+        applyPruneRef.current();
       } catch {
         // Keep empty repertoire if IndexedDB unavailable
       }
@@ -656,14 +897,29 @@ export default function App() {
         };
 
         initialTracks.push(newTrack);
-        stemsToSaveBatch.push({
-          key: `${targetProjectId}:${trackId}`,
-          projectId: targetProjectId,
-          trackId,
-          blob: file,
-          mimeType: file.type || 'audio/wav',
-          fileName: file.name,
-        });
+        // Reference-based library: keep a handle to the original file when the browser gives
+        // one (Chrome/Edge); otherwise fall back to copying the Blob into IndexedDB.
+        const sourceHandle = getRegisteredHandle(file);
+        stemsToSaveBatch.push(
+          sourceHandle
+            ? {
+                key: `${targetProjectId}:${trackId}`,
+                projectId: targetProjectId,
+                trackId,
+                fileHandle: sourceHandle.file,
+                dirHandle: sourceHandle.dir,
+                mimeType: file.type || 'audio/wav',
+                fileName: file.name,
+              }
+            : {
+                key: `${targetProjectId}:${trackId}`,
+                projectId: targetProjectId,
+                trackId,
+                blob: file,
+                mimeType: file.type || 'audio/wav',
+                fileName: file.name,
+              }
+        );
       }
 
       const initialDurationSec =
@@ -733,7 +989,7 @@ export default function App() {
       }
 
       // Save native File Blob pointers to IndexedDB in background (zero re-encoding)
-      saveStemsBatchToDb(stemsToSaveBatch).catch((err) =>
+      const stemsSavePromise = saveStemsBatchToDb(stemsToSaveBatch).catch((err) =>
         console.warn('Background IndexedDB batch stem save warning:', err)
       );
 
@@ -741,6 +997,18 @@ export default function App() {
       console.info(
         `[AudioEngine][InstantImport] "${songTitle}" (${initialTracks.length} pistas) montada en consola en ${mountMs.toFixed(1)} ms`
       );
+
+      // Single-pass pipeline: decode each stem ONCE, straight into the OPFS cache (peaks and
+      // duration come from the same pass). No RAM decode of the whole song at import time.
+      if (effectiveMode === 'new-song' && isOpfsSupported()) {
+        showToast(
+          `"${songTitle}" importada (${initialTracks.length} pistas). Preparando el audio en segundo plano…`
+        );
+        await stemsSavePromise;
+        runAutoOptimizeRef.current(targetProjectId);
+        return;
+      }
+
       showToast(
         effectiveMode === 'new-song'
           ? `Canción "${songTitle}" montada en ${Math.max(1, Math.round(mountMs))} ms (${initialTracks.length} pistas)`
@@ -850,6 +1118,10 @@ export default function App() {
       if (currentProjectRef.current?.id === targetProjectId) {
         saveProjectToDb(currentProjectRef.current).catch(() => {});
       }
+
+      // One-time background copy into the OPFS cache (the song is in the setlist from import)
+      await stemsSavePromise;
+      runAutoOptimizeRef.current(targetProjectId);
     },
     [projects.length, showToast]
   );
@@ -1008,6 +1280,14 @@ export default function App() {
   const handleLoadProjectImmediately = async (projectId: string, autoPlay = false) => {
     const found = projects.find((p) => p.id === projectId);
     if (!found) return;
+    if (isOpfsSupported() && queuedOptimizeIdsRef.current.has(projectId)) {
+      showToast(`"${found.title}" se está preparando en segundo plano; espera a que termine.`);
+      return;
+    }
+    // Songs already cached in OPFS don't need the original files; others do
+    if (!audioEngine.isProjectPcmReady(found)) {
+      await ensureSourceAccess(projectId);
+    }
     await activateProject(found, undefined, autoPlay);
     if (activeView === 'library') {
       handleSelectView('setlist');
@@ -1017,6 +1297,14 @@ export default function App() {
 
   // Setlist Management Handlers
   const handleAddToSetlist = (projectId: string) => {
+    // Adding to the setlist = copy the audio into the OPFS cache once (in the background)
+    const alreadyCached = (() => {
+      const p = projectsRef.current.find((x) => x.id === projectId);
+      return !p || (p.tracks.length > 0 && p.tracks.every((t) => t.pcm && t.pcm.frames > 0));
+    })();
+    if (!alreadyCached) {
+      ensureSourceAccess(projectId).then(() => runAutoOptimize(projectId));
+    }
     setProjects((prev) => {
       const maxOrder = prev.reduce(
         (max, item) =>
@@ -1173,7 +1461,11 @@ export default function App() {
       return;
     }
 
-    const audioFiles = await extractAudioFilesFromDataTransfer(e.dataTransfer);
+    // Start both extractors synchronously (DataTransfer is only valid during the event)
+    const withHandles = extractAudioFilesWithHandlesFromDataTransfer(e.dataTransfer);
+    const classic = extractAudioFilesFromDataTransfer(e.dataTransfer);
+    const handleFiles = await withHandles;
+    const audioFiles = handleFiles.length > 0 ? handleFiles : await classic;
     if (audioFiles.length > 0) {
       handleInstantImportFiles(audioFiles, 'main', 'new-song');
     } else {
@@ -1182,7 +1474,7 @@ export default function App() {
   };
 
   return (
-    <div className="min-h-screen h-screen flex flex-col bg-[#0B0F17] text-slate-100 overflow-hidden relative">
+    <div className="min-h-screen h-dvh flex flex-col bg-[#0B0F17] text-slate-100 overflow-hidden relative">
       {/* Top Navigation Bar */}
       <TopBar
         activeView={activeView}
@@ -1557,6 +1849,7 @@ export default function App() {
               onImportJsonFile={handleImportJsonFile}
               onOpenStemImporter={() => setIsImportModalOpen(true)}
               onOptimizeProject={handleStartOptimizeProject}
+              onRelinkProject={handleRelinkProject}
             />
           )}
         </div>
@@ -1606,13 +1899,18 @@ export default function App() {
         songTitle={optimizingProject?.title || ''}
         progress={optimizationProgress}
         onCancel={handleCancelOptimization}
+        onHide={() => {
+          modalProjectIdRef.current = null;
+          setOptimizingProject(null);
+          setOptimizationProgress(null);
+        }}
       />
 
       {/* Non-intrusive Action Feedback Toast */}
       {toastMessage && (
         <div
           role="status"
-          className="fixed bottom-5 right-5 z-50 bg-slate-800 border border-cyan-500/50 text-white px-4 py-2.5 rounded-xl text-xs font-medium shadow-lg"
+          className="fixed bottom-3 right-3 z-50 bg-slate-800 border border-cyan-500/50 text-white px-4 py-2.5 rounded-xl text-xs font-medium shadow-lg"
         >
           {toastMessage}
         </div>

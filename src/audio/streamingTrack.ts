@@ -79,11 +79,14 @@ export class StreamingTrack {
   // Pitch detune in semitones
   private pitchSemitones = 0;
 
+  private readonly pcmChannels: 1 | 2 = 2;
+
   constructor(params: {
     projectId: string;
     trackId: string;
     sampleRate: number;
     totalFrames: number;
+    channels?: number;
     destinationNode: GainNode;
     ctx: AudioContext;
     pitchSemitones?: number;
@@ -92,6 +95,7 @@ export class StreamingTrack {
     this.trackId = params.trackId;
     this.sampleRate = params.sampleRate || 48000;
     this.totalFrames = params.totalFrames;
+    this.pcmChannels = params.channels === 1 ? 1 : 2;
     this.totalDurationSec = this.totalFrames / this.sampleRate;
     this.ctx = params.ctx;
     this.destinationNode = params.destinationNode;
@@ -159,14 +163,17 @@ export class StreamingTrack {
         trackId: this.trackId,
         startFrame,
         frameCount,
+        channels: this.pcmChannels,
         priority,
       });
 
       if (res.frameCount > 0) {
         // Convert planar Float32 to Web Audio AudioBuffer
-        const buffer = this.ctx.createBuffer(2, res.frameCount, this.sampleRate);
+        const buffer = this.ctx.createBuffer(this.pcmChannels, res.frameCount, this.sampleRate);
         buffer.copyToChannel(res.leftChannel as unknown as Float32Array<ArrayBuffer>, 0);
-        buffer.copyToChannel(res.rightChannel as unknown as Float32Array<ArrayBuffer>, 1);
+        if (this.pcmChannels === 2) {
+          buffer.copyToChannel(res.rightChannel as unknown as Float32Array<ArrayBuffer>, 1);
+        }
         this.chunkBuffers.set(chunkIndex, buffer);
       }
     } catch (err) {

@@ -94,11 +94,11 @@ export const TransportDeck: React.FC<TransportDeckProps> = ({
   return (
     <section
       aria-label="Controles de Transporte y Setlist"
-      className="h-12 bg-[#111827] border-b border-slate-800 px-3.5 py-1.5 flex items-center justify-between gap-2.5 overflow-x-auto whitespace-nowrap select-none shrink-0"
+      className="min-h-12 bg-[#111827] border-b border-slate-800 px-2.5 xl:px-3.5 py-1.5 flex flex-wrap items-center justify-between gap-x-2 xl:gap-x-2.5 gap-y-1.5 select-none shrink-0"
     >
       {/* Left: Project identity + Setlist Prev/Next + Transport */}
       <div className="flex items-center gap-2.5 shrink-0">
-        <div className="max-w-[190px] leading-tight">
+        <div className="max-w-[130px] xl:max-w-[190px] leading-tight">
           <div
             className="font-display text-[13px] font-bold text-slate-100 truncate"
             title={`${project.title} (${project.keySignature} · ${project.bpm} BPM)`}
@@ -271,7 +271,7 @@ export const TransportDeck: React.FC<TransportDeckProps> = ({
         <div className="h-4 w-px bg-slate-800" />
 
         {/* Active & Queued Section Readout or Live Import / RAM Mounting Progress */}
-        <div className="flex items-center gap-1.5 max-w-[180px]">
+        <div className="flex items-center gap-1.5 max-w-[130px] xl:max-w-[180px]">
           {transport.mountingProgressText || importStatusText ? (
             <span className="text-xs font-semibold text-amber-400 truncate">
               {transport.mountingProgressText || importStatusText}
@@ -313,7 +313,7 @@ export const TransportDeck: React.FC<TransportDeckProps> = ({
           className="h-8 px-2.5 rounded-lg bg-cyan-500/15 hover:bg-cyan-500/25 text-cyan-300 border border-cyan-500/40 text-xs font-bold flex items-center gap-1 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
         >
           <Flag className="w-3.5 h-3.5 text-cyan-400" />
-          <span>+Marca</span>
+          <span className="hidden xl:inline">+Marca</span><span className="xl:hidden">+</span>
         </button>
 
         <button
@@ -322,12 +322,12 @@ export const TransportDeck: React.FC<TransportDeckProps> = ({
           title="Abrir editor de secciones por minutos y segundos (mm:ss)"
           className="h-8 px-2.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-slate-200 border border-slate-800 text-xs font-semibold flex items-center gap-1 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
         >
-          <span>Sec ({project.sections.length})</span>
+          <span>Sec<span className="hidden xl:inline"> ({project.sections.length})</span></span>
         </button>
 
         {/* Quantize Mode Selector */}
         <div className="flex items-center bg-[#0B0F17] p-0.5 rounded-lg border border-slate-800 h-8">
-          <span className="text-[11px] text-slate-300 px-1.5 whitespace-nowrap shrink-0">
+          <span className="hidden xl:inline text-[11px] text-slate-300 px-1.5 whitespace-nowrap shrink-0">
             Salto:
           </span>
           {quantizeOptions.map((opt) => (
@@ -392,7 +392,7 @@ export const TransportDeck: React.FC<TransportDeckProps> = ({
             }`}
           >
             <Volume2 className="w-3.5 h-3.5" />
-            <span>Click</span>
+            <span className="hidden xl:inline">Click</span>
           </button>
 
           <button
@@ -406,7 +406,7 @@ export const TransportDeck: React.FC<TransportDeckProps> = ({
             }`}
           >
             <Mic className="w-3.5 h-3.5" />
-            <span>Cues</span>
+            <span className="hidden xl:inline">Cues</span>
           </button>
 
           <button

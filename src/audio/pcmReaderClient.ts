@@ -59,10 +59,14 @@ export class PcmReaderClient {
     }
   >();
 
+  // Several callers may wait for the same project at once (e.g. "stage next" + "activate"),
+  // so keep a LIST of resolvers per project instead of a single one.
   private openProjectResolvers = new Map<
     string,
-    (res: { openedTracks: string[]; supportsSyncHandles: boolean }) => void
+    Array<(res: { openedTracks: string[]; supportsSyncHandles: boolean }) => void>
   >();
+
+  private closeProjectResolvers = new Map<string, Array<() => void>>();
 
   // Performance telemetry
   private metrics: PcmReaderMetrics = {
@@ -146,13 +150,21 @@ export class PcmReaderClient {
       const opened = data as ProjectOpenedResponse;
       this.syncHandlesSupported = opened.supportsSyncHandles;
       this.metrics.syncHandlesSupported = opened.supportsSyncHandles;
-      const resolver = this.openProjectResolvers.get(opened.projectId);
-      if (resolver) {
+      const resolvers = this.openProjectResolvers.get(opened.projectId);
+      if (resolvers) {
         this.openProjectResolvers.delete(opened.projectId);
-        resolver({
-          openedTracks: opened.openedTracks,
-          supportsSyncHandles: opened.supportsSyncHandles,
-        });
+        for (const resolve of resolvers) {
+          resolve({
+            openedTracks: opened.openedTracks,
+            supportsSyncHandles: opened.supportsSyncHandles,
+          });
+        }
+      }
+    } else if (data.type === 'PROJECT_CLOSED') {
+      const resolvers = this.closeProjectResolvers.get(data.projectId);
+      if (resolvers) {
+        this.closeProjectResolvers.delete(data.projectId);
+        resolvers.forEach((r) => r());
       }
     }
   }
@@ -167,7 +179,9 @@ export class PcmReaderClient {
   ): Promise<{ openedTracks: string[]; supportsSyncHandles: boolean }> {
     const worker = this.ensureWorker();
     return new Promise((resolve) => {
-      this.openProjectResolvers.set(projectId, resolve);
+      const list = this.openProjectResolvers.get(projectId) || [];
+      list.push(resolve);
+      this.openProjectResolvers.set(projectId, list);
       const msg: WorkerInMessage = {
         type: 'OPEN_PROJECT',
         projectId,
@@ -176,26 +190,37 @@ export class PcmReaderClient {
       };
       worker.postMessage(msg);
 
-      // Safety timeout: resolve after 2.5s even if worker took long
+      // Safety timeout (per call): never leave a caller waiting forever
       setTimeout(() => {
-        if (this.openProjectResolvers.has(projectId)) {
-          this.openProjectResolvers.delete(projectId);
+        const current = this.openProjectResolvers.get(projectId);
+        if (current && current.includes(resolve)) {
+          const rest = current.filter((r) => r !== resolve);
+          if (rest.length > 0) this.openProjectResolvers.set(projectId, rest);
+          else this.openProjectResolvers.delete(projectId);
           resolve({ openedTracks: trackIds, supportsSyncHandles: this.syncHandlesSupported });
         }
-      }, 2500);
+      }, 8000);
     });
   }
 
   /**
    * Closes handles for a project when it is no longer active or queued
    */
-  public closeProject(projectId: string): void {
-    if (!this.worker) return;
-    const msg: WorkerInMessage = {
-      type: 'CLOSE_PROJECT',
-      projectId,
-    };
-    this.worker.postMessage(msg);
+  public closeProject(projectId: string): Promise<void> {
+    const worker = this.worker;
+    if (!worker) return Promise.resolve();
+    return new Promise<void>((resolve) => {
+      const list = this.closeProjectResolvers.get(projectId) || [];
+      list.push(resolve);
+      this.closeProjectResolvers.set(projectId, list);
+      const msg: WorkerInMessage = {
+        type: 'CLOSE_PROJECT',
+        projectId,
+      };
+      worker.postMessage(msg);
+      // Don't block callers if the worker never answers
+      setTimeout(resolve, 1500);
+    });
   }
 
   /**
@@ -245,6 +270,7 @@ export class PcmReaderClient {
     trackId: string;
     startFrame: number;
     frameCount: number;
+    channels?: 1 | 2;
     priority?: ChunkPriority;
     generation?: number;
   }): Promise<PcmChunkResult> {
@@ -269,6 +295,7 @@ export class PcmReaderClient {
         trackId: params.trackId,
         startFrame: params.startFrame,
         frameCount: params.frameCount,
+        channels: params.channels,
       };
 
       worker.postMessage(msg);
@@ -286,6 +313,7 @@ export class PcmReaderClient {
     }
     this.pendingRequests.clear();
     this.openProjectResolvers.clear();
+    this.closeProjectResolvers.clear();
   }
 }
 

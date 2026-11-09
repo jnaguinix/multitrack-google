@@ -417,6 +417,28 @@
   margin-bottom: -14px;
 }
 
+/* Laptops pequeñas: pantallas bajas (<= 800px alto) o estrechas (<= 1366px ancho) */
+@media (max-height: 800px) {
+  .lt-fx { height: 170px; }
+  .lt-docked .lt-fx { height: 130px; }
+  .lt-console { padding: 10px 14px 12px; }
+  .lt-strip { gap: 4px; padding-bottom: 7px; }
+}
+
+@media (max-height: 700px) {
+  .lt-fx { height: 130px; }
+  .lt-docked .lt-fx { height: 100px; }
+  .lt-ms button { height: 24px; }
+}
+
+@media (max-width: 1366px) {
+  .lt-strip { width: 76px; padding: 0 5px 8px; }
+  .lt-docked .lt-strip { width: 74px; }
+  .lt-strip.lt-bus { width: 90px; }
+  .lt-console { gap: 8px; }
+  .lt-buses { gap: 6px; padding-left: 8px; }
+}
+
 @media (max-width: 640px) {
   .lt-console {
     flex-direction: column;

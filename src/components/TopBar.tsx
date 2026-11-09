@@ -42,9 +42,9 @@ export const TopBar: React.FC<TopBarProps> = ({
     : [...RAM_BUDGET_PRESETS, ramBudgetMB].sort((a, b) => a - b);
 
   return (
-    <header className="h-10.5 flex items-center justify-between gap-3 px-4 py-1.5 bg-[#0B0F17] border-b border-slate-800/90 select-none shrink-0">
+    <header className="min-h-10.5 flex items-center justify-between gap-2 xl:gap-3 px-2.5 xl:px-4 py-1.5 bg-[#0B0F17] border-b border-slate-800/90 select-none shrink-0">
       {/* Zone 1: Brand Wordmark + Clear Navigation */}
-      <div className="flex items-center gap-4 min-w-0">
+      <div className="flex items-center gap-2 xl:gap-4 min-w-0">
         <a
           href="#setlist"
           onClick={(e) => {
@@ -58,7 +58,7 @@ export const TopBar: React.FC<TopBarProps> = ({
 
         <div className="h-4 w-px bg-slate-800 shrink-0" />
 
-        <nav aria-label="Navegación Principal" className="flex items-center gap-1.5 text-[13px] font-medium">
+        <nav aria-label="Navegación Principal" className="flex items-center gap-0.5 xl:gap-1.5 text-xs xl:text-[13px] font-medium overflow-x-auto">
           {navItems.map((item) => {
             const isActive = activeView === item.id;
             const isSetlistTab = item.id === 'setlist';
@@ -70,7 +70,7 @@ export const TopBar: React.FC<TopBarProps> = ({
                   e.preventDefault();
                   onSelectView(item.id);
                 }}
-                className={`whitespace-nowrap shrink-0 py-1 px-2.5 rounded-md transition-colors flex items-center gap-1.5 ${
+                className={`whitespace-nowrap shrink-0 py-1 px-1.5 xl:px-2.5 rounded-md transition-colors flex items-center gap-1.5 ${
                   isActive
                     ? isSetlistTab
                       ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/50 font-semibold'
@@ -79,7 +79,7 @@ export const TopBar: React.FC<TopBarProps> = ({
                 }`}
               >
                 {isSetlistTab && <ListMusic className="w-3.5 h-3.5" />}
-                <span>{item.label}</span>
+                <span>{item.id === 'arranger' ? <>Arranger<span className="hidden xl:inline"> (DAW)</span></> : item.id === 'remote' ? <>Stage<span className="hidden xl:inline"> Remote</span></> : item.label}</span>
                 {typeof item.badge === 'number' && item.badge > 0 && (
                   <span className="px-1.5 py-0.2 rounded-full bg-emerald-500/25 text-emerald-300 font-mono text-[11px] font-bold">
                     {item.badge}
@@ -92,7 +92,7 @@ export const TopBar: React.FC<TopBarProps> = ({
       </div>
 
       {/* Zone 3: Engine Mode ('buffer' | 'stream'), RAM Budget & Primary Import Action */}
-      <div className="flex items-center gap-2 shrink-0">
+      <div className="flex items-center gap-1.5 xl:gap-2 shrink-0">
         {/* Engine Mode Switch ('buffer' | 'stream') */}
         <div
           title="Modo del motor de audio: 'buffer' (AudioBuffer en RAM) o 'stream' (OPFS PCM por ventanas)"
@@ -152,10 +152,10 @@ export const TopBar: React.FC<TopBarProps> = ({
         <button
           type="button"
           onClick={onOpenImportModal}
-          className="px-3 py-1.5 text-xs font-bold text-slate-950 bg-cyan-400 hover:bg-cyan-300 active:scale-[0.99] rounded-lg transition-all whitespace-nowrap shrink-0 cursor-pointer flex items-center gap-1"
+          className="px-2.5 xl:px-3 py-1.5 text-xs font-bold text-slate-950 bg-cyan-400 hover:bg-cyan-300 active:scale-[0.99] rounded-lg transition-all whitespace-nowrap shrink-0 cursor-pointer flex items-center gap-1"
         >
           <Plus className="w-3.5 h-3.5 stroke-[2.5]" />
-          <span>Importar Stems</span>
+          <span className="hidden lg:inline">Importar Stems</span><span className="lg:hidden">Importar</span>
         </button>
       </div>
     </header>

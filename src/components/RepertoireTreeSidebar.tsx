@@ -1,4 +1,5 @@
 import React, { useMemo, useRef, useState } from 'react';
+import { pickAudioSources } from '../storage/sourceFiles';
 import {
   Search,
   FolderOpen,
@@ -83,7 +84,7 @@ export const RepertoireTreeSidebar: React.FC<RepertoireTreeSidebarProps> = ({
 
         <button
           type="button"
-          onClick={() => multiFileInputRef.current?.click()}
+          onClick={() => pickAudioSources('files', multiFileInputRef.current, onQuickImportNewSongFiles)}
           title="Importar Nueva Canción (Stems)"
           className="p-2 rounded-lg bg-cyan-400 text-slate-950 hover:bg-cyan-300 cursor-pointer"
         >
@@ -92,7 +93,7 @@ export const RepertoireTreeSidebar: React.FC<RepertoireTreeSidebarProps> = ({
 
         <button
           type="button"
-          onClick={() => folderInputRef.current?.click()}
+          onClick={() => pickAudioSources('folder', folderInputRef.current, onQuickImportNewSongFiles)}
           title="Importar Carpeta de Canción"
           className="p-2 rounded-lg bg-slate-800 text-cyan-400 hover:bg-slate-700 border border-slate-700 cursor-pointer"
         >
@@ -144,7 +145,7 @@ export const RepertoireTreeSidebar: React.FC<RepertoireTreeSidebarProps> = ({
   return (
     <aside
       aria-label="Árbol de Repertorio"
-      className="w-60 shrink-0 bg-[#111827] border-r border-slate-800 flex flex-col h-full select-none"
+      className="w-52 xl:w-60 shrink-0 bg-[#111827] border-r border-slate-800 flex flex-col h-full select-none"
     >
       {/* Sidebar Header */}
       <div className="px-3 py-2 border-b border-slate-800 flex items-center justify-between shrink-0">
@@ -189,7 +190,7 @@ export const RepertoireTreeSidebar: React.FC<RepertoireTreeSidebarProps> = ({
         <div className="grid grid-cols-2 gap-1.5">
           <button
             type="button"
-            onClick={() => multiFileInputRef.current?.click()}
+            onClick={() => pickAudioSources('files', multiFileInputRef.current, onQuickImportNewSongFiles)}
             className="px-2.5 py-1.5 rounded-lg bg-cyan-400 hover:bg-cyan-300 text-slate-950 text-xs font-bold flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
             title="Selecciona los stems de una canción para guardarla en tu Repertorio"
           >
@@ -199,7 +200,7 @@ export const RepertoireTreeSidebar: React.FC<RepertoireTreeSidebarProps> = ({
 
           <button
             type="button"
-            onClick={() => folderInputRef.current?.click()}
+            onClick={() => pickAudioSources('folder', folderInputRef.current, onQuickImportNewSongFiles)}
             className="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-100 border border-slate-700 text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
             title="Selecciona una carpeta completa de stems para convertirla en una sola canción"
           >
