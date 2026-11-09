@@ -33,8 +33,11 @@ fn snapshot(revision: u32) -> Snapshot {
         tracks: vec![Track {
             id: "bass".into(),
             name: "Bajo".into(),
+            color: "#ed655c".into(),
             gain: 1.0,
             muted: false,
+            pan: 0.0,
+            soloed: false,
         }],
         ..Snapshot::default()
     }
@@ -134,7 +137,8 @@ fn status(error: Error) -> http::StatusCode {
 #[tokio::test]
 async fn snapshots_deltas_reconnection_and_slow_reader() {
     let server = start().await;
-    let initial = snapshot(1);
+    let mut initial = snapshot(1);
+    initial.levels = vec![37];
     server.hub.exchange(initial.clone(), vec![]);
     let (addr, cookie) = session(&server, Role::Monitor).await;
     let origin = format!("http://{addr}");
@@ -145,12 +149,20 @@ async fn snapshots_deltas_reconnection_and_slow_reader() {
     assert_eq!(full["type"], "snapshot");
     assert_eq!(full["state"]["currentSong"]["title"], "Ensayo");
     assert!(full["state"].get("tracks").is_none());
+    assert!(full["state"].get("levels").is_none());
 
     let (_, mixer_cookie) = session(&server, Role::Mixer).await;
     let mut mixer = websocket(addr, Role::Mixer, &mixer_cookie, &origin)
         .await
         .unwrap();
-    assert_eq!(state(&mut mixer).await["state"]["tracks"][0]["gain"], 1.0);
+    let full = state(&mut mixer).await;
+    assert_eq!(full["state"]["tracks"][0]["gain"], 1.0);
+    assert_eq!(full["state"]["levels"], json!([37]));
+    let mut meter_update = initial.clone();
+    meter_update.levels = vec![62];
+    server.hub.exchange(meter_update, vec![]);
+    assert_eq!(state(&mut mixer).await["state"], json!({ "levels": [62] }));
+    initial.levels = vec![62];
     for tick in 1..=300 {
         let mut current = initial.clone();
         current.clock = Clock {
@@ -218,8 +230,8 @@ async fn validates_roles_origin_and_schema() {
     state(&mut monitor).await;
     for command in [
         json!({ "type": "setTrackGain", "revision": 1, "trackIndex": 0, "gain": 0.5 }),
-        json!({ "type": "setTrackMute", "revision": 1, "trackIndex": 0, "muted": true }),
-        json!({ "type": "stop" }),
+        json!({ "type": "setTrackPan", "revision": 1, "trackIndex": 0, "pan": -0.5 }),
+        json!({ "type": "setTrackSolo", "revision": 1, "trackIndex": 0, "soloed": true }),
     ] {
         send(&mut monitor, command).await;
     }
@@ -235,6 +247,11 @@ async fn validates_roles_origin_and_schema() {
             json!({ "type": "setTrackGain", "revision": 1, "trackIndex": 0, "gain": 1.2 }),
             json!({ "type": "setTrackMute", "revision": 1, "trackIndex": 8, "muted": true }),
             json!({ "type": "setTrackMute", "revision": 1, "trackIndex": 0, "muted": 1 }),
+        ],
+        [
+            json!({ "type": "setTrackPan", "revision": 1, "trackIndex": 0, "pan": -1.1 }),
+            json!({ "type": "setTrackPan", "revision": 1, "trackIndex": 0, "pan": 1.1 }),
+            json!({ "type": "setTrackSolo", "revision": 1, "trackIndex": 0, "soloed": 1 }),
         ],
     ];
     for group in invalid_groups {
@@ -261,34 +278,53 @@ async fn dispatches_only_current_tracks_and_revokes_a_device() {
     let mut mixer = websocket(addr, Role::Mixer, &cookie, &origin)
         .await
         .unwrap();
-    state(&mut mixer).await;
-    send(
-        &mut mixer,
+    let full = state(&mut mixer).await;
+    assert_eq!(full["state"]["tracks"][0]["color"], "#ed655c");
+    assert_eq!(full["state"]["tracks"][0]["pan"], 0.0);
+    assert_eq!(full["state"]["tracks"][0]["soloed"], false);
+    let requests = [
         json!({ "type": "setTrackGain", "revision": 1, "trackIndex": 0, "gain": 0.4 }),
-    )
-    .await;
+        json!({ "type": "setTrackPan", "revision": 1, "trackIndex": 0, "pan": -0.65 }),
+        json!({ "type": "setTrackSolo", "revision": 1, "trackIndex": 0, "soloed": true }),
+    ];
+    for request in &requests {
+        send(&mut mixer, request.clone()).await;
+    }
 
-    let command = time::timeout(Duration::from_secs(2), async {
-        loop {
-            if let Some(command) = server.hub.exchange(initial.clone(), vec![]).pop() {
-                break command;
+    let commands = time::timeout(Duration::from_secs(2), async {
+        let mut commands = Vec::new();
+        while commands.len() < requests.len() {
+            commands.extend(server.hub.exchange(initial.clone(), vec![]));
+            if commands.len() < requests.len() {
+                time::sleep(Duration::from_millis(10)).await;
             }
-            time::sleep(Duration::from_millis(10)).await;
         }
+        commands
     })
     .await
     .unwrap();
-    assert_eq!(command.track_id, "bass");
+    for (command, request) in commands.iter().zip(requests) {
+        assert_eq!(command.track_id, "bass");
+        assert_eq!(serde_json::to_value(&command.command).unwrap(), request);
+    }
     let mut changed = initial.clone();
     changed.tracks[0].gain = 0.4;
+    changed.tracks[0].pan = -0.65;
+    changed.tracks[0].soloed = true;
     server.hub.exchange(
         changed,
-        vec![Receipt {
-            id: command.id,
-            outcome: Outcome::Applied,
-        }],
+        commands
+            .into_iter()
+            .map(|command| Receipt {
+                id: command.id,
+                outcome: Outcome::Applied,
+            })
+            .collect(),
     );
-    assert_eq!(state(&mut mixer).await["state"]["tracks"][0]["gain"], 0.4);
+    let delta = state(&mut mixer).await;
+    assert_eq!(delta["state"]["tracks"][0]["gain"], 0.4);
+    assert_eq!(delta["state"]["tracks"][0]["pan"], -0.65);
+    assert_eq!(delta["state"]["tracks"][0]["soloed"], true);
 
     send(
         &mut mixer,

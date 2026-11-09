@@ -662,8 +662,11 @@ mod tests {
             tracks: vec![Track {
                 id: "track".into(),
                 name: "Bajo".into(),
+                color: "#ed655c".into(),
                 gain: 1.0,
                 muted: false,
+                pan: 0.0,
+                soloed: false,
             }],
             ..Snapshot::default()
         }

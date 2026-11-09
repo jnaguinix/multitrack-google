@@ -33,7 +33,7 @@ export interface TrackChannel {
   name: string;
   role: 'drums' | 'bass' | 'keys' | 'guitar' | 'synth' | 'vox' | 'perc' | 'fx' | 'click' | 'guide' | 'custom';
   color: string;
-  gain: number; // 0.0 to 1.995 (-60 dB to +6 dB, 1.0 = 0 dB)
+  gain: number; // Linear amplitude gain. 0 = silence, 1 = 0 dB, ~3.1623 = +10 dB.
   pan: number; // -1.0 (L) to +1.0 (R)
   muted: boolean;
   soloed: boolean;

@@ -31,6 +31,7 @@ import {
 import { audioEngine } from '../audio/audioEngine';
 import { extractAudioFilesFromDataTransfer } from '../utils/fileImportHelper';
 import { formatMmSs, formatTimecode } from './TransportDeck';
+import { getSongWaveformPeaks } from '../utils/songWaveform';
 import { MultitrackMixer, gainToDb } from './MultitrackMixer';
 
 interface SetlistPageViewProps {
@@ -125,7 +126,6 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
   const [dragOverCardIdx, setDragOverCardIdx] = useState<number | null>(null);
   const [cursorNotice, setCursorNotice] = useState<string | null>(null);
   const [isFloatingMixerOpen, setIsFloatingMixerOpen] = useState(false);
-  const [, setMeterTick] = useState(0);
 
   const masterCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const addAudioInputRef = useRef<HTMLInputElement | null>(null);
@@ -144,19 +144,6 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [isFloatingMixerOpen]);
 
-  // Poll meters at 20fps when playing so the quick-mute track cards show live levels
-  useEffect(() => {
-    if (!transport.isPlaying) {
-      setMeterTick((t) => t + 1);
-      return;
-    }
-    const intervalId = window.setInterval(() => {
-      metersRef.current = audioEngine.getTrackMeters();
-      setMeterTick((t) => (t + 1) % 1000000);
-    }, 50);
-    return () => window.clearInterval(intervalId);
-  }, [transport.isPlaying, metersRef]);
-
   const totalDurationSec = useMemo(() => {
     if (!project) return 0;
     const secPerBar = (60 / (project.bpm || 120)) * (project.beatsPerBar || 4);
@@ -167,33 +154,11 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
   }, [project, transport.totalDurationSec]);
 
   // Compute combined master waveform peaks from all audible tracks
-  const masterPeaks = useMemo(() => {
-    if (!project || project.tracks.length === 0) return [];
-    const numBuckets = 380;
-    const combined = new Array<number>(numBuckets).fill(0);
-    const anySolo = project.tracks.some((t) => t.soloed);
-    const activeTracks = project.tracks.filter(
-      (t) =>
-        t.role !== 'click' &&
-        t.role !== 'guide' &&
-        (anySolo ? t.soloed && !t.muted : !t.muted)
-    );
-    const sourceList = activeTracks.length > 0 ? activeTracks : project.tracks;
-
-    for (let i = 0; i < numBuckets; i++) {
-      let sum = 0;
-      for (const trk of sourceList) {
-        if (!trk.peaks || trk.peaks.length === 0) continue;
-        const pIdx = Math.min(
-          trk.peaks.length - 1,
-          Math.floor((i / numBuckets) * trk.peaks.length)
-        );
-        sum += (trk.peaks[pIdx] || 0) * trk.gain;
-      }
-      combined[i] = Math.min(1, sum / Math.max(1, sourceList.length * 0.65));
-    }
-    return combined;
-  }, [project]);
+  const masterPeaks = useMemo(() => getSongWaveformPeaks(project, totalDurationSec), [project, totalDurationSec]);
+  const sections = useMemo(() => [...(project?.sections ?? [])].sort((a, b) => a.startTimeSec - b.startTimeSec), [project]);
+  const activeSection = sections.find((section) => section.id === transport.activeSectionId);
+  const playheadSec = Math.max(0, Math.min(transport.currentTimeSec, totalDurationSec));
+  const playheadPct = totalDurationSec > 0 ? playheadSec / totalDurationSec * 100 : 0;
 
   // Draw the Master Overview Waveform Canvas
   useEffect(() => {
@@ -202,93 +167,56 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
-    const dpr = window.devicePixelRatio || 1;
-    const width = canvas.clientWidth;
-    const height = canvas.clientHeight;
-    if (canvas.width !== width * dpr || canvas.height !== height * dpr) {
-      canvas.width = width * dpr;
-      canvas.height = height * dpr;
-    }
+    const draw = () => {
+      const { clientWidth: width, clientHeight: height } = canvas;
+      if (!width || !height || totalDurationSec <= 0) return;
+      const dpr = window.devicePixelRatio || 1;
+      const pixelWidth = Math.round(width * dpr);
+      const pixelHeight = Math.round(height * dpr);
+      if (canvas.width !== pixelWidth) canvas.width = pixelWidth;
+      if (canvas.height !== pixelHeight) canvas.height = pixelHeight;
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.clearRect(0, 0, width, height);
 
-    ctx.save();
-    ctx.scale(dpr, dpr);
-    ctx.clearRect(0, 0, width, height);
-
-    ctx.fillStyle = '#151515';
-    ctx.fillRect(0, 0, width, height);
-
-    if (!project || masterPeaks.length === 0 || totalDurationSec <= 0) {
-      ctx.restore();
-      return;
-    }
-
-    // Draw section regions if any
-    for (const sec of project.sections) {
-      const startX = (sec.startTimeSec / totalDurationSec) * width;
-      const endX = (sec.endTimeSec / totalDurationSec) * width;
-      const isActive = sec.id === transport.activeSectionId;
-      const isQueued = sec.id === transport.queuedSectionId;
-
-      if (isActive) {
-        ctx.fillStyle = 'rgba(141, 214, 205, 0.07)';
-        ctx.fillRect(startX, 0, Math.max(2, endX - startX), height);
-      } else if (isQueued) {
-        ctx.fillStyle = 'rgba(255, 194, 51, 0.14)';
-        ctx.fillRect(startX, 0, Math.max(2, endX - startX), height);
+      for (const section of sections) {
+        const startX = (section.startTimeSec / totalDurationSec) * width;
+        const endX = (section.endTimeSec / totalDurationSec) * width;
+        const queued = section.id === transport.queuedSectionId;
+        ctx.fillStyle = queued ? '#e8ba68' : section.color || '#8dd6cd';
+        ctx.globalAlpha = queued || section.id === activeSection?.id ? 0.14 : 0.05;
+        ctx.fillRect(startX, 0, Math.max(0, endX - startX), height);
+        ctx.globalAlpha = 0.6;
+        ctx.fillRect(startX, 0, 1, height);
       }
 
-      ctx.strokeStyle = sec.color || '#2fd0c8';
-      ctx.lineWidth = 1.5;
-      ctx.beginPath();
-      ctx.moveTo(startX, 0);
-      ctx.lineTo(startX, height);
-      ctx.stroke();
-    }
-
-    // Center line
-    const midY = height / 2;
-    ctx.strokeStyle = 'rgba(255,255,255,0.09)';
-    ctx.beginPath();
-    ctx.moveTo(0, midY);
-    ctx.lineTo(width, midY);
-    ctx.stroke();
-
-    // Draw dense vertical waveform spikes
-    const numPeaks = masterPeaks.length;
-    const stepX = width / numPeaks;
-    const playheadRatio = Math.max(0, Math.min(1, transport.currentTimeSec / totalDurationSec));
-    const playheadX = playheadRatio * width;
-
-    for (let i = 0; i < numPeaks; i++) {
-      const amp = Math.max(0.02, masterPeaks[i] || 0.02);
-      const x = i * stepX;
-      const halfH = amp * (height * 0.44);
-
-      ctx.strokeStyle = x <= playheadX ? '#7fc5bc' : '#777c7b';
-      ctx.lineWidth = Math.max(1, stepX * 0.75);
-      ctx.beginPath();
-      ctx.moveTo(x, midY - halfH);
-      ctx.lineTo(x, midY + halfH);
-      ctx.stroke();
-    }
-
-    // Playhead cursor line
-    ctx.strokeStyle = '#8dd6cd';
-    ctx.lineWidth = 2.5;
-    ctx.beginPath();
-    ctx.moveTo(playheadX, 0);
-    ctx.lineTo(playheadX, height);
-    ctx.stroke();
-
-    ctx.restore();
-  }, [
-    masterPeaks,
-    project,
-    totalDurationSec,
-    transport.activeSectionId,
-    transport.currentTimeSec,
-    transport.queuedSectionId,
-  ]);
+      const barCount = Math.min(masterPeaks.length, Math.max(1, Math.floor(width / 4)));
+      const stepX = width / Math.max(1, barCount);
+      const baseline = height - 12;
+      ctx.lineCap = 'round';
+      ctx.lineWidth = Math.min(3, stepX * 0.6);
+      ctx.globalAlpha = 0.8;
+      for (let i = 0; i < barCount; i++) {
+        const first = Math.floor(i * masterPeaks.length / barCount);
+        const last = Math.floor((i + 1) * masterPeaks.length / barCount);
+        let peak = 0;
+        for (let index = first; index < last; index++) peak = Math.max(peak, masterPeaks[index]);
+        if (peak <= 0) continue;
+        const seconds = ((i + 0.5) / barCount) * totalDurationSec;
+        const section = sections.find((item) => item.startTimeSec <= seconds && seconds < item.endTimeSec);
+        const x = (i + 0.5) * stepX;
+        ctx.strokeStyle = section?.color || '#8dd6cd';
+        ctx.beginPath();
+        ctx.moveTo(x, baseline);
+        ctx.lineTo(x, baseline - Math.max(1, peak * (height - 38)));
+        ctx.stroke();
+      }
+      ctx.globalAlpha = 1;
+    };
+    draw();
+    const observer = new ResizeObserver(draw);
+    observer.observe(canvas);
+    return () => observer.disconnect();
+  }, [masterPeaks, sections, totalDurationSec, activeSection?.id, transport.queuedSectionId]);
 
   const handleMasterWaveformClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
     if (!project || totalDurationSec <= 0) return;
@@ -314,27 +242,145 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
     };
   }, [project, trackFilterText]);
 
-  const activeSection = project?.sections.find((s) => s.id === transport.activeSectionId);
-  const anySolo = project?.tracks.some((t) => t.soloed) ?? false;
-  const meters = metersRef.current.tracks;
-
   return (
     <section className="lt-setlist flex-1 flex flex-col overflow-y-auto min-w-0" aria-labelledby="setlist-title">
-      <div className="flex items-center justify-between gap-3 flex-wrap shrink-0">
-        <div>
-          <h1 id="setlist-title" className="text-2xl font-semibold tracking-tight">Setlist</h1>
-          <p className="text-sm text-neutral-400">{setlistQueue.length === 1 ? '1 canción' : `${setlistQueue.length} canciones`}</p>
+      {project && (
+        <header className="lt-setlist-heading shrink-0">
+          <div className="min-w-0">
+            <h1 id="setlist-title" className="lt-setlist-song-title">{project.title}</h1>
+            <div className="lt-setlist-meta">
+              <span>{project.keySignature}</span>
+              <span>{project.bpm} BPM</span>
+              {activeSection && (
+                <span className="lt-setlist-current" style={{ '--sec': activeSection.color || 'var(--lt-accent)' } as React.CSSProperties}>
+                  <i aria-hidden="true" /> {activeSection.name} actual
+                </span>
+              )}
+            </div>
+          </div>
+          <button type="button" onClick={() => setIsFloatingMixerOpen(true)} className="lt-control">
+            <Sliders size={16} /> Mezcla
+          </button>
+        </header>
+      )}
+      {project ? (
+        <div className="lt-waveform relative shrink-0 overflow-hidden">
+          <canvas
+            ref={masterCanvasRef}
+            onClick={handleMasterWaveformClick}
+            className="w-full h-full block cursor-pointer"
+            aria-label="Forma de onda. Haz clic para mover el cursor."
+          />
+          <span className="lt-setlist-waveform-unplayed" style={{ left: playheadPct + '%' }} aria-hidden="true" />
+          <span
+            className="lt-setlist-waveform-cursor"
+            style={{ left: 'min(' + playheadPct + '%, calc(100% - 2px))' }}
+            aria-hidden="true"
+          />
+          <span className="lt-setlist-waveform-label">Forma de onda</span>
+              {transport.isMountingSong && (
+                <div className="absolute inset-0 bg-neutral-950/75 flex flex-col items-center justify-center p-4 text-center z-20">
+                  <div className="px-4 py-2.5 rounded-xl bg-studio-panel border border-amber-500/50 text-amber-300 text-sm font-bold shadow-xl">
+                    {transport.mountingProgressText || 'Cargando pistas en RAM...'}
+                  </div>
+                </div>
+              )}
         </div>
-        <div className="flex items-center gap-2">
-          {(project || setlistQueue.length > 0) && <button type="button" popoverTarget="setlist-add" className="lt-control"><Plus size={16} /> Añadir canción</button>}
-          {project && (
-            <button type="button" onClick={() => setIsFloatingMixerOpen(true)} className="lt-control">
-              <Sliders size={16} /> Mezcla
-            </button>
-          )}
+      ) : (
+        <div className="lt-empty shrink-0">
+          <Music size={24} className="text-neutral-400" aria-hidden="true" />
+          <h1 id="setlist-title">{setlistQueue.length ? 'Elige una canción' : 'Prepara tu setlist'}</h1>
+          <p>Importa las pistas de una canción o añade una desde tu repertorio para empezar.</p>
+          <button type="button" popoverTarget="setlist-add" className="lt-primary"><Plus size={16} /> Añadir canción</button>
         </div>
+      )}
+
+      <div className="space-y-4">
+        {project ? (
+          <>
+            <section aria-labelledby="setlist-sections-title" className="lt-setlist-sections">
+              <div className="flex flex-wrap items-center justify-between gap-2 mb-2.5">
+                <div className="flex items-center gap-2">
+                  <Flag className="w-4 h-4 text-studio-ink" />
+                  <h2 id="setlist-sections-title" className="text-sm font-semibold text-neutral-100">
+                    Secciones
+                  </h2>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={onAddMarkerAtPlayhead}
+                    className="lt-control"
+                  >
+                    <Flag className="w-3.5 h-3.5" />
+                    <span>Marcar aquí</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={onOpenSectionEditor}
+                    className="lt-control"
+                  >
+                    Editar secciones
+                  </button>
+                </div>
+              </div>
+
+              {sections.length === 0 ? (
+                <div className="py-3 px-4 rounded-lg bg-studio-ground border border-neutral-800/80 text-xs text-neutral-300 flex items-center justify-between">
+                  <span>
+                    Esta canción aún no tiene secciones marcadas. Pulsa <strong>+ Marcar aquí</strong> mientras reproduces para dividirla en Intro, Verso, Coro, Puente, etc.
+                  </span>
+                </div>
+              ) : (
+                <div className="flex flex-wrap items-center gap-2">
+                  {sections.map((sec) => {
+                    const isActive = sec.id === transport.activeSectionId;
+                    const isQueued = sec.id === transport.queuedSectionId;
+                    const isVampHere = isActive && transport.isVamping;
+
+                    return (
+                      <button
+                        key={sec.id}
+                        type="button"
+                        onClick={() => onJumpSection(sec.id)}
+                        className="lt-setlist-section"
+                        data-active={isActive || undefined}
+                        data-queued={isQueued || undefined}
+                        aria-pressed={isActive}
+                        style={{ '--sec': sec.color || 'var(--lt-accent)' } as React.CSSProperties}
+                      >
+                        <i aria-hidden="true" />
+                        <span>{sec.name}</span>
+                        <span className="lt-setlist-section-time">
+                          {formatMmSs(sec.startTimeSec)}
+                        </span>
+                        {isQueued && <span className="lt-setlist-section-queued">En cola</span>}
+                        {isVampHere && <Repeat className="w-3.5 h-3.5 shrink-0" aria-label="En bucle" />}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </section>
+
+          </>
+        ) : null}
       </div>
-      <div className="flex items-center gap-2 overflow-x-auto shrink-0 pb-1" role="group" aria-label="Orden de reproducción">
+
+      <section className="lt-setlist-order shrink-0" aria-label="Orden de reproducción">
+        {(project || setlistQueue.length > 0) && (
+          <header className="lt-setlist-order-header">
+            <div>
+              <h2>Orden de reproducción</h2>
+              <p>{setlistQueue.length === 1 ? '1 canción' : setlistQueue.length + ' canciones'}</p>
+            </div>
+            <button type="button" popoverTarget="setlist-add" className="lt-control">
+              <Plus size={16} /> Añadir canción
+            </button>
+          </header>
+        )}
+      <div className="lt-setlist-queue" role="group" aria-label="Canciones del setlist">
           {setlistQueue.map((song, idx) => {
             const isCurrent = project?.id === song.id;
             const isPlayingThis = isCurrent && transport.isPlaying;
@@ -711,114 +757,7 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
           </div>
       </div>
 
-      {project ? (
-        <div className="lt-waveform relative shrink-0 overflow-hidden">
-          <canvas
-            ref={masterCanvasRef}
-            onClick={handleMasterWaveformClick}
-            className="w-full h-full block cursor-pointer"
-          />
-
-          <span className="absolute top-3 left-4 pointer-events-none text-xs text-neutral-300">Forma de onda</span>
-              {transport.isMountingSong && (
-                <div className="absolute inset-0 bg-neutral-950/75 flex flex-col items-center justify-center p-4 text-center z-20">
-                  <div className="px-4 py-2.5 rounded-xl bg-studio-panel border border-amber-500/50 text-amber-300 text-sm font-bold shadow-xl">
-                    {transport.mountingProgressText || 'Cargando pistas en RAM...'}
-                  </div>
-                </div>
-              )}
-        </div>
-      ) : (
-        <div className="lt-empty shrink-0">
-          <Music size={24} className="text-neutral-400" aria-hidden="true" />
-          <h2>{setlistQueue.length ? 'Elige una canción' : 'Prepara tu setlist'}</h2>
-          <p>Importa las pistas de una canción o añade una desde tu repertorio para empezar.</p>
-          <button type="button" popoverTarget="setlist-add" className="lt-primary"><Plus size={16} /> Añadir canción</button>
-        </div>
-      )}
-
-      <div className="space-y-4">
-        {project ? (
-          <>
-            {/* 3A. LARGE SECTION JUMP PADS */}
-            <div className="border-t border-studio-line py-3">
-              <div className="flex flex-wrap items-center justify-between gap-2 mb-2.5">
-                <div className="flex items-center gap-2">
-                  <Flag className="w-4 h-4 text-studio-ink" />
-                  <h3 className="text-sm font-bold text-neutral-100">
-                    Secciones
-                  </h3>
-                  {activeSection && (
-                    <span className="px-2 py-0.5 rounded-md bg-studio-strip border border-studio-line text-studio-ink text-xs font-bold">
-                      Actual: {activeSection.name}
-                    </span>
-                  )}
-                </div>
-
-                <div className="flex items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={onAddMarkerAtPlayhead}
-                    className="px-3 py-1.5 rounded-lg bg-studio-strip hover:bg-neutral-700 border border-studio-line text-studio-ink text-xs font-bold flex items-center gap-1.5 cursor-pointer"
-                  >
-                    <Flag className="w-3.5 h-3.5" />
-                    <span>Marcar aquí</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={onOpenSectionEditor}
-                    className="px-3 py-1.5 rounded-lg bg-studio-strip hover:bg-neutral-800 border border-studio-line text-neutral-200 text-xs font-semibold cursor-pointer"
-                  >
-                    Editar secciones
-                  </button>
-                </div>
-              </div>
-
-              {project.sections.length === 0 ? (
-                <div className="py-3 px-4 rounded-lg bg-studio-ground border border-neutral-800/80 text-xs text-neutral-300 flex items-center justify-between">
-                  <span>
-                    Esta canción aún no tiene secciones marcadas. Pulsa <strong>+ Marcar aquí</strong> mientras reproduces para dividirla en Intro, Verso, Coro, Puente, etc.
-                  </span>
-                </div>
-              ) : (
-                <div className="flex flex-wrap items-center gap-2">
-                  {project.sections.map((sec) => {
-                    const isActive = sec.id === transport.activeSectionId;
-                    const isQueued = sec.id === transport.queuedSectionId;
-                    const isVampHere = isActive && transport.isVamping;
-
-                    return (
-                      <button
-                        key={sec.id}
-                        type="button"
-                        onClick={() => onJumpSection(sec.id)}
-                        className={`min-h-[42px] px-4 py-2 rounded-xl text-sm font-bold flex items-center gap-2 border transition-colors cursor-pointer ${
-                          isQueued
-                            ? 'bg-amber-500/25 border-amber-400 text-amber-200'
-                            : isActive
-                            ? 'bg-studio-ink text-studio-ground hover:bg-neutral-200 border-studio-line'
-                            : 'bg-studio-strip hover:bg-neutral-800 border-studio-line text-neutral-100'
-                        }`}
-                      >
-                        <span
-                          style={{ backgroundColor: sec.color }}
-                          className="w-3 h-3 rounded-full shrink-0"
-                        />
-                        <span>{sec.name}</span>
-                        <span className="text-xs opacity-80">
-                          {formatMmSs(sec.startTimeSec)}
-                        </span>
-                        {isVampHere && <Repeat className="w-3.5 h-3.5" />}
-                      </button>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-
-          </>
-        ) : null}
-      </div>
+      </section>
 
       {/* 4. FLOATING MIXER CARD MODAL / DRAWER (Opens on demand, closes with 1 click or Esc) */}
       {isFloatingMixerOpen && filteredProjectForMixer && (

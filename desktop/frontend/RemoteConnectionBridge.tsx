@@ -1,5 +1,7 @@
 
 import { memo, useEffect, useLayoutEffect, useRef, useState, type RefObject } from 'react';
+import { createPortal } from 'react-dom';
+import { Radio } from 'lucide-react';
 import type { SongProject } from '../../src/types/project';
 import { audioEngine } from '../../src/audio/audioEngine';
 import { applyMix, matches, snapshot, targets, trackIdentity } from './remoteState';
@@ -14,6 +16,7 @@ type Connection = { epoch: string; devices: Device[]; pairings: Pairing[] };
 type Status = { interfaces: { name: string; address: string }[]; connection: Connection | null };
 type Exchange = { commands: Dispatch[]; devices: Device[] };
 type Props = Pick<Source, 'project' | 'setlist'> & {
+  triggerHost: HTMLElement | null;
   activationCount: Readonly<RefObject<number>>;
   updateProject: (update: (previous: SongProject) => SongProject) => void;
 };
@@ -33,7 +36,7 @@ function sameDevices(left: Device[], right: Device[]) {
     device.id === right[index].id && device.role === right[index].role && device.address === right[index].address);
 }
 
-export default memo(function RemoteConnectionBridge({ project, setlist, activationCount, updateProject }: Props) {
+export default memo(function RemoteConnectionBridge({ project, setlist, activationCount, updateProject, triggerHost }: Props) {
   const dialog = useRef<HTMLDialogElement>(null);
   const source = useRef({ project, setlist });
   const epoch = useRef<string | null>(null);
@@ -123,6 +126,8 @@ export default memo(function RemoteConnectionBridge({ project, setlist, activati
     let timer: ReturnType<typeof setTimeout>;
     let previousClock: Clock | undefined;
     let clockRevision = -1;
+    let mixerConnected = connection.devices.some((device) => device.role === 'mixer');
+    let meterFailed = false;
     let pending: Dispatch[] = [];
     let receipts: Receipt[] = [];
     let deadline = 0;
@@ -155,10 +160,23 @@ export default memo(function RemoteConnectionBridge({ project, setlist, activati
           clockRevision === currentRevision ? previousClock : undefined, Date.now());
         previousClock = state.clock;
         clockRevision = currentRevision;
+        let trackLevels: number[] = [];
+        if (mixerConnected && state.clock.playing && !meterFailed) {
+          try {
+            const { tracks } = audioEngine.getTrackMeters();
+            trackLevels = state.tracks.map(({ id }) => Math.round((tracks[id]?.rms ?? 0) * 100));
+          } catch (error) {
+            meterFailed = true;
+            console.warn('[LibreTracks LAN] Medidores remotos suspendidos', error);
+          }
+        }
 
-        const reply = await call<Exchange>('remote_exchange', { epoch: activeEpoch, snapshot: state, receipts });
+        const reply = await call<Exchange>('remote_exchange', {
+          epoch: activeEpoch, snapshot: { ...state, levels: trackLevels }, receipts,
+        });
         if (!active()) return;
         receipts = [];
+        mixerConnected = reply.devices.some((device) => device.role === 'mixer');
         setDevices((previous) => sameDevices(previous, reply.devices) ? previous : reply.devices);
         if (reply.commands.length) {
           const byControl = new Map<string, Dispatch>();
@@ -206,17 +224,26 @@ export default memo(function RemoteConnectionBridge({ project, setlist, activati
 
   return (
     <>
-      <button
-        type="button"
-        className="lt-control lt-remote-trigger"
-        onClick={() => {
-          dialog.current?.showModal();
-          if (!connection && !busy) void refresh();
-        }}
-      >
-        Conexión remota{connection ? ' · Activa' : ''}
-      </button>
-      <dialog ref={dialog} className="lt-remote-dialog" aria-labelledby="desktop-remote-title">
+      {triggerHost && createPortal(
+        <button
+          type="button"
+          className="lt-control lt-remote-trigger"
+          data-active={Boolean(connection)}
+          aria-label={connection ? 'Conexión remota activa' : 'Conexión remota'}
+          aria-haspopup="dialog"
+          aria-controls="desktop-remote-dialog"
+          title={connection ? 'Conexión remota · Activa' : 'Conexión remota'}
+          onClick={() => {
+            dialog.current?.showModal();
+            if (!connection && !busy) void refresh();
+          }}
+        >
+          <Radio size={16} aria-hidden="true" />
+          <span>Conexión remota</span>
+        </button>,
+        triggerHost,
+      )}
+      <dialog ref={dialog} id="desktop-remote-dialog" className="lt-remote-dialog" aria-labelledby="desktop-remote-title">
         <header>
           <h2 id="desktop-remote-title">Conexión remota</h2>
           <button type="button" className="lt-control" onClick={() => dialog.current?.close()}>Cerrar</button>
@@ -242,6 +269,11 @@ export default memo(function RemoteConnectionBridge({ project, setlist, activati
         {notice && <p role="status">{notice}</p>}
         {connection && (
           <>
+            <p className="lt-remote-android-notice">
+              <strong>Permiso en Android.</strong> Al abrir el QR, permite al navegador acceder a
+              Dispositivos cercanos o a la red local si te lo solicita. Si ya lo rechazaste,
+              revisa los permisos del navegador en Ajustes de Android y vuelve a abrir el QR.
+            </p>
             <div className="lt-remote-pairings">
               {connection.pairings.map((pairing) => (
                 <section key={pairing.role}>

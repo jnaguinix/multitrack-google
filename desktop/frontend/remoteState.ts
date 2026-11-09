@@ -3,7 +3,9 @@ import type { SongProject, SongSection, TransportState } from '../../src/types/p
 
 export type Command =
   | { type: 'setTrackGain'; revision: number; trackIndex: number; gain: number }
-  | { type: 'setTrackMute'; revision: number; trackIndex: number; muted: boolean };
+  | { type: 'setTrackMute'; revision: number; trackIndex: number; muted: boolean }
+  | { type: 'setTrackPan'; revision: number; trackIndex: number; pan: number }
+  | { type: 'setTrackSolo'; revision: number; trackIndex: number; soloed: boolean };
 
 export interface Dispatch {
   id: number;
@@ -92,7 +94,9 @@ export function snapshot(
     queuedJump: queued && { section: queued, targetBar: transport.queuedTargetBar },
     vamping: transport.isVamping,
     clock: canReuse ? previousClock : { positionSec, durationSec, sampledAtMs: nowMs, rate, playing },
-    tracks: project?.tracks.map(({ id, name, gain, muted }) => ({ id, name, gain, muted })) ?? [],
+    tracks: project?.tracks.map(({ id, name, color, gain, muted, pan, soloed }) => ({
+      id, name, color: color || '', gain, muted, pan: Number.isFinite(pan) ? pan : 0, soloed: Boolean(soloed),
+    })) ?? [],
   };
 }
 
@@ -104,16 +108,24 @@ export function targets(command: Dispatch, project: SongProject | null, revision
 
 export function matches(command: Dispatch, project: SongProject): boolean {
   const track = project.tracks[command.command.trackIndex];
-  return command.command.type === 'setTrackGain' ? track.gain === command.command.gain : track.muted === command.command.muted;
+  const [field, value] = mixChange(command.command);
+  return track[field] === value;
+}
+
+function mixChange(command: Command) {
+  switch (command.type) {
+    case 'setTrackGain': return ['gain', command.gain] as const;
+    case 'setTrackMute': return ['muted', command.muted] as const;
+    case 'setTrackPan': return ['pan', command.pan] as const;
+    case 'setTrackSolo': return ['soloed', command.soloed] as const;
+  }
 }
 
 export function applyMix(project: SongProject, commands: Dispatch[]): SongProject {
   const tracks = [...project.tracks];
   for (const { command } of commands) {
-    const track = tracks[command.trackIndex];
-    tracks[command.trackIndex] = command.type === 'setTrackGain'
-      ? { ...track, gain: command.gain }
-      : { ...track, muted: command.muted };
+    const [field, value] = mixChange(command);
+    tracks[command.trackIndex] = { ...tracks[command.trackIndex], [field]: value };
   }
   return { ...project, tracks };
 }

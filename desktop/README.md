@@ -43,10 +43,10 @@ Para guardar el log, ejecutar el mismo .exe desde PowerShell.
 ## Conectar los teléfonos
 
 1. Importar y preparar las pistas locales en LibreTracks. Abrir **Conexión remota**, elegir la IPv4 privada del Wi-Fi o Ethernet del portátil y activar el servidor. Usa el puerto TCP 8765 en esa interfaz. Si cambia la IP, apagar el servidor y volver a elegir la interfaz.
-2. Escanear **Músicos** para el monitor o **Sonidista** para volumen y mute. Los móviles usan el navegador de la misma LAN. Si la red tiene aislamiento entre clientes Wi-Fi o el firewall bloquea la entrada, el QR no será accesible desde otro dispositivo.
+2. Escanear **Músicos** para el monitor o **Sonidista** para volumen, paneo, mute (M) y solo (S) por pista. Los móviles usan el navegador de la misma LAN. Si la red tiene aislamiento entre clientes Wi-Fi o el firewall bloquea la entrada, el QR no será accesible desde otro dispositivo.
 3. **Expulsar** revoca la sesión del dispositivo y descarta los comandos que sigan en la cola. Un ajuste que ya llegó al reproductor puede terminar de aplicarse. Quien conserve un QR vigente puede volver a emparejarse al escanearlo. Apagar y encender regenera ambos QR y termina todas las sesiones. Los enlaces y cookies funcionan por HTTP en la LAN. Compartir el QR de sonidista solo con su operador.
 
-El servidor admite 16 sesiones por activación. El control remoto acepta únicamente pistas del proyecto actual y ganancias 0–1. Los ajustes locales pueden superar 1.0 como en el reproductor web. El teléfono envía la ganancia al soltar el control y muestra el estado confirmado por el portátil. El log de Rust incluye resultado y milisegundos hasta el acuse del estado aplicado, incluyendo el siguiente intercambio IPC. Esa cifra no mide la latencia hasta el altavoz.
+El servidor admite 16 sesiones por activación. El control remoto acepta únicamente pistas del proyecto actual, ganancias 0–1 y paneo de −1 a +1. Los ajustes locales de ganancia pueden superar 1.0. En Split-Mono, el motor centra el paneo de pista para conservar la separación de las salidas. El teléfono envía la ganancia y el paneo al soltar el control y muestra el estado confirmado por el portátil. El log de Rust incluye resultado y milisegundos hasta el acuse del estado aplicado, incluyendo el siguiente intercambio IPC. Esa cifra no mide la latencia hasta el altavoz.
 
 ## Pruebas reproducibles
 

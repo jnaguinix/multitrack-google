@@ -3,28 +3,41 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>LibreTracks remoto</title>
+  <meta name="theme-color" content="#191919">
+  <title>Conexión remota</title>
   <link rel="stylesheet" href="/remote.css">
   <script defer src="/remote.js"></script>
 </head>
 <body>
-  <main>
+  <main data-ui>
     <header>
-      <p>LibreTracks</p>
       <h1 id="title">Conexión remota</h1>
       <p id="connection" role="status">Conectando…</p>
     </header>
     <section aria-labelledby="song" id="performance" hidden>
-      <h2 id="song">Sin canción</h2>
-      <p id="details"></p>
+      <div class="now-playing">
+        <span id="play-state" role="img" aria-label="Sin canción">■</span>
+        <div>
+          <h2 id="song">Sin canción</h2>
+          <p id="details"></p>
+        </div>
+        <p id="time">00:00 / 00:00</p>
+      </div>
       <progress id="progress" aria-label="Progreso de la canción" value="0" max="1"></progress>
-      <p id="time">00:00 / 00:00</p>
-      <dl>
-        <dt>Compás y pulso</dt><dd id="bar">—</dd>
-        <dt>Próxima canción</dt><dd id="next-song">—</dd>
-        <dt>Sección actual</dt><dd id="section">—</dd>
-        <dt>Próxima sección</dt><dd id="next-section">—</dd>
-        <dt>Salto programado</dt><dd id="jump">—</dd>
+    </section>
+    <section id="monitor" aria-label="Tiempo restante y secciones" hidden>
+      <div class="countdown">
+        <p id="remaining-label">Tiempo restante</p>
+        <p id="remaining" role="timer" aria-labelledby="remaining-label">--:--</p>
+        <progress id="remaining-progress" aria-label="Proporción restante" value="0" max="1"></progress>
+        <p id="duration">Duración total --:--</p>
+      </div>
+      <dl id="cues">
+        <div class="next-song"><dt>Próxima canción</dt><dd id="next-song">—</dd></div>
+        <div id="live-beat" hidden><dt>Compás y pulso</dt><dd id="bar">—</dd></div>
+        <div><dt>Sección actual</dt><dd id="section">—</dd></div>
+        <div><dt>Próxima sección</dt><dd id="next-section">—</dd></div>
+        <div class="scheduled-jump"><dt>Salto programado</dt><dd id="jump">—</dd></div>
       </dl>
     </section>
     <section id="mix" aria-labelledby="mix-title" hidden>

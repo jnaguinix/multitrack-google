@@ -73,8 +73,11 @@ pub struct Clock {
 pub struct Track {
     pub id: String,
     pub name: String,
+    pub color: String,
     pub gain: f64,
     pub muted: bool,
+    pub pan: f64,
+    pub soloed: bool,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
@@ -91,6 +94,8 @@ pub struct Snapshot {
     pub vamping: bool,
     pub clock: Clock,
     pub tracks: Vec<Track>,
+    #[serde(default)]
+    pub levels: Vec<u8>,
 }
 
 impl Snapshot {
@@ -111,6 +116,7 @@ impl Snapshot {
         if role == Role::Mixer {
             fields.insert("revision".into(), self.revision.into());
             fields.insert("acceptingCommands".into(), self.accepting_commands.into());
+            fields.insert("levels".into(), json!(self.levels));
             fields.insert(
                 "tracks".into(),
                 json!(self
@@ -118,8 +124,11 @@ impl Snapshot {
                     .iter()
                     .map(|track| json!({
                         "name": track.name,
+                        "color": track.color,
                         "gain": track.gain,
                         "muted": track.muted,
+                        "pan": track.pan,
+                        "soloed": track.soloed,
                     }))
                     .collect::<Vec<_>>()),
             );
@@ -174,6 +183,16 @@ pub enum MixCommand {
         track_index: usize,
         muted: bool,
     },
+    SetTrackPan {
+        revision: u32,
+        track_index: usize,
+        pan: f64,
+    },
+    SetTrackSolo {
+        revision: u32,
+        track_index: usize,
+        soloed: bool,
+    },
 }
 
 impl MixCommand {
@@ -189,7 +208,22 @@ impl MixCommand {
                 }
                 (revision, track_index)
             }
+            Self::SetTrackPan {
+                revision,
+                track_index,
+                pan,
+            } => {
+                if !pan.is_finite() || !(-1.0..=1.0).contains(&pan) {
+                    return None;
+                }
+                (revision, track_index)
+            }
             Self::SetTrackMute {
+                revision,
+                track_index,
+                ..
+            }
+            | Self::SetTrackSolo {
                 revision,
                 track_index,
                 ..

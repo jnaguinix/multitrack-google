@@ -10,6 +10,7 @@ interface TopBarProps {
   engineMode: AudioEngineMode;
   ramBudgetMB: number;
   cachedRamMB: number;
+  remoteTriggerRef?: React.Ref<HTMLSpanElement>;
   onChangeEngineMode: (mode: AudioEngineMode) => void;
   onChangeRamBudgetMB: (mb: number) => void;
   onSelectView: (view: WorkspaceView) => void;
@@ -22,7 +23,7 @@ const NAV_ITEMS: { id: WorkspaceView; label: string }[] = [
   { id: 'live', label: 'En vivo' },
   { id: 'arranger', label: 'Arreglo' },
   { id: 'mixer', label: 'Mezcla' },
-  { id: 'remote', label: 'Remoto' },
+  { id: 'remote', label: 'Control rápido' },
   { id: 'library', label: 'Biblioteca' },
 ];
 
@@ -32,6 +33,7 @@ export const TopBar: React.FC<TopBarProps> = ({
   engineMode,
   ramBudgetMB,
   cachedRamMB,
+  remoteTriggerRef,
   onChangeEngineMode,
   onChangeRamBudgetMB,
   onSelectView,
@@ -64,6 +66,7 @@ export const TopBar: React.FC<TopBarProps> = ({
       </nav>
 
       <div className="lt-header-actions">
+        {remoteTriggerRef && <span ref={remoteTriggerRef} />}
         <button type="button" popoverTarget="audio-settings" className="lt-control lt-icon-control" aria-label="Motor de audio" title="Motor de audio">
           <Settings2 size={17} />
         </button>
