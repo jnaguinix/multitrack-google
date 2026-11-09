@@ -13,6 +13,7 @@ import {
   TransportState,
 } from '../types/project';
 import { audioEngine } from '../audio/audioEngine';
+import { getSongWaveformPeaks } from '../utils/songWaveform';
 
 /**
  * LIVE SET — the performance page.
@@ -77,6 +78,17 @@ const STATUS_LABEL: Record<SongStatus, string> = {
   pending: 'Sin preparar',
 };
 
+const LiveWaveform = React.memo(function LiveWaveform({ project, duration }: { project: SongProject; duration: number }) {
+  const peaks = getSongWaveformPeaks(project, duration);
+  if (!peaks.some((peak) => peak > 0)) return null;
+  const points = peaks.map((peak, index) => `M${index + 0.5} ${50 - 43 * peak}v${86 * peak}`).join('');
+  return (
+    <svg className="lt-live-waveform" viewBox={`0 0 ${peaks.length} 100`} preserveAspectRatio="none" aria-hidden="true">
+      <path d={points} stroke="currentColor" strokeWidth="0.72" fill="none" />
+    </svg>
+  );
+});
+
 export const LiveSetView: React.FC<LiveSetViewProps> = ({
   project,
   transport,
@@ -124,7 +136,10 @@ export const LiveSetView: React.FC<LiveSetViewProps> = ({
   const playheadPct = (now / total) * 100;
   const clock = clockParts(now);
   const queuedSection = sections.find((s) => s.id === transport.queuedSectionId) || null;
-  const activeSection = sections.find((s) => s.id === transport.activeSectionId) || null;
+  const activeIndex = sections.findIndex((section) => section.id === transport.activeSectionId);
+  const activeSection = sections[activeIndex];
+  const nextSection = activeSection ? sections[activeIndex + 1] : sections.find((section) => section.startTimeSec > now);
+  const hasShortSections = sections.some((section) => section.endTimeSec - section.startTimeSec < total * 0.08);
   const isPaused = !transport.isPlaying && now > 0.05;
   const playLabel = transport.isMountingSong
     ? 'Cargando…'
@@ -143,150 +158,128 @@ export const LiveSetView: React.FC<LiveSetViewProps> = ({
   return (
     <div className="lt-live flex-1 flex min-h-0 overflow-hidden">
       {/* ===================== PERFORMANCE AREA ===================== */}
-      <section aria-label="Canción en curso" className="flex-1 min-w-0 flex flex-col">
-        {/* Now playing + clock */}
-        <header className="px-5 xl:px-7 pt-4 xl:pt-5 pb-3 flex items-end justify-between gap-6">
-          <div className="min-w-0">
-            <h1 className="lt-live-title truncate" title={project?.title}>
-              {project ? project.title : 'Elige una canción del setlist'}
-            </h1>
+      <section aria-label="Canción en curso" className="lt-live-performance">
+        <div className="lt-live-stage">
+          <header className="lt-live-header">
+            <div className="min-w-0">
+              <h1 className="lt-live-title" title={project?.title}>
+                {project ? project.title : 'Elige una canción del setlist'}
+              </h1>
+              {project && (
+                <p className="lt-live-song-details">
+                  {project.artist && <span>{project.artist}</span>}
+                  <strong>{project.keySignature}</strong>
+                  <span>{project.bpm} BPM</span>
+                  <span>{sections.length} {sections.length === 1 ? 'sección' : 'secciones'}</span>
+                </p>
+              )}
+            </div>
+
             {project && (
-              <p className="text-sm text-[var(--lt-mut)] mt-1">
-                {project.keySignature}, {project.bpm} BPM
-                {activeSection ? (
-                  <>
-                    {', ahora en '}
-                    <span className="text-[var(--lt-text)]">{activeSection.name}</span>
-                  </>
-                ) : null}
-              </p>
+              <div className="lt-live-clock-group" aria-live="off">
+                <div className="lt-live-clock">
+                  {clock.main}<span className="lt-live-clock-tenths">.{clock.tenths}</span>
+                </div>
+                <p className="lt-live-secondary">Quedan {mmss(Math.ceil(remaining))} de {mmss(total)}</p>
+              </div>
             )}
-          </div>
+          </header>
 
           {project && (
-            <div className="text-right shrink-0" aria-live="off">
-              <div className="lt-live-clock">
-                {clock.main}
-                <span className="lt-live-clock-tenths">.{clock.tenths}</span>
-              </div>
-              <div className="text-sm text-[var(--lt-mut)] tabular-nums">
-                quedan {mmss(remaining)} de {mmss(total)}
-              </div>
-            </div>
-          )}
-        </header>
-
-        {/* Song map: the signature element */}
-        {project && (
-          <div className="px-5 xl:px-7">
-            <div
-              className="lt-live-map"
-              role="group"
-              aria-label="Mapa de la canción. Haz clic en una sección para saltar a ella."
-            >
-              {sections.length > 0 ? (
-                sections.map((sec) => {
-                  const left = (sec.startTimeSec / total) * 100;
-                  const width = Math.max(0.6, ((sec.endTimeSec - sec.startTimeSec) / total) * 100);
-                  const isActive = sec.id === transport.activeSectionId;
-                  const isQueued = sec.id === transport.queuedSectionId;
+            <>
+              <div className="lt-live-map" role="group" aria-label="Mapa de la canción. Selecciona una sección para saltar.">
+                <LiveWaveform project={project} duration={total} />
+                {sections.length > 0 ? sections.map((section) => {
+                  const start = Math.max(0, Math.min(total, section.startTimeSec));
+                  const end = Math.max(start, Math.min(total, section.endTimeSec));
+                  if (end === start) return null;
+                  const isActive = section.id === transport.activeSectionId;
+                  const isQueued = section.id === transport.queuedSectionId;
+                  const shortcut = project.sections.indexOf(section) + 1;
+                  const duration = mmss(end - start);
                   return (
                     <button
-                      key={sec.id}
+                      key={section.id}
                       type="button"
-                      onClick={() => onJumpSection(sec.id)}
-                      title={`${sec.name} (${mmss(sec.startTimeSec)}): saltar aquí`}
                       className="lt-live-block"
                       data-active={isActive || undefined}
                       data-queued={isQueued || undefined}
-                      style={
-                        {
-                          left: `${left}%`,
-                          width: `${width}%`,
-                          '--sec': sec.color || '#2fd0c8',
-                        } as React.CSSProperties
-                      }
+                      aria-pressed={isActive}
+                      aria-keyshortcuts={shortcut <= 9 ? String(shortcut) : undefined}
+                      aria-label={section.name + ', ' + duration + (isQueued ? ', en cola' : '')}
+                      title={section.name + ' · ' + mmss(start) + '–' + mmss(end)}
+                      onClick={() => onJumpSection(section.id)}
+                      style={{
+                        left: (start / total) * 100 + '%',
+                        width: ((end - start) / total) * 100 + '%',
+                        '--sec': section.color || 'var(--lt-accent)',
+                      } as React.CSSProperties}
                     >
-                      <span className="lt-live-block-name">{sec.name}</span>
+                      <span className="lt-live-block-name">{section.name}</span>
+                      <span className="lt-live-block-meta" aria-hidden="true">
+                        <span>{duration}</span>
+                        {shortcut <= 9 && <kbd className="lt-live-kbd">{shortcut}</kbd>}
+                      </span>
                     </button>
                   );
-                })
-              ) : (
-                <div className="absolute inset-0 flex items-center px-4 text-sm text-[var(--lt-mut)]">
-                  Esta canción no tiene secciones. Márcalas en el DAW para poder saltar entre ellas.
+                }) : (
+                  <p className="lt-live-no-sections">Añade secciones en Arreglo para saltar desde este mapa.</p>
+                )}
+                <div
+                  className="lt-live-playhead"
+                  style={{ left: 'min(' + playheadPct + '%, calc(100% - 2px))' }}
+                  aria-hidden="true"
+                />
+              </div>
+
+              {sections.length > 0 && (
+                <div className="lt-live-cues">
+                  <div className="min-w-0">
+                    <p className="lt-live-secondary">Sección actual</p>
+                    <h2>{activeSection?.name ?? 'Sin sección activa'}</h2>
+                    <p className="lt-live-secondary lt-live-section-detail">
+                      {activeSection && <>Quedan <strong>{mmss(Math.ceil(Math.max(0, Math.min(total, activeSection.endTimeSec) - now)))}</strong> en esta sección</>}
+                      {activeSection && nextSection && <span aria-hidden="true"> · </span>}
+                      {nextSection && <>Sigue <strong>{nextSection.name}</strong></>}
+                    </p>
+                    {queuedSection && (
+                      <span className="lt-live-queued">
+                        <span className="min-w-0 truncate">Salto a {queuedSection.name}</span>
+                        <button type="button" onClick={onCancelQueuedJump} className="lt-live-queued-x shrink-0" aria-label="Cancelar el salto">
+                          <X size={14} />
+                        </button>
+                      </span>
+                    )}
+                  </div>
+                  <div className="lt-live-jump">
+                    <p className="lt-live-secondary" id="live-jump-label">Al saltar de sección</p>
+                    <div className="lt-live-jump-tabs" role="group" aria-labelledby="live-jump-label">
+                      {QUANTIZE_OPTIONS.map((option) => (
+                        <button
+                          key={option.value}
+                          type="button"
+                          aria-pressed={project.quantizeMode === option.value}
+                          title={option.hint}
+                          onClick={() => onChangeQuantize(option.value)}
+                        >
+                          {option.label}
+                        </button>
+                      ))}
+                    </div>
+                    <select
+                      className="lt-live-select lt-live-section-picker"
+                      data-needed={hasShortSections || undefined}
+                      aria-label="Ir a una sección"
+                      value=""
+                      onChange={(event) => onJumpSection(event.target.value)}
+                    >
+                      <option value="" disabled>Ir a una sección</option>
+                      {sections.map((section) => <option key={section.id} value={section.id}>{section.name}</option>)}
+                    </select>
+                  </div>
                 </div>
               )}
-              <div className="lt-live-playhead" style={{ left: `${playheadPct}%` }} aria-hidden="true" />
-            </div>
-          </div>
-        )}
-
-        {/* Jump controls: when to jump + pending jump */}
-        {project && sections.length > 0 && (
-          <div className="px-5 xl:px-7 pt-3 flex flex-wrap items-center justify-between gap-3">
-            <div className="flex items-center gap-3">
-              <span className="text-sm text-[var(--lt-mut)]">Saltar</span>
-              <div className="lt-live-seg" role="radiogroup" aria-label="Cuándo saltar de sección">
-                {QUANTIZE_OPTIONS.map((opt) => (
-                  <button
-                    key={opt.value}
-                    type="button"
-                    role="radio"
-                    aria-checked={project?.quantizeMode === opt.value}
-                    title={opt.hint}
-                    onClick={() => onChangeQuantize(opt.value)}
-                    disabled={!project}
-                  >
-                    {opt.label}
-                  </button>
-                ))}
-              </div>
-            </div>
-            {queuedSection && (
-              <span className="lt-live-queued">
-                Saltando a {queuedSection.name}
-                <button
-                  type="button"
-                  onClick={onCancelQueuedJump}
-                  className="lt-live-queued-x"
-                  aria-label="Cancelar el salto"
-                >
-                  <X className="w-3.5 h-3.5" />
-                </button>
-              </span>
-            )}
-          </div>
-        )}
-
-        {/* Section pads */}
-        <div className="flex-1 min-h-0 overflow-y-auto px-5 xl:px-7 py-3">
-          {project && sections.length > 0 && (
-            <div className="lt-live-pads">
-              {sections.map((sec, idx) => {
-                const isActive = sec.id === transport.activeSectionId;
-                const isQueued = sec.id === transport.queuedSectionId;
-                return (
-                  <button
-                    key={sec.id}
-                    type="button"
-                    onClick={() => onJumpSection(sec.id)}
-                    className="lt-live-pad"
-                    data-active={isActive || undefined}
-                    data-queued={isQueued || undefined}
-                    style={{ '--sec': sec.color || '#2fd0c8' } as React.CSSProperties}
-                    aria-pressed={isActive}
-                    aria-keyshortcuts={idx < 9 ? String(idx + 1) : undefined}
-                  >
-                    <span className="lt-live-pad-name">{sec.name}</span>
-                    <span className="lt-live-pad-meta">
-                      {mmss(sec.startTimeSec)}
-                      {idx < 9 && <kbd className="lt-live-kbd">{idx + 1}</kbd>}
-                    </span>
-                    {isQueued && <span className="lt-live-pad-flag">En cola</span>}
-                  </button>
-                );
-              })}
-            </div>
+            </>
           )}
         </div>
 
@@ -367,7 +360,7 @@ export const LiveSetView: React.FC<LiveSetViewProps> = ({
           </span>
         </div>
 
-        <ol className="flex-1 min-h-0 overflow-y-auto px-2 pb-2 space-y-1">
+        <ol className="flex-1 min-h-0 overflow-y-auto pb-2">
           {setlistQueue.map((song, idx) => {
             const isCurrent = song.id === project?.id;
             const isNext = nextSong?.id === song.id;
@@ -392,7 +385,7 @@ export const LiveSetView: React.FC<LiveSetViewProps> = ({
                 >
                   <span className="lt-live-song-idx tabular-nums">{idx + 1}</span>
                   <span className="min-w-0 flex-1 text-left">
-                    <span className="block truncate lt-live-song-title">{song.title}</span>
+                    <span className="block lt-live-song-title">{song.title}</span>
                     <span className="block text-xs text-[var(--lt-mut)] tabular-nums">
                       {isCurrent ? (transport.isPlaying ? 'Sonando' : 'Cargada') : isNext ? 'Siguiente' :`${song.bpm} BPM`}
                       {dur > 0 ? `, ${mmss(dur)}` : ''}
