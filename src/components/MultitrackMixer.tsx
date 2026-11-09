@@ -8,29 +8,38 @@ import {
 } from '../types/project';
 import { audioEngine } from '../audio/audioEngine';
 
-const MIN_DB = -60;
-const MAX_DB = 6;
+const MIN_DB = -40;
+const MAX_DB = 10;
+const MUTE_TRAVEL = 0.04;
+const PEAK_FLOOR_DBFS = -60;
+const PEAK_TICKS = [0, -20, -40, PEAK_FLOOR_DBFS];
+const GAIN_TICKS = [MAX_DB, 0, -10, -20, MIN_DB];
 
 export function gainToDb(gain: number): number {
-  if (gain <= 0.001) return -Infinity;
-  const db = 20 * Math.log10(gain);
-  return Math.max(MIN_DB, Math.min(MAX_DB, Math.round(db * 10) / 10));
+  if (!Number.isFinite(gain) || gain <= 0) return -Infinity;
+  return Math.round(200 * Math.log10(gain)) / 10;
 }
 
 export function dbToGain(db: number): number {
-  if (!isFinite(db) || db <= MIN_DB) return 0;
+  if (!Number.isFinite(db)) return 0;
   const clamped = Math.max(MIN_DB, Math.min(MAX_DB, db));
   return Number(Math.pow(10, clamped / 20).toFixed(4));
 }
 
 function posFromDb(db: number): number {
-  if (!isFinite(db) || db <= MIN_DB) return 0;
-  return Math.max(0, Math.min(1, (db - MIN_DB) / (MAX_DB - MIN_DB)));
+  if (!Number.isFinite(db)) return 0;
+  const normalized = Math.max(0, Math.min(1, (db - MIN_DB) / (MAX_DB - MIN_DB)));
+  return MUTE_TRAVEL + normalized * (1 - MUTE_TRAVEL);
 }
 
 function dbFromPos(pos: number): number {
-  if (pos <= 0.004) return -Infinity;
-  return MIN_DB + pos * (MAX_DB - MIN_DB);
+  if (pos < MUTE_TRAVEL) return -Infinity;
+  return MIN_DB + (pos - MUTE_TRAVEL) / (1 - MUTE_TRAVEL) * (MAX_DB - MIN_DB);
+}
+
+function activityFromGain(gain: number): number {
+  // The estimated output bars retain their original response independently of fader travel.
+  return Math.max(0, Math.min(1, (gainToDb(gain) + 60) / 66));
 }
 
 function formatDb(db: number): string {
@@ -109,20 +118,30 @@ const PanKnob: React.FC<PanKnobProps> = ({ name, pan, onChangePan }) => {
 };
 
 /* ============================================================================
- * VERTICAL STUDIO FADER + DUAL STEREO METERS (.lt-fx)
+ * VERTICAL STUDIO FADER AND LEVEL METERS (.lt-fx)
  * ============================================================================ */
 
-interface StudioFaderProps {
+type StudioFaderProps = {
   name: string;
   gain: number;
-  levelL: number; // 0..1
-  levelR: number; // 0..1
   onChangeGain: (nextGain: number) => void;
+} & (
+  | { peak: number; levelL?: never; levelR?: never }
+  | { peak?: never; levelL: number; levelR: number }
+);
+
+function peakPosition(dbfs: number): number {
+  return Math.max(0, Math.min(1, (dbfs - PEAK_FLOOR_DBFS) / -PEAK_FLOOR_DBFS));
+}
+
+function meterMask(level: number): string {
+  return `${Math.max(0, Math.min(100, (1 - level) * 100)).toFixed(1)}%`;
 }
 
 const StudioFader: React.FC<StudioFaderProps> = ({
   name,
   gain,
+  peak,
   levelL,
   levelR,
   onChangeGain,
@@ -145,19 +164,18 @@ const StudioFader: React.FC<StudioFaderProps> = ({
     onChangeGain(dbToGain(roundedDb));
   };
 
-  const maskHeightL = `${Math.max(0, Math.min(100, (1 - levelL) * 100)).toFixed(1)}%`;
-  const maskHeightR = `${Math.max(0, Math.min(100, (1 - levelR) * 100)).toFixed(1)}%`;
+  const peakDbfs = peak && Number.isFinite(peak) ? 20 * Math.log10(peak) : -Infinity;
+  const peakLabel = Number.isFinite(peakDbfs) ? `${peakDbfs.toFixed(1)} dBFS` : '−∞ dBFS';
 
   return (
     <>
       <div className="lt-fx">
         <div className="lt-scale" aria-hidden="true">
-          <span>+6</span>
-          <span>0</span>
-          <span>-10</span>
-          <span>-20</span>
-          <span>-40</span>
-          <span>-∞</span>
+          {GAIN_TICKS.map((tick) => (
+            <span key={tick} style={{ bottom: `${posFromDb(tick) * 100}%` }}>
+              {tick > 0 ? `+${tick}` : tick}
+            </span>
+          ))}
         </div>
 
         <div
@@ -183,32 +201,52 @@ const StudioFader: React.FC<StudioFaderProps> = ({
           }}
           onDoubleClick={() => onChangeGain(1.0)} // 0.0 dB
           onKeyDown={(e) => {
-            const currentDb = isFinite(db) ? db : MIN_DB;
             if (e.key === 'ArrowUp') {
               e.preventDefault();
-              onChangeGain(dbToGain(Math.min(MAX_DB, currentDb + 0.5)));
+              onChangeGain(dbToGain(Math.max(MIN_DB, db + 0.5)));
             } else if (e.key === 'ArrowDown') {
               e.preventDefault();
-              onChangeGain(dbToGain(Math.max(MIN_DB, currentDb - 0.5)));
+              onChangeGain(db <= MIN_DB ? 0 : dbToGain(db - 0.5));
             }
           }}
-          title="Arrastra para ajustar dB · Doble clic para 0.0 dB"
+          title="Ganancia de −40 a +10 dB · Hasta abajo para silencio · Doble clic para 0 dB"
         >
           <div className="lt-fill" style={{ height: `${posPct}%` }} />
           <div className="lt-handle" style={{ bottom: `${posPct}%` }} />
         </div>
 
-        <div className="lt-meter" aria-hidden="true">
-          <i />
-          <s style={{ height: maskHeightL }} />
-        </div>
-        <div className="lt-meter" aria-hidden="true">
-          <i />
-          <s style={{ height: maskHeightR }} />
-        </div>
+        {peak !== undefined ? (
+          <>
+            <div className="lt-meter lt-peak-meter" aria-hidden="true">
+              <i />
+              <s style={{ height: meterMask(peakPosition(peakDbfs)) }} />
+            </div>
+            <div className="lt-scale lt-peak-scale" aria-hidden="true">
+              {PEAK_TICKS.map((tick) => (
+                <span key={tick} style={{ bottom: `${peakPosition(tick) * 100}%` }}>{tick}</span>
+              ))}
+            </div>
+          </>
+        ) : (
+          <>
+            <div className="lt-meter" aria-hidden="true">
+              <i />
+              <s style={{ height: meterMask(levelL) }} />
+            </div>
+            <div className="lt-meter" aria-hidden="true">
+              <i />
+              <s style={{ height: meterMask(levelR) }} />
+            </div>
+          </>
+        )}
       </div>
 
       <div className="lt-db">{formatDb(db)}</div>
+      {peak !== undefined && (
+        <div className="lt-peak-readout" title="Pico de muestras del analizador de pista en mono, después de la ganancia y el paneo">
+          Pico {peakLabel}
+        </div>
+      )}
     </>
   );
 };
@@ -283,14 +321,6 @@ export const MultitrackMixer: React.FC<MultitrackMixerProps> = ({
   let maxMainBusLevel = 0;
   let maxCueBusLevel = 0;
 
-  const computeStereoPair = (rms: number, pan: number) => {
-    const leftWeight = pan <= 0 ? 1 : Math.max(0.2, 1 - pan * 0.85);
-    const rightWeight = pan >= 0 ? 1 : Math.max(0.2, 1 + pan * 0.85);
-    const l = Math.min(1, rms * leftWeight);
-    const r = Math.min(1, rms * rightWeight);
-    return { l, r };
-  };
-
   for (const trk of project.tracks) {
     const isAudible = anySolo ? trk.soloed && !trk.muted : !trk.muted;
     const rawRms = isAudible && transport.isPlaying ? meters.tracks[trk.id]?.rms || 0 : 0;
@@ -310,13 +340,13 @@ export const MultitrackMixer: React.FC<MultitrackMixerProps> = ({
     : 0;
   const clickStripLevel =
     transport.isPlaying && project.clickEnabled && !anySolo
-      ? posFromDb(gainToDb(project.clickGain)) *
+      ? activityFromGain(project.clickGain) *
         (transport.currentBeat === 1 ? 0.86 : 0.65) *
         beatDecay
       : 0;
   const guideStripLevel =
     transport.isPlaying && project.guideCuesEnabled && !anySolo
-      ? posFromDb(gainToDb(project.guideGain)) *
+      ? activityFromGain(project.guideGain) *
         (transport.queuedSectionId ? 0.78 : 0.25) *
         beatDecay
       : 0;
@@ -325,10 +355,10 @@ export const MultitrackMixer: React.FC<MultitrackMixerProps> = ({
 
   const cueMasterGain = project.cueMasterGain ?? 0.708; // -3.0 dB default
   const mainBusOutLevel = transport.isPlaying
-    ? Math.min(1, Math.max(maxMainBusLevel, meters.master.rms) * posFromDb(gainToDb(project.masterGain)) * 1.05)
+    ? Math.min(1, Math.max(maxMainBusLevel, meters.master.rms) * activityFromGain(project.masterGain) * 1.05)
     : 0;
   const cueBusOutLevel = transport.isPlaying
-    ? Math.min(1, maxCueBusLevel * posFromDb(gainToDb(cueMasterGain)) * 1.05)
+    ? Math.min(1, maxCueBusLevel * activityFromGain(cueMasterGain) * 1.05)
     : 0;
 
   // Check if user already imported custom tracks named "Click" or "Cues"
@@ -374,11 +404,10 @@ export const MultitrackMixer: React.FC<MultitrackMixerProps> = ({
         <section className="lt-channels" aria-label="Canales">
           {project.tracks.map((track: TrackChannel) => {
             const isDimmed = track.muted || (anySolo && !track.soloed);
-            const rawRms =
+            const peak =
               !isDimmed && transport.isPlaying
-                ? meters.tracks[track.id]?.rms || 0
+                ? meters.tracks[track.id]?.peak ?? 0
                 : 0;
-            const stereo = computeStereoPair(rawRms, track.pan);
             const isCueRoute = track.bus === 'cue-click';
 
             return (
@@ -401,8 +430,7 @@ export const MultitrackMixer: React.FC<MultitrackMixerProps> = ({
                 <StudioFader
                   name={track.name}
                   gain={track.gain}
-                  levelL={stereo.l}
-                  levelR={stereo.r}
+                  peak={peak}
                   onChangeGain={(nextGain) => onChangeTrackGain(track.id, nextGain)}
                 />
 

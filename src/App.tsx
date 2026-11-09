@@ -69,6 +69,10 @@ import {
   StemImporterModal,
 } from './components/LibraryAndModals';
 
+const DesktopRemoteBridge = import.meta.env.VITE_LIBRETRACKS_DESKTOP === '1'
+  ? React.lazy(() => import('../desktop/frontend/RemoteConnectionBridge'))
+  : null;
+
 const INITIAL_TRANSPORT: TransportState = {
   isPlaying: false,
   currentTimeSec: 0,
@@ -131,6 +135,7 @@ export default function App() {
   const [isDockedMixerOpen, setIsDockedMixerOpen] = useState<boolean>(false);
   const [projects, setProjects] = useState<SongProject[]>([]);
   const [currentProject, setCurrentProject] = useState<SongProject | null>(null);
+  const [remoteTriggerHost, setRemoteTriggerHost] = useState<HTMLSpanElement | null>(null);
   const [transport, setTransport] = useState<TransportState>(INITIAL_TRANSPORT);
   const [ramCacheVersion, setRamCacheVersion] = useState<number>(0);
   const [engineMode, setEngineModeState] = useState<AudioEngineMode>(() =>
@@ -713,6 +718,7 @@ export default function App() {
       setCurrentProject((prev) => {
         if (!prev) return null;
         const next = updater(prev);
+        if (next === prev) return prev;
         audioEngine.updateProjectConfig(next);
         saveProjectToDb(next).catch(() => {});
         setProjects((list) => list.map((item) => (item.id === next.id ? next : item)));
@@ -1497,6 +1503,10 @@ export default function App() {
     }
   };
 
+  const transportProject = activeView === 'live' ? null : currentProject;
+  const remoteTriggerRef = DesktopRemoteBridge && window.location.origin === 'https://tauri.localhost'
+    ? setRemoteTriggerHost : undefined;
+
   return (
     <div className="min-h-screen h-dvh flex flex-col bg-studio-ground text-neutral-100 overflow-hidden relative">
       {/* Top Navigation Bar */}
@@ -1506,6 +1516,7 @@ export default function App() {
         engineMode={engineMode}
         ramBudgetMB={ramBudgetMB}
         cachedRamMB={audioEngine.getTotalCachedMB()}
+        remoteTriggerRef={transportProject ? undefined : remoteTriggerRef}
         onChangeEngineMode={handleChangeEngineMode}
         onChangeRamBudgetMB={handleChangeRamBudgetMB}
         onSelectView={handleSelectView}
@@ -1513,10 +1524,11 @@ export default function App() {
       />
 
       {/* Studio Transport Deck (Shown when a song is loaded; the Live page has its own) */}
-      {currentProject && activeView !== 'live' && (
+      {transportProject && (
         <TransportDeck
-          project={currentProject}
+          project={transportProject}
           transport={transport}
+          remoteTriggerRef={remoteTriggerRef}
           setlistQueue={setlistQueue}
           setlistTransitionMode={setlistTransitionMode}
           importStatusText={importStatusText}
@@ -1845,12 +1857,7 @@ export default function App() {
                 project={currentProject}
                 transport={transport}
                 setlistQueue={setlistQueue}
-                onPlayPause={handlePlayPause}
-                onStop={handleStop}
-                onPrevSetlistSong={handlePrevSetlistSong}
-                onNextSetlistSong={() => handleNextSetlistSong(false)}
                 onJumpSection={handleJumpSection}
-                onToggleVamp={handleToggleVamp}
                 onToggleClick={handleToggleClick}
                 onToggleGuide={handleToggleGuide}
                 onChangeQuantize={handleChangeQuantize}
@@ -1869,10 +1876,10 @@ export default function App() {
               <div className="flex-1 flex flex-col items-center justify-center p-5 text-center">
                 <Music className="w-10 h-10 text-studio-ink mb-3 opacity-80" />
                 <h2 className="text-base font-bold text-neutral-100">
-                  Control remoto
+                  Control rápido
                 </h2>
                 <p className="text-xs text-neutral-400 max-w-md mt-1 mb-4">
-                  Abre una canción desde Setlist o Arreglo para controlarla desde aquí.
+                  Abre una canción desde Setlist o Arreglo para acceder a sus secciones y ajustes de mezcla.
                 </p>
                 <button
                   type="button"
@@ -1956,6 +1963,18 @@ export default function App() {
           setOptimizationProgress(null);
         }}
       />
+
+      {DesktopRemoteBridge && remoteTriggerRef && (
+        <React.Suspense fallback={null}>
+          <DesktopRemoteBridge
+            project={currentProject}
+            setlist={setlistQueue}
+            activationCount={activationCountRef}
+            updateProject={updateCurrentProject}
+            triggerHost={remoteTriggerHost}
+          />
+        </React.Suspense>
+      )}
 
       {/* Non-intrusive Action Feedback Toast */}
       {toastMessage && (

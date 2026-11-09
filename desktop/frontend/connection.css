@@ -1,0 +1,54 @@
+
+.lt-control.lt-remote-trigger {
+  gap: 6px;
+  border: 1px solid #a45c27;
+  background: #3a2518;
+  color: #ffb577;
+}
+.lt-control.lt-remote-trigger:hover:not(:disabled) { background: #56311b; }
+.lt-control.lt-remote-trigger[data-active="true"] {
+  border-color: #ffad68;
+  background: #ffad68;
+  color: #281608;
+}
+.lt-control.lt-remote-trigger[data-active="true"]:hover:not(:disabled) { background: #ffc095; }
+@media (max-width: 1100px) {
+  .lt-control.lt-remote-trigger { width: 36px; padding-inline: 0; }
+  .lt-remote-trigger > span { display: none; }
+}
+.lt-remote-dialog {
+  position: fixed;
+  inset: 0;
+  width: min(600px, calc(100% - 24px));
+  max-height: calc(100dvh - 24px);
+  margin: auto;
+  padding: 20px;
+  color: var(--lt-text);
+  background: var(--lt-panel);
+  border: 1px solid var(--lt-line);
+  border-radius: 12px;
+  overflow: auto;
+}
+.lt-remote-dialog::backdrop { background: #000a; }
+.lt-remote-dialog h2 { font-size: 20px; font-weight: 600; }
+.lt-remote-dialog h3 { font-size: 15px; font-weight: 600; }
+.lt-remote-dialog p { color: var(--lt-mut); font-size: 14px; margin-block: 8px; }
+.lt-remote-dialog header, .lt-remote-dialog li {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+.lt-remote-options { display: flex; align-items: end; flex-wrap: wrap; gap: 10px; margin-block: 16px; }
+.lt-remote-options label { flex: 1 1 220px; }
+.lt-remote-dialog .lt-remote-android-notice {
+  margin-block: 0 16px;
+  padding-inline-start: 10px;
+  border-inline-start: 2px solid #e5bc75;
+  line-height: 1.45;
+}
+.lt-remote-android-notice strong { color: var(--lt-text); }
+.lt-remote-pairings { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr)); gap: 16px; margin-bottom: 16px; }
+.lt-remote-pairings section { display: grid; justify-items: start; gap: 8px; }
+.lt-remote-pairings input { width: 100%; min-width: 0; border: 1px solid var(--lt-line); padding: 6px; font-size: 12px; }
+.lt-remote-dialog li { padding-block: 8px; border-bottom: 1px solid var(--lt-line); font-size: 13px; }
