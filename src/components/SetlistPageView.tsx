@@ -244,11 +244,10 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
 
   return (
     <section className="lt-setlist flex-1 flex flex-col overflow-y-auto min-w-0" aria-labelledby="setlist-title">
-      <header className="lt-setlist-heading shrink-0">
-        <div className="min-w-0">
-          {project && <p className="lt-setlist-kicker">Setlist</p>}
-          <h1 id="setlist-title" className="lt-setlist-song-title">{project?.title || 'Setlist'}</h1>
-          {project && (
+      {project && (
+        <header className="lt-setlist-heading shrink-0">
+          <div className="min-w-0">
+            <h1 id="setlist-title" className="lt-setlist-song-title">{project.title}</h1>
             <div className="lt-setlist-meta">
               <span>{project.keySignature}</span>
               <span>{project.bpm} BPM</span>
@@ -258,14 +257,12 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
                 </span>
               )}
             </div>
-          )}
-        </div>
-        {project && (
+          </div>
           <button type="button" onClick={() => setIsFloatingMixerOpen(true)} className="lt-control">
             <Sliders size={16} /> Mezcla
           </button>
-        )}
-      </header>
+        </header>
+      )}
       {project ? (
         <div className="lt-waveform relative shrink-0 overflow-hidden">
           <canvas
@@ -292,7 +289,7 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
       ) : (
         <div className="lt-empty shrink-0">
           <Music size={24} className="text-neutral-400" aria-hidden="true" />
-          <h2>{setlistQueue.length ? 'Elige una canción' : 'Prepara tu setlist'}</h2>
+          <h1 id="setlist-title">{setlistQueue.length ? 'Elige una canción' : 'Prepara tu setlist'}</h1>
           <p>Importa las pistas de una canción o añade una desde tu repertorio para empezar.</p>
           <button type="button" popoverTarget="setlist-add" className="lt-primary"><Plus size={16} /> Añadir canción</button>
         </div>
