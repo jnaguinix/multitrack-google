@@ -1,0 +1,70 @@
+# LibreTracks Desktop PoC
+
+Windows x64, Tauri v2 y WebView2 Evergreen. El ejecutable incrusta el build de escritorio y mantiene su perfil en el origen https://tauri.localhost. El modo web conserva su build habitual. La instalación de herramientas y la primera compilación requieren Internet. Para usar el ejecutable hacen falta WebView2 ya instalado y los archivos locales del repertorio.
+
+## Compilar en Windows
+
+Se necesita PowerShell, Node.js 24 x64, Git, Rust estable MSVC y la carga de trabajo de C++ de Visual Studio Build Tools. Si faltan los Build Tools, ejecutar este comando en PowerShell con permisos de administrador.
+
+~~~powershell
+winget install --id Microsoft.VisualStudio.2022.BuildTools -e --source winget --accept-source-agreements --accept-package-agreements --override "--quiet --wait --norestart --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"
+~~~
+
+Instalar Rust con el instalador oficial y abrir una terminal nueva. [Rustup](https://rust-lang.org/tools/install/)
+
+Si Windows no tiene WebView2, descargar el **Evergreen Standalone Installer x64** en un equipo con Internet y copiarlo al portátil. Instalarlo antes de abrir el PoC, incluso si el portátil ya está sin Internet. [WebView2](https://developer.microsoft.com/microsoft-edge/webview2/#download-section)
+
+~~~powershell
+.\MicrosoftEdgeWebView2RuntimeInstallerX64.exe /silent /install
+~~~
+
+Ejecutar estos comandos desde la raíz del repositorio.
+
+~~~powershell
+git switch poc/tauri-desktop
+rustup toolchain install stable-x86_64-pc-windows-msvc --profile minimal
+rustup override set stable-x86_64-pc-windows-msvc
+npm.cmd install --legacy-peer-deps --no-package-lock
+npm.cmd ci --prefix desktop
+npm.cmd run lint
+npm.cmd run build
+npm.cmd --prefix desktop run build
+.\desktop\src-tauri\target\x86_64-pc-windows-msvc\release\libretracks-desktop.exe
+~~~
+
+El primer build produce dist/. El comando de escritorio usa el hook build-frontend.ps1 para producir desktop/dist/ y la CLI ejecuta tauri build --no-bundle. Los lockfiles de desktop fijan la CLI y las dependencias de Cargo. En esta rama se verifican las capacidades de Tauri y el esquema local con la [referencia de configuración](https://v2.tauri.app/reference/config/), [capabilities](https://v2.tauri.app/security/capabilities/) e [IPC](https://v2.tauri.app/develop/calling-rust/). La app usa el runtime instalado y no incluye el instalador, la firma ni el [updater](https://v2.tauri.app/plugin/updater/).
+
+Para guardar el log, ejecutar el mismo .exe desde PowerShell.
+
+~~~powershell
+.\desktop\src-tauri\target\x86_64-pc-windows-msvc\release\libretracks-desktop.exe 2>&1 | Tee-Object -FilePath .\desktop-lan.log
+~~~
+
+## Conectar los teléfonos
+
+1. Importar y preparar las pistas locales en LibreTracks. Abrir **Conexión remota**, elegir la IPv4 privada del Wi-Fi o Ethernet del portátil y activar el servidor. Usa el puerto TCP 8765 en esa interfaz. Si cambia la IP, apagar el servidor y volver a elegir la interfaz.
+2. Escanear **Músicos** para el monitor o **Sonidista** para volumen y mute. Los móviles usan el navegador de la misma LAN. Si la red tiene aislamiento entre clientes Wi-Fi o el firewall bloquea la entrada, el QR no será accesible desde otro dispositivo.
+3. **Expulsar** revoca la sesión del dispositivo y descarta los comandos que sigan en la cola. Un ajuste que ya llegó al reproductor puede terminar de aplicarse. Quien conserve un QR vigente puede volver a emparejarse al escanearlo. Apagar y encender regenera ambos QR y termina todas las sesiones. Los enlaces y cookies funcionan por HTTP en la LAN. Compartir el QR de sonidista solo con su operador.
+
+El servidor admite 16 sesiones por activación. El control remoto acepta únicamente pistas del proyecto actual y ganancias 0–1. Los ajustes locales pueden superar 1.0 como en el reproductor web. El teléfono envía la ganancia al soltar el control y muestra el estado confirmado por el portátil. El log de Rust incluye resultado y milisegundos hasta el acuse del estado aplicado, incluyendo el siguiente intercambio IPC. Esa cifra no mide la latencia hasta el altavoz.
+
+## Pruebas reproducibles
+
+~~~powershell
+cargo test --locked --release --target x86_64-pc-windows-msvc --manifest-path desktop/src-tauri/Cargo.toml --no-default-features
+~~~
+
+Las pruebas usan sockets TCP de loopback, sin WebView ni dispositivos físicos. Para comparar Chrome, servir el build web local con este comando.
+
+~~~powershell
+npm.cmd run preview -- --host 127.0.0.1 --strictPort
+~~~
+
+1. Registrar versión de Windows, Chrome y WebView2, RAM, CPU, interfaz de audio, sample rate, modo Buffer/Streaming y presupuesto de caché. En DevTools de escritorio, pegar desktop/test/probe-runtime.js para probar escritura y lectura de IndexedDB y OPFS en Worker. Registrar el resultado. Que un selector exista en JavaScript no confirma que abra o que sus permisos persistan.
+2. En cada perfil, abrir los selectores reales de **archivos** y **carpeta**, seleccionar el mismo material y reproducir. Si falla un selector con handles, comprobar si la importación clásica recupera el flujo. Cerrar y reabrir, volver a seleccionar la canción y confirmar biblioteca, permisos y caché. En streaming, ejecutar window.__streamStats() al inicio y al final y registrar el modo efectivo, los underruns y la actividad de lectura. Verificar el salto de sección cuantizado con reproducción activa.
+3. Usar el mismo material de 20 pistas, 15 min y seis canciones en Chrome, Tauri apagado y Tauri con 3–5 teléfonos. Mantener el modo y el ruteo iguales. Registrar CPU y RAM del árbol de procesos por intervalos de 5 s, RAM inicial y final, glitches audibles o grabados, y tiempo desde la transición hasta el primer sonido de la siguiente canción ya preparada. Para el tiempo al sonido, grabar la salida de la interfaz y anotar el disparo en la misma captura.
+4. Elegir en Windows la interfaz que usará el reproductor. En **Ajustes de reproducción**, activar **Split-Mono** y comprobar ambos canales con la interfaz real. El ruteo previsto es click/guía por L y música por R. El dispositivo se elige en Windows porque el reproductor actual usa la salida por defecto.
+5. Repetir el arranque con WAN desconectada y LAN activa. Abrir la app, recuperar el Setlist y reproducir con QR. Durante la canción desconectar WAN, Wi‑Fi y un teléfono en pruebas separadas, y luego reiniciar el router. Anotar si el audio continúa, qué ve cada cliente y si la sesión se recupera. Probar el acceso entrante con la red en perfil Público y Privado según la política del equipo. No desactivar el firewall. Si se necesita una regla temporal, usar solo el ejecutable, el puerto 8765, la subred local y el perfil Privado, con autorización del administrador. [Reglas de Firewall de Windows](https://learn.microsoft.com/en-us/windows/security/operating-system-security/network-security/windows-firewall/rules)
+6. Con un perfil Tauri nuevo, abrir Biblioteca y compararla con el navegador de Netlify. Probar la importación de un .libretracks.json conocido. El JSON contiene metadatos, pistas descritas, mezcla y secciones. Los blobs, handles y archivos PCM viven aparte y no viajan en ese JSON. Registrar cuánto trabajo hace falta para recuperar la canción y el Setlist.
+
+Para el diagnóstico se conserva DevTools en el ejecutable de PoC. No hay un puerto de depuración activado por la aplicación. La decisión de plataforma se toma con la matriz de INFORME_POC.md y las mediciones del equipo real.

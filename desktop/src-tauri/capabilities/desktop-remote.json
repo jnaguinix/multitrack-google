@@ -1,0 +1,12 @@
+{
+  "identifier": "desktop-remote",
+  "description": "Control local del servidor LAN del PoC",
+  "windows": ["main"],
+  "permissions": [
+    "allow-remote-status",
+    "allow-remote-start",
+    "allow-remote-stop",
+    "allow-remote-kick",
+    "allow-remote-exchange"
+  ]
+}

@@ -69,6 +69,10 @@ import {
   StemImporterModal,
 } from './components/LibraryAndModals';
 
+const DesktopRemoteBridge = import.meta.env.VITE_LIBRETRACKS_DESKTOP === '1'
+  ? React.lazy(() => import('../desktop/frontend/RemoteConnectionBridge'))
+  : null;
+
 const INITIAL_TRANSPORT: TransportState = {
   isPlaying: false,
   currentTimeSec: 0,
@@ -713,6 +717,7 @@ export default function App() {
       setCurrentProject((prev) => {
         if (!prev) return null;
         const next = updater(prev);
+        if (next === prev) return prev;
         audioEngine.updateProjectConfig(next);
         saveProjectToDb(next).catch(() => {});
         setProjects((list) => list.map((item) => (item.id === next.id ? next : item)));
@@ -1956,6 +1961,17 @@ export default function App() {
           setOptimizationProgress(null);
         }}
       />
+
+      {DesktopRemoteBridge && window.location.origin === 'https://tauri.localhost' && (
+        <React.Suspense fallback={null}>
+          <DesktopRemoteBridge
+            project={currentProject}
+            setlist={setlistQueue}
+            activationCount={activationCountRef}
+            updateProject={updateCurrentProject}
+          />
+        </React.Suspense>
+      )}
 
       {/* Non-intrusive Action Feedback Toast */}
       {toastMessage && (

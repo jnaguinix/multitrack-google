@@ -1,0 +1,36 @@
+[package]
+name = "libretracks-desktop"
+version = "0.1.0"
+edition = "2021"
+
+[features]
+default = ["shell"]
+shell = ["dep:tauri", "dep:tauri-build", "dep:if-addrs", "dep:qrcode"]
+custom-protocol = ["tauri/custom-protocol"]
+
+[[bin]]
+name = "libretracks-desktop"
+path = "src/main.rs"
+required-features = ["shell"]
+
+[build-dependencies]
+tauri-build = { version = "2", optional = true , features = [] }
+
+[dependencies]
+axum = { version = "0.8", features = ["ws"] }
+base64 = "0.22"
+getrandom = "0.4"
+if-addrs = { version = "0.15", optional = true }
+qrcode = { version = "0.14", default-features = false, features = ["svg"], optional = true }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+subtle = "2"
+tauri = { version = "2", features = ["devtools"], optional = true }
+tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "sync", "time"] }
+tokio-util = "0.7"
+tracing = "0.1"
+tracing-subscriber = "0.3"
+
+[dev-dependencies]
+futures-util = "0.3"
+tokio-tungstenite = "0.29"

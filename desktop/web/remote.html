@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LibreTracks remoto</title>
+  <link rel="stylesheet" href="/remote.css">
+  <script defer src="/remote.js"></script>
+</head>
+<body>
+  <main>
+    <header>
+      <p>LibreTracks</p>
+      <h1 id="title">Conexión remota</h1>
+      <p id="connection" role="status">Conectando…</p>
+    </header>
+    <section aria-labelledby="song" id="performance" hidden>
+      <h2 id="song">Sin canción</h2>
+      <p id="details"></p>
+      <progress id="progress" aria-label="Progreso de la canción" value="0" max="1"></progress>
+      <p id="time">00:00 / 00:00</p>
+      <dl>
+        <dt>Compás y pulso</dt><dd id="bar">—</dd>
+        <dt>Próxima canción</dt><dd id="next-song">—</dd>
+        <dt>Sección actual</dt><dd id="section">—</dd>
+        <dt>Próxima sección</dt><dd id="next-section">—</dd>
+        <dt>Salto programado</dt><dd id="jump">—</dd>
+      </dl>
+    </section>
+    <section id="mix" aria-labelledby="mix-title" hidden>
+      <h2 id="mix-title">Pistas</h2>
+      <p id="notice" role="status"></p>
+      <div id="tracks"></div>
+    </section>
+    <section id="queue" aria-labelledby="queue-title" hidden>
+      <h2 id="queue-title">Setlist</h2>
+      <ol id="songs"></ol>
+    </section>
+  </main>
+</body>
+</html>
