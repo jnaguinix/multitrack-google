@@ -9,6 +9,7 @@ import {
   TrackMeterReading,
   TransportState,
 } from '../types/project';
+import { isEffectivelyMono } from './monoDetect';
 import { extractStemArrayBuffer, loadProjectStemsFromDb } from '../storage/projectDb';
 import { extractWaveformPeaks } from './demoSynthesizer';
 import { pcmReaderClient } from './pcmReaderClient';
@@ -712,17 +713,13 @@ export class LibreTracksAudioEngine {
     let out = buf;
     if (buf.numberOfChannels === 2) {
       const l = buf.getChannelData(0);
-      const r = buf.getChannelData(1);
-      let same = true;
-      for (let i = 0; i < l.length; i++) {
-        if (Math.abs(l[i] - r[i]) > 1e-4) {
-          same = false;
-          break;
-        }
-      }
-      if (same) {
+      if (isEffectivelyMono(l, buf.getChannelData(1))) {
+        // Keep the average of L and R so nothing audible is lost
+        const r = buf.getChannelData(1);
         const mono = this.ensureContext().createBuffer(1, buf.length, buf.sampleRate);
-        mono.copyToChannel(l, 0);
+        const m = new Float32Array(buf.length);
+        for (let i = 0; i < m.length; i++) m[i] = (l[i] + r[i]) * 0.5;
+        mono.copyToChannel(m, 0);
         out = mono;
       }
     }

@@ -5,6 +5,7 @@
 
 import { SongProject, TrackChannel } from '../types/project';
 import { pcmReaderClient } from '../audio/pcmReaderClient';
+import { isEffectivelyMono } from '../audio/monoDetect';
 
 const OPFS_ROOT_DIR = 'pcm';
 
@@ -105,16 +106,6 @@ export function calculateTrackPcmBytes(frames: number, channels: number = 2): nu
   return frames * (channels === 1 ? 2 : 4);
 }
 
-/**
- * Returns true when L and R are (almost) identical, i.e. a "dual-mono" stereo file.
- */
-function isDualMono(left: Float32Array, right: Float32Array, threshold = 1e-4): boolean {
-  if (left.length !== right.length) return false;
-  for (let i = 0; i < left.length; i++) {
-    if (Math.abs(left[i] - right[i]) > threshold) return false;
-  }
-  return true;
-}
 
 /**
  * Calculates estimated PCM size for an entire project in bytes
@@ -171,7 +162,7 @@ export async function writeTrackPcmFromAudioBuffer(
 
   const leftChannel = audioBuffer.getChannelData(0);
   const rightChannel = numChannels > 1 ? audioBuffer.getChannelData(1) : leftChannel;
-  const outChannels: 1 | 2 = numChannels > 1 && !isDualMono(leftChannel, rightChannel) ? 2 : 1;
+  const outChannels: 1 | 2 = numChannels > 1 && !isEffectivelyMono(leftChannel, rightChannel) ? 2 : 1;
   const bytesPerFrame = outChannels * 2;
 
   // Process and write in 1M frame chunks (4 MB per write) to minimize IPC overhead
@@ -193,7 +184,12 @@ export async function writeTrackPcmFromAudioBuffer(
       let outIdx = 0;
       for (let i = offset; i < end; i++) {
         // Clamp & quantize Left channel
-        const l = Math.max(-1.0, Math.min(1.0, leftChannel[i] || 0));
+        // Mono output from a stereo source keeps the average of L and R
+        const src =
+          outChannels === 1 && numChannels > 1
+            ? ((leftChannel[i] || 0) + (rightChannel[i] || 0)) * 0.5
+            : leftChannel[i] || 0;
+        const l = Math.max(-1.0, Math.min(1.0, src));
         int16View[outIdx++] = l < 0 ? Math.round(l * 0x8000) : Math.round(l * 0x7fff);
 
         if (outChannels === 2) {
