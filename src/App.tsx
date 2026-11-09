@@ -1218,6 +1218,7 @@ export default function App() {
           onToggleSplitRouting={handleToggleSplitRouting}
           onAddMarkerAtPlayhead={handleAddMarkerAtPlayhead}
           onOpenSectionEditor={() => setIsSectionEditorOpen(true)}
+          onCancelQueuedJump={handleCancelQueuedJump}
         />
       )}
 

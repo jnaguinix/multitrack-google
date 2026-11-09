@@ -1,77 +1,94 @@
-# Importación Instantánea en Milisegundos (Estilo Escritorio / REAPER)
+# Diseño de Estudio Ultra-Compacto para Laptops (Viewport 720p / 768p)
 
-Este plan elimina el cuello de botella que hacía tardar 1 minuto por stem (10 minutos por carpeta) al importar, logrando que las carpetas y stems individuales (tanto WAV como MP3/M4A) se monten en la consola en **milisegundos** sin duplicar ni recodificar archivos en disco.
+Este plan rediseña la distribución espacial y densidad visual de LibreTracks para pantallas pequeñas de laptop (`1280×720` y `1366×768`), eliminando barras duplicadas y compactando controles para que **el Transporte, el Setlist, la Forma de Onda Maestra y el Mixer completo entren simultáneamente en pantalla sin recortarse**.
 
 ## User Review & Critical Decisions
 
 > [!IMPORTANT]
-> **Diagnóstico de la lentitud actual (por qué tardaba 10 minutos):**
-> Actualmente, al importar cada archivo, la aplicación decodifica toda la pista y ejecuta `writeTrackPcmFromAudioBuffer()`, que convierte millones de muestras en el hilo principal y realiza **más de 260 escrituras IPC secuenciales en disco (`await writable.write()`) por pista** para crear una copia `.pcm` de ~70 MB por stem (~700 MB por canción) antes de mostrar la canción.
+> **Presupuesto vertical en pantallas de laptop (~640px – 720px de alto útil en navegador):**
+> Actualmente la interfaz suma **~970px de altura vertical** debido a barras de control duplicadas entre el Transporte y el Setlist, tarjetas de canción muy altas y encabezados repetidos, dejando el Mixer cortado fuera de la pantalla. Con la nueva arquitectura compacta, la altura total requerida baja a **~520px**, permitiendo ver y operar toda la consola de un vistazo.
 
-- **Decisión Confirmada 1 — Lectura directa sin copia a OPFS al importar**: Se elimina por completo la escritura/conversión a archivos `.pcm` en OPFS durante la importación. Los archivos seleccionados (`File` / `Blob`) ya son punteros directos al disco local del usuario.
-- **Decisión Confirmada 2 — Soporte híbrido instantáneo para WAV y MP3/M4A**:
-  - **Montaje en consola en < 50 ms**: Al seleccionar o soltar una carpeta o stem, la canción y todas sus pistas aparecen en el Setlist, Mixer y Arranger de forma inmediata (< 50 ms).
-  - **Inspección rápida de cabeceras WAV (< 1 ms)**: Para archivos WAV, se leen únicamente los primeros 4 KB (`file.slice(0, 4096)`) para obtener duración exacta, frecuencia de muestreo y canales en menos de 1 milisegundo.
-  - **Decodificación nativa C++ paralela en segundo plano (sin bloqueo)**: El motor de Web Audio prepara los buffers de reproducción en hilos nativos del navegador en paralelo (~0.5 a 1.5 segundos para una carpeta de 183 MB) mientras la interfaz ya está activa y lista para reproducir.
+- **Decisión Confirmada 1 — Barra Superior y Transporte Unificados (Sin Duplicados)**:
+  - Se elimina la segunda barra de controles repetida dentro de la vista Setlist (`MODO VAMP`, `SALTO DE MARCA`, `TRANSICIÓN DE CANCIÓN`, `TRANSPOSICIÓN DE REGIÓN`, `TEMPO`), dejando todos los controles unificados en una única barra de transporte horizontal ultra-compacta de una sola línea (`40px` de alto).
+- **Decisión Confirmada 2 — Prioridad Total al Mixer y Pistas en Pantalla**:
+  - Se compactan las tarjetas del Setlist (de `108px` a `48px` de alto en formato horizontal), la forma de onda maestra (de `192px` a `80px` de alto) y los canales del Mixer (`74px` de ancho × `265px` de alto total), logrando que **hasta 12 canales + 2 buses maestros se vean completos de arriba a abajo y de izquierda a derecha** en una laptop estándar.
 
 ---
 
 ## 1. Overview & Core Concept
 
-- **Qué hace**: Permite abrir carpetas completas de multitracks (10–20 stems en WAV, MP3 o M4A) o stems sueltos en milisegundos, igual que un DAW de escritorio instalado (REAPER / Ableton Live).
-- **Flujo de trabajo en vivo**: El director musical arrastra una carpeta o la elige desde el selector; la canción aparece montada al instante con su título, BPM detectado, ruteo automático (Click/Guide a Cue, instrumentos a Main) y faders listos.
-- **Valor clave**: Cero esperas de conversión en disco, cero congelamientos de interfaz y uso directo de los archivos originales sin duplicar gigabytes en almacenamiento interno.
+- **Qué soluciona**: En laptops de escenario (`13"` a `15"` con resoluciones `1366×768` o escalado de Windows al 125%–150%), los menús ocupaban el 75% de la pantalla y ocultaban los faders del Mixer y las pistas del Arranger.
+- **Resultado para el músico en vivo**: Visibilidad total en una sola pantalla (Zero-Scroll vertical en vista Setlist) con controles claros, tipografía legible (`tabular-nums`) y cero botones repetidos.
 
 ---
 
 ## 2. User Experience & Visual Design
 
-- **Flujo de Importación Instantánea**:
-  1. El usuario selecciona o suelta una carpeta de stems o un archivo individual.
-  2. En **menos de 50 ms**, el modal se cierra y la canción queda activa en el Setlist y en el Mixer con todas sus pistas visibles y nombradas.
-  3. Un indicador ligero no bloqueante en la barra de transporte muestra el montaje rápido de formas de onda en paralelo (que finaliza en ~1 segundo sin detener ni bloquear la app).
-- **Identidad Visual y Estética**:
-  - Mantiene intacta la interfaz oscura de estudio (`#0B0F17` / `#111827`) con acentos cian (`#06B6D4`) y esmeralda (`#10B981`), medidores a 20 fps y controles táctiles de alta precisión.
+### Distribución Vertical Exacta (Presupuesto de ~520px de alto total)
+
+```
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ 1. TOP BAR COMPACTA (36px)                                                   │
+│ LibreTracks │ Setlist(1) · Arranger · Mixer · Remote · Biblio │ Buffer/RAM/+ │
+├──────────────────────────────────────────────────────────────────────────────┤
+│ 2. TRANSPORTE UNIFICADO EN 1 FILA (40px) — Cero controles duplicados         │
+│ Canción · 1/1 [▶ Play][■][Vamp] │ 00:00.0/08:00 ▮▮▮▮ │ Salto·BPM·Tono·Click  │
+├───────────────┬──────────────────────────────────────────────────────────────┤
+│ 3. REPERTORIO │ 4. CINTA HORIZONTAL DE SETLIST (56px)                        │
+│ LATERAL       │ [ 1. Dios el más grande (RAM · Opt) ▶ ••• ] → [ + Canción ]  │
+│ COMPACTO      ├──────────────────────────────────────────────────────────────┤
+│ (200px ancho  │ 5. FORMA DE ONDA MAESTRA + SECCIONES (80px)                  │
+│  o plegado    │ ▂▃▅▇█▇▆▅▃▂▁▂▄▆█▇▅▃ [Intro] [Verso] [Coro]     [+Marcar][Edit]│
+│  a 32px)      ├──────────────────────────────────────────────────────────────┤
+│               │ 6. BARRA DE PISTAS Y MEZCLA (28px)                           │
+│ • Buscador    │ Pistas (10) · Compás 001 Listo  [+ Audio] [Filtrar] [0.0 dB] │
+│ • [+Stems][📁]├──────────────────────────────────────────────────────────────┤
+│ • Lista de    │ 7. CONSOLA MIXER COMPLETA EN PANTALLA (275px)                │
+│   canciones   │ ┌─────┐ ┌─────┐ ┌─────┐ ┌─────┐ ┌─────┐ ┌─────┐ ║ ┌────────┐ │
+│   compacta    │ │BASS │ │CLICK│ │CUES │ │DRUMS│ │EG 1 │ │KEYS │ ║ │Main L/R│ │
+│               │ │ (○) │ │ (○) │ │ (○) │ │ (○) │ │ (○) │ │ (○) │ ║ │  ║  ║  │ │
+│               │ │ ║ ║ │ │ ║ ║ │ │ ║ ║ │ │ ║ ║ │ │ ║ ║ │ │ ║ ║ │ ║ │  ╠══╣  │ │
+│               │ │[M|S]│ │[M|S]│ │[M|S]│ │[M|S]│ │[M|S]│ │[M|S]│ ║ │ 0.0 dB │ │
+│               │ │Main │ │ Cue │ │ Cue │ │Main │ │Main │ │Main │ ║ └────────┘ │
+│               │ └─────┘ └─────┘ └─────┘ └─────┘ └─────┘ └─────┘ ║            │
+└───────────────┴──────────────────────────────────────────────────────────────┘
+```
+
+### Mejoras Clave por Zona
+1. **TopBar (`36px`)**:
+   - Etiquetas de navegación concisas en una línea (`Setlist`, `Arranger`, `Mixer`, `Remote`, `Biblioteca`).
+   - Selector `Buffer / Stream`, presupuesto `RAM` y botón `+ Importar` compactados con menor padding horizontal.
+2. **Transporte Unificado de 1 Sola Fila (`40px`)**:
+   - Agrupa en una sola línea horizontal: Título/Tonalidad, navegación de Setlist (`1/1` + selector de transición), botones `Play / Stop / Vamp`, reloj digital `00:00.0 / 08:00` con indicador de pulso y sección activa, cuantización de salto (`Inmed. / 1 Comp. / Fin Sec.`), `BPM`, `Tono (st)`, `Click`, `Cues` y `Stereo / Split`.
+3. **Vista Setlist sin Controles Repetidos**:
+   - Se elimina la fila redundante de cajas (`MODO VAMP`, `SALTO DE MARCA`, `TRANSICIÓN`, `TRANSPOSICIÓN`, `TEMPO`).
+   - Las tarjetas de canciones del Setlist pasan a un diseño horizontal compacto (`48px` de alto) que muestra número, título, BPM, duración, estado en RAM, botón `Opt` y Play directo sin desperdiciar espacio vertical.
+   - La forma de onda maestra se ajusta a `80px` de alto con marcadores de sección superpuestos y botones rápidos `+ Marcar` y `Editar` integrados en sus esquinas.
+4. **Consola Mixer Compacta (100% visible sin cortar)**:
+   - Se fusiona el encabezado del Mixer (`Compás 001 · Listo` y `Restablecer 0 dB`) dentro de la barra de `Pistas (10)` de `28px`, ahorrando `48px` verticales.
+   - Cada canal del Mixer acoplado reduce su ancho a `74px` y la altura del fader a `145px` (con perilla de paneo de `28px`, lectura en dB y botones `M / S` y `Bus` de `22px`), permitiendo ver todos los canales completos de arriba a abajo en cualquier laptop.
+5. **Vista Arranger (DAW) de Alta Densidad**:
+   - Se eliminan los banners de texto explicativo superior e inferior que restaban espacio.
+   - Cada pista horizontal reduce su altura a `42px` con controles en una sola línea (`Nombre`, `M`, `S`, fader horizontal de volumen, `dB`, selector `Main/Cue` y borrar), permitiendo ver **10 a 12 pistas completas al mismo tiempo** sin hacer scroll.
+6. **Barra Lateral de Repertorio Esbelta (`200px`)**:
+   - Se elimina el cuadro de texto instructivo fijo y se compactan el buscador, los botones `+ Stems / Carpeta` y las filas de canciones para dejar más ancho útil al Mixer y al Arranger.
 
 ---
 
 ## 3. Key Product Decisions & Trade-Offs
 
-- **Decisión 1: Eliminar la generación de archivos `.pcm` en OPFS durante la importación**
-  - *Enfoque elegido*: Guardar únicamente la referencia nativa del `File` (`Blob`) en IndexedDB (operación de puntero que toma milisegundos) y decodificar en memoria con los hilos nativos C++ del navegador (`Promise.all` controlado por lotes en paralelo).
-  - *Por qué*:Escribir 700 MB de PCM crudo mediante `FileSystemWritableFileStream` en el hilo principal bloquea el navegador durante minutos. Sin esa copia a OPFS, importar y activar una carpeta de 183 MB pasa de 10 minutos a ~1 segundo total (con aparición en UI en < 50 ms).
-- **Decisión 2: Lectura instantánea de cabecera WAV + Streaming directo**
-  - *Enfoque elegido*: Analizar los primeros 44–4096 bytes de cualquier archivo `.wav` mediante `file.slice(0, 4096)` para conocer su duración exacta en < 1 ms y calcular picos rápidos sin esperar a decodificar todo el archivo. Para MP3/M4A, usar la decodificación nativa multihilo de Web Audio.
-  - *Por qué*: Garantiza respuesta inmediata estilo aplicación de escritorio tanto para stems WAV sin comprimir como para stems comprimidos (MP3/M4A).
+- **Decisión 1: Consolidación de Controles en una Única Barra de Transporte**
+  - *Enfoque elegido*: Mantener el 100% de las funciones (Vamp, Salto cuantizado, Transición de canción, Pitch, BPM, Click, Cues, Split L/R, Marcar sección) en una única barra superior de `40px` y eliminar su duplicación dentro del cuerpo del Setlist y del Arranger.
+  - *Por qué*: Gana más de `120px` de altura vertical inmediata y evita confusión visual al tener el mismo control dos veces en pantalla.
+- **Decisión 2: Escala Proporcional de Canales del Mixer y Pistas del Arranger**
+  - *Enfoque elegido*: Reducir la altura del recorrido del fader acoplado de `184px` a `142px` y el ancho de cada canal de `86px` a `74px`, conservando la precisión de arrastre en dB y los medidores estéreo L/R a 20 fps.
+  - *Por qué*: Permite que en una pantalla de `1366×768` quepan hasta 12 canales más los 2 buses maestros en horizontal y el canal completo de principio a fin en vertical.
 
 ---
 
 ## 4. Technical Architecture & Data Strategy
 
-```
-┌─────────────────────────────────────────────────────────────────────────┐
-│             SELECCIÓN DE CARPETA O DRAG & DROP (WAV / MP3 / M4A)        │
-└────────────────────────────────────┬────────────────────────────────────┘
-                                     │ (< 10 ms)
-                                     ▼
-┌─────────────────────────────────────────────────────────────────────────┐
-│ 1. REGISTRO INSTANTÁNEO (ZERO-COPY)                                     │
-│  • Inferencia de Título, BPM, Tonalidad y Roles (Click, Guide, Drums…)  │
-│  • Lectura rápida de cabecera WAV (file.slice 4 KB -> < 1 ms)           │
-│  • Montaje inmediato de la canción y canales en UI (Setlist + Mixer)    │
-│  • Guardado de punteros Blob nativos en IndexedDB sin copiar bytes      │
-└────────────────────────────────────┬────────────────────────────────────┘
-                                     │ (En paralelo, sin bloquear UI)
-                                     ▼
-┌─────────────────────────────────────────────────────────────────────────┐
-│ 2. MOTOR DE AUDIO MULTIHILO (WEB AUDIO NATIVE C++ THREADS)              │
-│  • Decodificación paralela por lotes (4 pistas simultáneas en C++)      │
-│  • Inyección directa de cada pista al grafo activo conforme termina     │
-│  • Actualización progresiva de formas de onda (peaks) en tiempo real    │
-└─────────────────────────────────────────────────────────────────────────┘
-```
-
-### Mapeo de Interacción y Estado
-1. **Creación inmediata del proyecto**: Al recibir los archivos validados, se construye el objeto `SongProject` con todas sus pistas y se activa en el estado de la aplicación antes de iniciar la decodificación pesada.
-2. **Montaje progresivo en vivo**: A medida que cada stem se decodifica en paralelo (en cuestión de milisegundos por pista al no escribir en OPFS), se monta directamente en el motor de audio (`mountDecodedTrack`) y actualiza su forma de onda y duración real en la consola.
-3. **Añadir stem individual a canción activa**: Monta el canal al instante en el Mixer/Arranger y vincula su buffer de audio en cuanto finaliza su decodificación nativa (< 150 ms para un stem).
+- **Cero cambios en el motor de audio**: Toda la lógica de Web Audio API, OPFS, caché RAM, Workers, saltos cuantizados, vamp y BroadcastChannel permanece intacta.
+- **Mapeo de Estado y Controles**:
+  - La barra de transporte unificada conserva todos los manejadores de eventos (`onPlayPause`, `onStop`, `onToggleVamp`, `onCancelQueuedJump`, `onChangeQuantize`, `onChangeBpm`, `onChangePitch`, `onToggleClick`, `onToggleGuide`, `onToggleSplitRouting`, `onAddMarkerAtPlayhead`, `onOpenSectionEditor`).
+  - La barra unificada de pistas en `SetlistPageView` integra el indicador de compás/sección activa, el botón de restablecer mezcla a `0.0 dB`, la adición de stems y el filtro en tiempo real.

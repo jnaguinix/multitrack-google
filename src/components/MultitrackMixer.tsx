@@ -339,34 +339,34 @@ export const MultitrackMixer: React.FC<MultitrackMixerProps> = ({
     <div
       className={`lt-mixer-surface flex flex-col select-none ${
         docked
-          ? 'border-t-2 border-[#252d3c]'
+          ? ''
           : 'flex-1 overflow-y-auto'
       }`}
     >
-      {/* Mixer Top Sub-bar (shown in full Mixer view, or compact header when docked) */}
-      <div className="flex items-center justify-between gap-4 px-5 py-2.5 border-b border-[#252d3c] bg-[#151a24]/70">
-        <div className="flex items-center gap-3">
-          <div className="text-xl font-semibold tracking-tight text-[#e9ecf2] font-mono tabular-nums">
-            {String(transport.currentBar).padStart(3, '0')}
-            <small className="text-xs font-medium text-[#7f8899] ml-2 font-sans">
-              {activeSection ? activeSection.name : 'Listo'}
-            </small>
-          </div>
-          {!docked && (
-            <span className="text-xs text-[#7f8899] hidden sm:inline">
+      {/* Mixer Top Sub-bar (shown only in standalone Mixer view; when docked, Setlist/Arranger toolbar already provides these controls) */}
+      {!docked && (
+        <div className="flex items-center justify-between gap-4 px-4 py-1.5 border-b border-[#252d3c] bg-[#151a24]/70 shrink-0">
+          <div className="flex items-center gap-3">
+            <div className="text-sm font-semibold tracking-tight text-[#e9ecf2] font-mono tabular-nums">
+              {String(transport.currentBar).padStart(3, '0')}
+              <small className="text-xs font-medium text-[#7f8899] ml-2 font-sans">
+                {activeSection ? activeSection.name : 'Listo'}
+              </small>
+            </div>
+            <span className="text-[11px] text-[#7f8899] hidden sm:inline">
               · Doble clic en fader = 0.0 dB · Doble clic en knob = Centrar (C)
             </span>
-          )}
-        </div>
+          </div>
 
-        <button
-          type="button"
-          onClick={onResetMixer}
-          className="text-xs font-medium text-[#7f8899] hover:text-[#e9ecf2] underline underline-offset-3 cursor-pointer"
-        >
-          Restablecer mezcla a 0 dB
-        </button>
-      </div>
+          <button
+            type="button"
+            onClick={onResetMixer}
+            className="text-xs font-medium text-[#7f8899] hover:text-[#e9ecf2] underline underline-offset-3 cursor-pointer"
+          >
+            Restablecer mezcla a 0 dB
+          </button>
+        </div>
+      )}
 
       {/* Main Console Strip Container */}
       <main className={`lt-console ${docked ? 'lt-docked' : ''}`}>

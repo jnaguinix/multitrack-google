@@ -1,6 +1,6 @@
 {
-  "summary":  "Plan arquitectónico para importación instantánea en milisegundos (estilo escritorio/REAPER) eliminando la copia y recodificación síncrona a OPFS durante la importación, con montaje inmediato en UI y lectura directa desde referencias de archivo (WAV y MP3/M4A).",
-  "updatedAt":  "2026-11-08T20:34:20.987142543Z",
+  "summary":  "Plan de rediseño ultra-compacto para pantallas pequeñas de laptop (1366x768 / 1280x720), unificando la barra de transporte, eliminando controles duplicados y ajustando las alturas del Setlist, Waveform, Mixer y Arranger para que todo entre en pantalla sin recortes.",
+  "updatedAt":  "2026-11-09T00:15:54.461573629Z",
   "requestFeedback":  true,
   "userFacing":  true
 }
