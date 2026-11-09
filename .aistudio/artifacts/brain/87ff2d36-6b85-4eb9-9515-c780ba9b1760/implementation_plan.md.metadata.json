@@ -1,6 +1,6 @@
 {
-  "summary":  "Plan de rediseño ultra-compacto para pantallas pequeñas de laptop (1366x768 / 1280x720), unificando la barra de transporte, eliminando controles duplicados y ajustando las alturas del Setlist, Waveform, Mixer y Arranger para que todo entre en pantalla sin recortes.",
-  "updatedAt":  "2026-11-09T00:15:54.461573629Z",
+  "summary":  "Plan para aumentar el tamaño y legibilidad de toda la tipografía, convertir el Mixer del Setlist en una tarjeta flotante desplegable (con Onda Maestra grande, botones grandes de Secciones y Mute rápido de pistas cuando está cerrado), y restaurar el Arranger (DAW) a pistas de 64px en 2 líneas con nombres de instrumentos grandes y completos.",
+  "updatedAt":  "2026-11-09T00:31:39.054030083Z",
   "requestFeedback":  true,
   "userFacing":  true
 }

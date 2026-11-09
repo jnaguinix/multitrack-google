@@ -1366,32 +1366,73 @@ export default function App() {
                 />
 
                 {isDockedMixerOpen && (
-                  <MultitrackMixer
-                    project={currentProject}
-                    transport={transport}
-                    metersRef={metersRef}
-                    docked={true}
-                    onToggleTrackMute={handleToggleTrackMute}
-                    onToggleTrackSolo={handleToggleTrackSolo}
-                    onChangeTrackGain={handleChangeTrackGain}
-                    onChangeTrackPan={handleChangeTrackPan}
-                    onChangeTrackBus={handleChangeTrackBus}
-                    onChangeClickGain={(gain) =>
-                      updateCurrentProject((p) => ({ ...p, clickGain: gain }))
-                    }
-                    onToggleClick={handleToggleClick}
-                    onChangeGuideGain={(gain) =>
-                      updateCurrentProject((p) => ({ ...p, guideGain: gain }))
-                    }
-                    onToggleGuide={handleToggleGuide}
-                    onChangeMasterGain={(gain) =>
-                      updateCurrentProject((p) => ({ ...p, masterGain: gain }))
-                    }
-                    onChangeCueMasterGain={(gain) =>
-                      updateCurrentProject((p) => ({ ...p, cueMasterGain: gain }))
-                    }
-                    onResetMixer={handleResetMixer}
-                  />
+                  <div
+                    onClick={() => setIsDockedMixerOpen(false)}
+                    className="fixed inset-0 z-50 bg-black/60 backdrop-blur-[2px] flex items-end justify-center p-3 sm:p-5"
+                  >
+                    <div
+                      role="dialog"
+                      aria-modal="true"
+                      aria-label="Consola Mixer Flotante"
+                      onClick={(e) => e.stopPropagation()}
+                      className="w-full max-w-[1440px] bg-[#12161f] border-2 border-cyan-500/50 rounded-2xl shadow-[0_24px_70px_rgba(0,0,0,0.9)] overflow-hidden flex flex-col max-h-[86vh]"
+                    >
+                      <div className="px-5 py-3 bg-[#151a24] border-b border-[#252d3c] flex items-center justify-between gap-4 shrink-0">
+                        <div>
+                          <h2 className="font-display text-base font-bold text-white">
+                            Consola Mixer — {currentProject.title}
+                          </h2>
+                          <p className="text-xs text-slate-400">
+                            Doble clic en fader = 0.0 dB · Doble clic en knob = Centrar (C) · Clic fuera para cerrar
+                          </p>
+                        </div>
+                        <div className="flex items-center gap-2.5">
+                          <button
+                            type="button"
+                            onClick={handleResetMixer}
+                            className="h-9 px-3.5 rounded-lg bg-[#171d29] hover:bg-slate-800 border border-[#252d3c] text-xs font-semibold text-slate-200 cursor-pointer"
+                          >
+                            Restablecer 0 dB
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setIsDockedMixerOpen(false)}
+                            className="h-9 px-4 rounded-lg bg-rose-500 hover:bg-rose-400 text-white text-xs font-bold shadow-md cursor-pointer transition-colors"
+                          >
+                            ✕ Cerrar Mixer
+                          </button>
+                        </div>
+                      </div>
+                      <div className="overflow-y-auto">
+                        <MultitrackMixer
+                          project={currentProject}
+                          transport={transport}
+                          metersRef={metersRef}
+                          docked={true}
+                          onToggleTrackMute={handleToggleTrackMute}
+                          onToggleTrackSolo={handleToggleTrackSolo}
+                          onChangeTrackGain={handleChangeTrackGain}
+                          onChangeTrackPan={handleChangeTrackPan}
+                          onChangeTrackBus={handleChangeTrackBus}
+                          onChangeClickGain={(gain) =>
+                            updateCurrentProject((p) => ({ ...p, clickGain: gain }))
+                          }
+                          onToggleClick={handleToggleClick}
+                          onChangeGuideGain={(gain) =>
+                            updateCurrentProject((p) => ({ ...p, guideGain: gain }))
+                          }
+                          onToggleGuide={handleToggleGuide}
+                          onChangeMasterGain={(gain) =>
+                            updateCurrentProject((p) => ({ ...p, masterGain: gain }))
+                          }
+                          onChangeCueMasterGain={(gain) =>
+                            updateCurrentProject((p) => ({ ...p, cueMasterGain: gain }))
+                          }
+                          onResetMixer={handleResetMixer}
+                        />
+                      </div>
+                    </div>
+                  </div>
                 )}
               </div>
             ) : (

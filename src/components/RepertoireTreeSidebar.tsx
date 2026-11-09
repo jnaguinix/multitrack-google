@@ -70,33 +70,33 @@ export const RepertoireTreeSidebar: React.FC<RepertoireTreeSidebarProps> = ({
     return (
       <aside
         aria-label="Repertorio Colapsado"
-        className="w-9 shrink-0 bg-[#111827] border-r border-slate-800 flex flex-col items-center py-2 gap-2 select-none"
+        className="w-10 shrink-0 bg-[#111827] border-r border-slate-800 flex flex-col items-center py-2.5 gap-2.5 select-none"
       >
         <button
           type="button"
           onClick={onToggleCollapse}
           title="Expandir Repertorio"
-          className="p-1.5 rounded text-slate-300 hover:bg-slate-800 cursor-pointer"
+          className="p-2 rounded-lg text-slate-300 hover:bg-slate-800 cursor-pointer"
         >
-          <PanelLeftOpen className="w-3.5 h-3.5" />
+          <PanelLeftOpen className="w-4 h-4" />
         </button>
 
         <button
           type="button"
           onClick={() => multiFileInputRef.current?.click()}
           title="Importar Nueva Canción (Stems)"
-          className="p-1.5 rounded bg-cyan-400 text-slate-950 hover:bg-cyan-300 cursor-pointer"
+          className="p-2 rounded-lg bg-cyan-400 text-slate-950 hover:bg-cyan-300 cursor-pointer"
         >
-          <Upload className="w-3.5 h-3.5" />
+          <Upload className="w-4 h-4" />
         </button>
 
         <button
           type="button"
           onClick={() => folderInputRef.current?.click()}
           title="Importar Carpeta de Canción"
-          className="p-1.5 rounded bg-slate-800 text-cyan-400 hover:bg-slate-700 border border-slate-700 cursor-pointer"
+          className="p-2 rounded-lg bg-slate-800 text-cyan-400 hover:bg-slate-700 border border-slate-700 cursor-pointer"
         >
-          <FolderPlus className="w-3.5 h-3.5" />
+          <FolderPlus className="w-4 h-4" />
         </button>
 
         <input
@@ -144,66 +144,66 @@ export const RepertoireTreeSidebar: React.FC<RepertoireTreeSidebarProps> = ({
   return (
     <aside
       aria-label="Árbol de Repertorio"
-      className="w-52 shrink-0 bg-[#111827] border-r border-slate-800 flex flex-col h-full select-none"
+      className="w-60 shrink-0 bg-[#111827] border-r border-slate-800 flex flex-col h-full select-none"
     >
-      {/* Compact Sidebar Header */}
-      <div className="px-2.5 py-1.5 border-b border-slate-800 flex items-center justify-between shrink-0">
-        <span className="font-display text-[11px] font-bold text-slate-200 flex items-center gap-1">
-          <FolderOpen className="w-3 h-3 text-cyan-400" />
+      {/* Sidebar Header */}
+      <div className="px-3 py-2 border-b border-slate-800 flex items-center justify-between shrink-0">
+        <span className="font-display text-xs font-bold text-slate-100 flex items-center gap-1.5">
+          <FolderOpen className="w-3.5 h-3.5 text-cyan-400" />
           <span>Repertorio ({projects.length})</span>
         </span>
 
-        <div className="flex items-center gap-0.5">
+        <div className="flex items-center gap-1">
           <button
             type="button"
             onClick={onOpenNewSongModal}
             title="Crear canción vacía o gestionar biblioteca"
-            className="p-1 rounded hover:bg-slate-800 text-slate-400 hover:text-slate-200 cursor-pointer"
+            className="p-1 rounded hover:bg-slate-800 text-slate-300 hover:text-white cursor-pointer"
           >
-            <Plus className="w-3 h-3" />
+            <Plus className="w-3.5 h-3.5" />
           </button>
           <button
             type="button"
             onClick={onToggleCollapse}
             title="Colapsar panel lateral"
-            className="p-1 rounded hover:bg-slate-800 text-slate-400 hover:text-slate-200 cursor-pointer"
+            className="p-1 rounded hover:bg-slate-800 text-slate-300 hover:text-white cursor-pointer"
           >
-            <PanelLeftClose className="w-3 h-3" />
+            <PanelLeftClose className="w-3.5 h-3.5" />
           </button>
         </div>
       </div>
 
-      {/* Compact Search + Import Triggers */}
-      <div className="p-2 border-b border-slate-800 space-y-1.5 shrink-0">
+      {/* Search + Import Triggers */}
+      <div className="p-2.5 border-b border-slate-800 space-y-2 shrink-0">
         <div className="relative">
-          <Search className="w-3 h-3 text-slate-400 absolute left-2 top-1/2 -translate-y-1/2 pointer-events-none" />
+          <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
           <input
             type="search"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             placeholder="Buscar canción..."
-            className="w-full bg-[#0B0F17] border border-slate-800 rounded pl-6 pr-2 py-1 text-[11px] text-slate-100 placeholder:text-slate-500 focus:outline-none focus:border-cyan-400"
+            className="w-full bg-[#0B0F17] border border-slate-800 rounded-lg pl-8 pr-2.5 py-1.5 text-xs text-slate-100 placeholder:text-slate-500 focus:outline-none focus:border-cyan-400"
           />
         </div>
 
-        <div className="grid grid-cols-2 gap-1">
+        <div className="grid grid-cols-2 gap-1.5">
           <button
             type="button"
             onClick={() => multiFileInputRef.current?.click()}
-            className="px-2 py-1 rounded bg-cyan-400 hover:bg-cyan-300 text-slate-950 text-[10px] font-bold flex items-center justify-center gap-1 transition-colors cursor-pointer"
+            className="px-2.5 py-1.5 rounded-lg bg-cyan-400 hover:bg-cyan-300 text-slate-950 text-xs font-bold flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
             title="Selecciona los stems de una canción para guardarla en tu Repertorio"
           >
-            <Upload className="w-2.5 h-2.5 shrink-0" />
+            <Upload className="w-3.5 h-3.5 shrink-0" />
             <span className="truncate">+ Stems</span>
           </button>
 
           <button
             type="button"
             onClick={() => folderInputRef.current?.click()}
-            className="px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-[10px] font-semibold flex items-center justify-center gap-1 transition-colors cursor-pointer"
+            className="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-100 border border-slate-700 text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
             title="Selecciona una carpeta completa de stems para convertirla en una sola canción"
           >
-            <FolderPlus className="w-2.5 h-2.5 shrink-0 text-cyan-400" />
+            <FolderPlus className="w-3.5 h-3.5 shrink-0 text-cyan-400" />
             <span className="truncate">Carpeta</span>
           </button>
         </div>
@@ -241,9 +241,9 @@ export const RepertoireTreeSidebar: React.FC<RepertoireTreeSidebarProps> = ({
       </div>
 
       {/* Scrollable Song List */}
-      <div className="flex-1 overflow-y-auto p-1.5 space-y-1">
+      <div className="flex-1 overflow-y-auto p-2 space-y-1">
         {filteredProjects.length === 0 ? (
-          <div className="px-2 py-5 text-center text-[11px] text-slate-500">
+          <div className="px-3 py-6 text-center text-xs text-slate-400">
             Repertorio vacío. Usa <strong>+ Stems</strong> o <strong>Carpeta</strong> para importar.
           </div>
         ) : (
@@ -258,29 +258,29 @@ export const RepertoireTreeSidebar: React.FC<RepertoireTreeSidebarProps> = ({
                 onDragStart={(e) => handleSongDragStart(e, song)}
                 onClick={() => onRequestSongAction(song)}
                 title={`${song.title} — Clic para montar o arrastrar al Setlist`}
-                className={`group flex items-center justify-between gap-1 px-2 py-1.5 rounded-md text-[11px] cursor-grab active:cursor-grabbing transition-colors select-none border ${
+                className={`group flex items-center justify-between gap-1.5 px-2.5 py-2 rounded-lg text-[13px] cursor-grab active:cursor-grabbing transition-colors select-none border ${
                   isCurrent
-                    ? 'bg-cyan-500/15 text-cyan-200 font-semibold border-cyan-500/40'
-                    : 'text-slate-300 border-transparent hover:bg-slate-800/80 hover:border-slate-700/80 hover:text-white'
+                    ? 'bg-cyan-500/15 text-cyan-100 font-bold border-cyan-500/40'
+                    : 'text-slate-200 font-medium border-transparent hover:bg-slate-800/80 hover:border-slate-700/80 hover:text-white'
                 }`}
               >
-                <div className="flex items-center gap-1 min-w-0 flex-1">
-                  <GripVertical className="w-3 h-3 text-slate-600 group-hover:text-cyan-400 shrink-0" />
+                <div className="flex items-center gap-1.5 min-w-0 flex-1">
+                  <GripVertical className="w-3.5 h-3.5 text-slate-500 group-hover:text-cyan-400 shrink-0" />
                   <Music
-                    className={`w-3 h-3 shrink-0 ${
-                      isCurrent ? 'text-cyan-400' : 'text-slate-500 group-hover:text-slate-300'
+                    className={`w-3.5 h-3.5 shrink-0 ${
+                      isCurrent ? 'text-cyan-400' : 'text-slate-400 group-hover:text-slate-200'
                     }`}
                   />
-                  <div className="min-w-0 flex-1 leading-tight">
-                    <div className="flex items-center gap-1">
+                  <div className="min-w-0 flex-1 leading-snug">
+                    <div className="flex items-center gap-1.5">
                       <span className="truncate">{song.title}</span>
                     </div>
-                    <div className="flex items-center gap-1 text-[9px] text-slate-500 font-normal">
+                    <div className="flex items-center gap-1.5 text-[11px] text-slate-400 font-normal">
                       <span className="font-mono tabular-nums">
                         {formatDurationMmSs(song.durationSec, song.totalBars, song.bpm)}
                       </span>
                       <span aria-hidden="true">·</span>
-                      <span className="font-mono tabular-nums">{song.bpm}</span>
+                      <span className="font-mono tabular-nums">{song.bpm} BPM</span>
                       <span aria-hidden="true">·</span>
                       <span className="font-mono tabular-nums">{song.tracks.length}p</span>
                     </div>
@@ -288,7 +288,7 @@ export const RepertoireTreeSidebar: React.FC<RepertoireTreeSidebarProps> = ({
                 </div>
 
                 {/* Quick Actions */}
-                <div className="flex items-center gap-0.5 shrink-0">
+                <div className="flex items-center gap-1 shrink-0">
                   {!isInSetlist ? (
                     <button
                       type="button"
@@ -297,20 +297,20 @@ export const RepertoireTreeSidebar: React.FC<RepertoireTreeSidebarProps> = ({
                         onAddToSetlist(song.id);
                       }}
                       title="Añadir al Setlist"
-                      className="px-1 py-0.5 rounded bg-slate-800 hover:bg-emerald-500/20 text-slate-400 hover:text-emerald-300 border border-slate-700 text-[9px] font-semibold cursor-pointer"
+                      className="px-1.5 py-0.5 rounded bg-slate-800 hover:bg-emerald-500/20 text-slate-300 hover:text-emerald-300 border border-slate-700 text-[10px] font-semibold cursor-pointer"
                     >
                       +Set
                     </button>
                   ) : (
                     <span
                       title="En el Setlist"
-                      className="px-1 py-0.2 rounded bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 text-[8px] font-mono"
+                      className="px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 text-[10px] font-mono font-bold"
                     >
                       SET
                     </span>
                   )}
 
-                  <div className="hidden group-hover:flex items-center">
+                  <div className="hidden group-hover:flex items-center gap-0.5">
                     <button
                       type="button"
                       onClick={(e) => {
@@ -318,9 +318,9 @@ export const RepertoireTreeSidebar: React.FC<RepertoireTreeSidebarProps> = ({
                         onExportJson(song);
                       }}
                       title="Exportar configuración .libretracks.json"
-                      className="p-0.5 rounded hover:bg-slate-700 text-slate-400 hover:text-slate-200 cursor-pointer"
+                      className="p-1 rounded hover:bg-slate-700 text-slate-300 hover:text-white cursor-pointer"
                     >
-                      <Download className="w-3 h-3" />
+                      <Download className="w-3.5 h-3.5" />
                     </button>
 
                     <button
@@ -330,9 +330,9 @@ export const RepertoireTreeSidebar: React.FC<RepertoireTreeSidebarProps> = ({
                         onDeleteProject(song.id);
                       }}
                       title="Quitar de la biblioteca"
-                      className="p-0.5 rounded hover:bg-red-500/20 text-slate-400 hover:text-red-400 cursor-pointer"
+                      className="p-1 rounded hover:bg-red-500/20 text-slate-300 hover:text-red-400 cursor-pointer"
                     >
-                      <Trash2 className="w-3 h-3" />
+                      <Trash2 className="w-3.5 h-3.5" />
                     </button>
                   </div>
                 </div>

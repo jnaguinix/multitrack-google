@@ -94,18 +94,18 @@ export const TransportDeck: React.FC<TransportDeckProps> = ({
   return (
     <section
       aria-label="Controles de Transporte y Setlist"
-      className="h-10 bg-[#111827] border-b border-slate-800 px-3 py-1 flex items-center justify-between gap-2 overflow-x-auto whitespace-nowrap select-none shrink-0"
+      className="h-12 bg-[#111827] border-b border-slate-800 px-3.5 py-1.5 flex items-center justify-between gap-2.5 overflow-x-auto whitespace-nowrap select-none shrink-0"
     >
       {/* Left: Project identity + Setlist Prev/Next + Transport */}
-      <div className="flex items-center gap-2 shrink-0">
-        <div className="max-w-[165px] leading-tight">
+      <div className="flex items-center gap-2.5 shrink-0">
+        <div className="max-w-[190px] leading-tight">
           <div
-            className="font-display text-xs font-bold text-slate-100 truncate"
+            className="font-display text-[13px] font-bold text-slate-100 truncate"
             title={`${project.title} (${project.keySignature} · ${project.bpm} BPM)`}
           >
             {project.title}
           </div>
-          <div className="flex items-center gap-1 text-[10px] text-slate-400 truncate">
+          <div className="flex items-center gap-1.5 text-[11px] text-slate-300 truncate">
             <span>{project.keySignature}</span>
             <span aria-hidden="true">·</span>
             <span className="font-mono tabular-nums">{project.bpm} BPM</span>
@@ -118,19 +118,19 @@ export const TransportDeck: React.FC<TransportDeckProps> = ({
 
         {/* Setlist Live Mini-Controller */}
         {setlistQueue.length > 0 && (
-          <div className="flex items-center gap-0.5 bg-[#0B0F17] border border-slate-800 rounded px-1.5 py-0.5">
+          <div className="flex items-center gap-1 bg-[#0B0F17] border border-slate-800 rounded-lg px-2 py-1 h-8">
             <button
               type="button"
               onClick={onPrevSetlistSong}
               disabled={currentSetlistIdx <= 0}
               title="Canción anterior en el Setlist"
-              className="p-0.5 rounded hover:bg-slate-800 text-slate-300 disabled:opacity-30 cursor-pointer"
+              className="p-0.5 rounded hover:bg-slate-800 text-slate-200 disabled:opacity-30 cursor-pointer"
             >
-              <SkipBack className="w-3 h-3" />
+              <SkipBack className="w-3.5 h-3.5" />
             </button>
 
-            <div className="px-1 text-[10px] font-mono font-bold text-amber-400 flex items-center gap-0.5">
-              <ListMusic className="w-2.5 h-2.5" />
+            <div className="px-1 text-xs font-mono font-bold text-amber-400 flex items-center gap-1">
+              <ListMusic className="w-3 h-3" />
               <span>
                 {currentSetlistIdx >= 0
                   ? `${currentSetlistIdx + 1}/${setlistQueue.length}`
@@ -149,7 +149,7 @@ export const TransportDeck: React.FC<TransportDeckProps> = ({
               title="Siguiente canción en el Setlist"
               className="p-0.5 rounded hover:bg-amber-500/20 text-amber-300 disabled:opacity-30 cursor-pointer"
             >
-              <SkipForward className="w-3 h-3" />
+              <SkipForward className="w-3.5 h-3.5" />
             </button>
 
             <select
@@ -161,7 +161,7 @@ export const TransportDeck: React.FC<TransportDeckProps> = ({
                 )
               }
               title="Acción al terminar la canción en el Setlist"
-              className="bg-slate-900 border border-slate-800 rounded px-1 py-0.5 text-[10px] text-slate-300 focus:outline-none focus:border-amber-400 cursor-pointer"
+              className="bg-slate-900 border border-slate-800 rounded px-1.5 py-0.5 text-[11px] font-medium text-slate-200 focus:outline-none focus:border-amber-400 cursor-pointer"
             >
               <option value="stop">Fin: Parar</option>
               <option value="cue-next">Fin: Prep. Sig.</option>
@@ -171,7 +171,7 @@ export const TransportDeck: React.FC<TransportDeckProps> = ({
         )}
 
         {/* Play/Pause, Stop, Vamp */}
-        <div className="flex items-center gap-1">
+        <div className="flex items-center gap-1.5">
           <button
             type="button"
             disabled={Boolean(transport.isMountingSong)}
@@ -181,7 +181,7 @@ export const TransportDeck: React.FC<TransportDeckProps> = ({
                 ? transport.mountingProgressText || 'Cargando pistas en RAM...'
                 : 'Reproducir / Pausar (Barra Espaciadora)'
             }
-            className={`h-7 px-2.5 rounded font-semibold text-[11px] flex items-center gap-1 transition-all whitespace-nowrap shrink-0 cursor-pointer disabled:opacity-50 disabled:cursor-wait ${
+            className={`h-8 px-3 rounded-lg font-bold text-xs flex items-center gap-1.5 transition-all whitespace-nowrap shrink-0 cursor-pointer disabled:opacity-50 disabled:cursor-wait ${
               transport.isMountingSong
                 ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
                 : transport.isPlaying
@@ -190,9 +190,9 @@ export const TransportDeck: React.FC<TransportDeckProps> = ({
             }`}
           >
             {transport.isPlaying ? (
-              <Pause className="w-3 h-3 fill-current" />
+              <Pause className="w-3.5 h-3.5 fill-current" />
             ) : (
-              <Play className="w-3 h-3 fill-current" />
+              <Play className="w-3.5 h-3.5 fill-current" />
             )}
             <span>
               {transport.isMountingSong
@@ -207,9 +207,9 @@ export const TransportDeck: React.FC<TransportDeckProps> = ({
             type="button"
             onClick={onStop}
             title="Detener y volver a 00:00"
-            className="h-7 px-2 rounded bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-800 text-[11px] font-medium flex items-center gap-1 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+            className="h-8 px-2.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-slate-200 border border-slate-800 text-xs font-semibold flex items-center gap-1.5 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
           >
-            <Square className="w-2.5 h-2.5 fill-current" />
+            <Square className="w-3 h-3 fill-current" />
             <span>Stop</span>
           </button>
 
@@ -217,36 +217,36 @@ export const TransportDeck: React.FC<TransportDeckProps> = ({
             type="button"
             onClick={onToggleVamp}
             title="Activar/Liberar Bucle en la Sección Actual (Tecla V)"
-            className={`h-7 px-2 rounded text-[11px] font-semibold flex items-center gap-1 transition-all whitespace-nowrap shrink-0 cursor-pointer border ${
+            className={`h-8 px-2.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all whitespace-nowrap shrink-0 cursor-pointer border ${
               transport.isVamping
                 ? 'bg-amber-500 text-slate-950 border-amber-400'
-                : 'bg-slate-900 text-slate-300 border-slate-800 hover:bg-slate-800'
+                : 'bg-slate-900 text-slate-200 border-slate-800 hover:bg-slate-800'
             }`}
           >
-            <Repeat className="w-3 h-3" />
+            <Repeat className="w-3.5 h-3.5" />
             <span>{transport.isVamping ? 'Vamp ON' : 'Vamp'}</span>
           </button>
         </div>
       </div>
 
       {/* Center: Studio Digital Clock (MM:SS.d / Duration | Beat Pulse | Active Section) */}
-      <div className="flex items-center gap-2 bg-[#0B0F17] border border-slate-800 rounded px-2.5 py-0.5 h-7 shrink-0">
+      <div className="flex items-center gap-2.5 bg-[#0B0F17] border border-slate-800 rounded-lg px-3 py-1 h-8.5 shrink-0">
         {/* Primary Timecode MM:SS.d */}
         <div className="flex items-baseline gap-1">
-          <span className="font-mono tabular-nums text-sm font-bold text-cyan-400 tracking-tight">
+          <span className="font-mono tabular-nums text-base font-bold text-cyan-400 tracking-tight">
             {formatTimecode(transport.currentTimeSec)}
           </span>
-          <span className="font-mono text-[10px] text-slate-600">/</span>
-          <span className="font-mono tabular-nums text-[10px] font-semibold text-slate-400">
+          <span className="font-mono text-xs text-slate-500">/</span>
+          <span className="font-mono tabular-nums text-xs font-semibold text-slate-300">
             {formatMmSs(transport.totalDurationSec)}
           </span>
         </div>
 
-        <div className="h-3.5 w-px bg-slate-800" />
+        <div className="h-4 w-px bg-slate-800" />
 
         {/* Visual Beat Pulse Bars */}
         <div
-          className="flex items-center gap-0.5"
+          className="flex items-center gap-1"
           aria-label={`Pulso ${transport.currentBeat} de ${project.beatsPerBar}`}
         >
           {Array.from({ length: project.beatsPerBar }).map((_, idx) => {
@@ -256,7 +256,7 @@ export const TransportDeck: React.FC<TransportDeckProps> = ({
             return (
               <div
                 key={beatNum}
-                className={`w-1.5 h-3 rounded-xs transition-opacity ${
+                className={`w-2 h-3.5 rounded-xs transition-opacity ${
                   isCurrent
                     ? isDownbeat
                       ? 'bg-amber-400 opacity-100'
@@ -268,32 +268,32 @@ export const TransportDeck: React.FC<TransportDeckProps> = ({
           })}
         </div>
 
-        <div className="h-3.5 w-px bg-slate-800" />
+        <div className="h-4 w-px bg-slate-800" />
 
         {/* Active & Queued Section Readout or Live Import / RAM Mounting Progress */}
-        <div className="flex items-center gap-1.5 max-w-[160px]">
+        <div className="flex items-center gap-1.5 max-w-[180px]">
           {transport.mountingProgressText || importStatusText ? (
-            <span className="text-[10px] font-semibold text-amber-400 truncate">
+            <span className="text-xs font-semibold text-amber-400 truncate">
               {transport.mountingProgressText || importStatusText}
             </span>
           ) : (
             <>
-              <div className="text-[11px] truncate">
-                <span className="font-semibold text-emerald-400">
+              <div className="text-xs truncate">
+                <span className="font-bold text-emerald-400">
                   {activeSection ? activeSection.name : 'Sin marca'}
                 </span>
               </div>
               {queuedSection && (
-                <div className="flex items-center gap-0.5 text-[10px] font-mono tabular-nums text-amber-400 font-bold">
-                  <span>→{queuedSection.code}</span>
+                <div className="flex items-center gap-1 text-xs font-mono tabular-nums text-amber-400 font-bold">
+                  <span>→ {queuedSection.code}</span>
                   {onCancelQueuedJump && (
                     <button
                       type="button"
                       onClick={onCancelQueuedJump}
                       title="Cancelar salto en cola"
-                      className="p-0.5 rounded hover:bg-slate-800 text-slate-400 hover:text-white cursor-pointer"
+                      className="p-0.5 rounded hover:bg-slate-800 text-slate-300 hover:text-white cursor-pointer"
                     >
-                      <X className="w-2.5 h-2.5" />
+                      <X className="w-3 h-3" />
                     </button>
                   )}
                 </div>
@@ -310,9 +310,9 @@ export const TransportDeck: React.FC<TransportDeckProps> = ({
           type="button"
           onClick={onAddMarkerAtPlayhead}
           title="Crear marcador de sección exactamente en el segundo actual del cabezal"
-          className="h-7 px-2 rounded bg-cyan-500/15 hover:bg-cyan-500/25 text-cyan-300 border border-cyan-500/40 text-[11px] font-semibold flex items-center gap-1 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+          className="h-8 px-2.5 rounded-lg bg-cyan-500/15 hover:bg-cyan-500/25 text-cyan-300 border border-cyan-500/40 text-xs font-bold flex items-center gap-1 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
         >
-          <Flag className="w-3 h-3 text-cyan-400" />
+          <Flag className="w-3.5 h-3.5 text-cyan-400" />
           <span>+Marca</span>
         </button>
 
@@ -320,14 +320,14 @@ export const TransportDeck: React.FC<TransportDeckProps> = ({
           type="button"
           onClick={onOpenSectionEditor}
           title="Abrir editor de secciones por minutos y segundos (mm:ss)"
-          className="h-7 px-2 rounded bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-800 text-[11px] font-medium flex items-center gap-1 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+          className="h-8 px-2.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-slate-200 border border-slate-800 text-xs font-semibold flex items-center gap-1 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
         >
           <span>Sec ({project.sections.length})</span>
         </button>
 
         {/* Quantize Mode Selector */}
-        <div className="flex items-center bg-[#0B0F17] p-0.5 rounded border border-slate-800 h-7">
-          <span className="text-[10px] text-slate-400 px-1.5 whitespace-nowrap shrink-0">
+        <div className="flex items-center bg-[#0B0F17] p-0.5 rounded-lg border border-slate-800 h-8">
+          <span className="text-[11px] text-slate-300 px-1.5 whitespace-nowrap shrink-0">
             Salto:
           </span>
           {quantizeOptions.map((opt) => (
@@ -335,10 +335,10 @@ export const TransportDeck: React.FC<TransportDeckProps> = ({
               key={opt.value}
               type="button"
               onClick={() => onChangeQuantize(opt.value)}
-              className={`px-1.5 py-0.5 text-[10px] font-medium rounded transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+              className={`px-2 py-0.5 text-xs font-semibold rounded-md transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
                 project.quantizeMode === opt.value
-                  ? 'bg-slate-800 text-cyan-300 font-semibold'
-                  : 'text-slate-400 hover:text-slate-200'
+                  ? 'bg-slate-800 text-cyan-300'
+                  : 'text-slate-400 hover:text-slate-100'
               }`}
             >
               {opt.label}
@@ -347,8 +347,8 @@ export const TransportDeck: React.FC<TransportDeckProps> = ({
         </div>
 
         {/* BPM & Pitch controls */}
-        <div className="flex items-center gap-1 bg-[#0B0F17] px-1.5 py-0.5 rounded border border-slate-800 h-7">
-          <label htmlFor="bpm-input" className="text-[10px] text-slate-400">
+        <div className="flex items-center gap-1.5 bg-[#0B0F17] px-2 py-0.5 rounded-lg border border-slate-800 h-8">
+          <label htmlFor="bpm-input" className="text-[11px] font-medium text-slate-300">
             BPM
           </label>
           <input
@@ -361,7 +361,7 @@ export const TransportDeck: React.FC<TransportDeckProps> = ({
               const val = Number(e.target.value);
               if (val >= 50 && val <= 220) onChangeBpm(val);
             }}
-            className="w-10 bg-slate-900 border border-slate-800 rounded px-1 py-0.2 text-[11px] font-mono tabular-nums text-slate-100 text-right focus:outline-none focus:border-cyan-500"
+            className="w-12 bg-slate-900 border border-slate-800 rounded px-1.5 py-0.5 text-xs font-mono tabular-nums font-bold text-slate-100 text-right focus:outline-none focus:border-cyan-500"
           />
 
           <select
@@ -369,29 +369,29 @@ export const TransportDeck: React.FC<TransportDeckProps> = ({
             aria-label="Transposición de tono"
             value={project.pitchSemitones}
             onChange={(e) => onChangePitch(Number(e.target.value))}
-            className="bg-slate-900 border border-slate-800 rounded px-1 py-0.2 text-[11px] font-mono tabular-nums text-slate-100 focus:outline-none focus:border-cyan-500 cursor-pointer"
+            className="bg-slate-900 border border-slate-800 rounded px-1.5 py-0.5 text-xs font-mono tabular-nums font-bold text-slate-100 focus:outline-none focus:border-cyan-500 cursor-pointer"
           >
             {[-6, -5, -4, -3, -2, -1, 0, 1, 2, 3, 4, 5, 6].map((st) => (
               <option key={st} value={st}>
-                {st > 0 ? `+${st}st` : `${st}st`}
+                {st > 0 ? `+${st} st` : `${st} st`}
               </option>
             ))}
           </select>
         </div>
 
         {/* Click, Voice Cues, Split-Mono */}
-        <div className="flex items-center gap-1">
+        <div className="flex items-center gap-1.5">
           <button
             type="button"
             onClick={onToggleClick}
             title="Activar/Desactivar Metrónomo (Click Bus)"
-            className={`h-7 px-2 rounded text-[11px] font-medium flex items-center gap-1 border transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+            className={`h-8 px-2.5 rounded-lg text-xs font-semibold flex items-center gap-1 border transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
               project.clickEnabled
                 ? 'bg-cyan-500/15 text-cyan-300 border-cyan-500/40'
-                : 'bg-slate-900 text-slate-400 border-slate-800'
+                : 'bg-slate-900 text-slate-300 border-slate-800'
             }`}
           >
-            <Volume2 className="w-3 h-3" />
+            <Volume2 className="w-3.5 h-3.5" />
             <span>Click</span>
           </button>
 
@@ -399,13 +399,13 @@ export const TransportDeck: React.FC<TransportDeckProps> = ({
             type="button"
             onClick={onToggleGuide}
             title="Activar/Desactivar Cues de Guía Vocal"
-            className={`h-7 px-2 rounded text-[11px] font-medium flex items-center gap-1 border transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+            className={`h-8 px-2.5 rounded-lg text-xs font-semibold flex items-center gap-1 border transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
               project.guideCuesEnabled
                 ? 'bg-cyan-500/15 text-cyan-300 border-cyan-500/40'
-                : 'bg-slate-900 text-slate-400 border-slate-800'
+                : 'bg-slate-900 text-slate-300 border-slate-800'
             }`}
           >
-            <Mic className="w-3 h-3" />
+            <Mic className="w-3.5 h-3.5" />
             <span>Cues</span>
           </button>
 
@@ -413,13 +413,13 @@ export const TransportDeck: React.FC<TransportDeckProps> = ({
             type="button"
             onClick={onToggleSplitRouting}
             title="Alternar salida Estéreo vs Split-Mono (L: Click/Guía · R: Pistas)"
-            className={`h-7 px-2 rounded text-[11px] font-medium flex items-center gap-1 border transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+            className={`h-8 px-2.5 rounded-lg text-xs font-semibold flex items-center gap-1 border transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
               project.splitRoutingMode === 'split-mono'
                 ? 'bg-amber-500/15 text-amber-300 border-amber-500/40'
-                : 'bg-slate-900 text-slate-400 border-slate-800'
+                : 'bg-slate-900 text-slate-300 border-slate-800'
             }`}
           >
-            <Sliders className="w-3 h-3" />
+            <Sliders className="w-3.5 h-3.5" />
             <span>{project.splitRoutingMode === 'split-mono' ? 'Split' : 'Stereo'}</span>
           </button>
         </div>

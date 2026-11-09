@@ -59,7 +59,7 @@
 }
 
 /* ============================================================================
- * LIBRETRACKS REDESIGNED STUDIO MIXER (DARK MODE — LAPTOP OPTIMIZED)
+ * LIBRETRACKS REDESIGNED STUDIO MIXER (CLEAR & LEGIBLE TYPOGRAPHY)
  * ============================================================================ */
 
 .lt-mixer-surface {
@@ -71,21 +71,21 @@
 
 .lt-console {
   display: flex;
-  gap: 10px;
-  padding: 12px 14px 14px;
+  gap: 12px;
+  padding: 14px 18px 16px;
   align-items: stretch;
 }
 
 .lt-console.lt-docked {
-  padding: 6px 10px 8px;
-  gap: 8px;
+  padding: 12px 16px 14px;
+  gap: 10px;
 }
 
 .lt-channels {
   display: flex;
-  gap: 5px;
+  gap: 6px;
   overflow-x: auto;
-  padding-bottom: 4px;
+  padding-bottom: 6px;
   flex: 1;
   min-width: 0;
   scrollbar-width: thin;
@@ -93,32 +93,32 @@
 
 .lt-buses {
   display: flex;
-  gap: 6px;
-  padding-left: 10px;
+  gap: 8px;
+  padding-left: 12px;
   border-left: 2px solid var(--lt-line);
   flex-shrink: 0;
 }
 
 .lt-strip {
-  width: 78px;
+  width: 86px;
   flex: none;
   background: var(--lt-strip);
   border: 1px solid var(--lt-line);
-  border-radius: 10px;
-  padding: 0 6px 8px;
+  border-radius: 11px;
+  padding: 0 7px 9px;
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 5px;
+  gap: 6px;
   transition: opacity 0.15s ease, border-color 0.15s ease;
   user-select: none;
 }
 
 .lt-docked .lt-strip {
-  width: 72px;
-  border-radius: 8px;
-  padding: 0 5px 6px;
-  gap: 4px;
+  width: 82px;
+  border-radius: 10px;
+  padding: 0 6px 8px;
+  gap: 5px;
 }
 
 .lt-strip:hover {
@@ -130,45 +130,45 @@
 }
 
 .lt-strip .lt-cap {
-  height: 3px;
+  height: 4px;
   align-self: stretch;
-  margin: 0 -6px;
-  border-radius: 9px 9px 0 0;
+  margin: 0 -7px;
+  border-radius: 10px 10px 0 0;
   background: var(--c, #2fd0c8);
 }
 
 .lt-docked .lt-strip .lt-cap {
-  margin: 0 -5px;
-  border-radius: 7px 7px 0 0;
+  margin: 0 -6px;
+  border-radius: 9px 9px 0 0;
 }
 
 .lt-strip .lt-name {
-  font-size: 11px;
-  font-weight: 600;
+  font-size: 12.5px;
+  font-weight: 700;
   text-align: center;
   width: 100%;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  margin-top: 1px;
+  margin-top: 2px;
   color: var(--lt-text);
 }
 
 .lt-docked .lt-strip .lt-name {
-  font-size: 10.5px;
+  font-size: 12px;
 }
 
 .lt-strip .lt-sub {
-  font-size: 9px;
+  font-size: 10.5px;
   color: var(--lt-mut);
-  margin-top: -4px;
+  margin-top: -5px;
   white-space: nowrap;
 }
 
 /* Rotary Pan Knob */
 .lt-knob {
-  width: 30px;
-  height: 30px;
+  width: 34px;
+  height: 34px;
   border-radius: 50%;
   background: var(--lt-panel);
   border: 1px solid var(--lt-line);
@@ -179,8 +179,8 @@
 }
 
 .lt-docked .lt-knob {
-  width: 24px;
-  height: 24px;
+  width: 30px;
+  height: 30px;
 }
 
 .lt-knob:focus-visible,
@@ -194,72 +194,59 @@
   position: absolute;
   left: 50%;
   top: 3px;
-  width: 2.5px;
-  height: 9px;
-  margin-left: -1.25px;
+  width: 3px;
+  height: 10px;
+  margin-left: -1.5px;
   border-radius: 2px;
   background: var(--lt-text);
-  transform-origin: 50% 11px;
+  transform-origin: 50% 13px;
   transform: rotate(var(--r, 0deg));
 }
 
 .lt-docked .lt-knob::after {
-  top: 2px;
-  width: 2px;
-  height: 7px;
-  margin-left: -1px;
-  transform-origin: 50% 9px;
+  top: 3px;
+  width: 2.5px;
+  height: 9px;
+  margin-left: -1.25px;
+  transform-origin: 50% 11px;
 }
 
 .lt-panval {
-  font-size: 9.5px;
+  font-size: 11px;
+  font-weight: 600;
   color: var(--lt-mut);
-  margin-top: -3px;
-}
-
-.lt-docked .lt-panval {
-  font-size: 9px;
   margin-top: -3px;
 }
 
 /* Fader + Dual Stereo Meter Zone */
 .lt-fx {
   display: flex;
-  gap: 4px;
-  height: 210px;
+  gap: 5px;
+  height: 224px;
   align-items: stretch;
 }
 
 .lt-docked .lt-fx {
-  height: 128px;
+  height: 170px;
 }
 
 .lt-scale {
   display: flex;
   flex-direction: column;
   justify-content: space-between;
-  font-size: 8.5px;
+  font-size: 9.5px;
   color: var(--lt-mut);
   text-align: right;
-  width: 16px;
+  width: 18px;
   padding: 0;
   pointer-events: none;
 }
 
-.lt-docked .lt-scale {
-  font-size: 8px;
-  width: 14px;
-}
-
 .lt-fader {
   position: relative;
-  width: 26px;
+  width: 28px;
   touch-action: none;
   cursor: ns-resize;
-}
-
-.lt-docked .lt-fader {
-  width: 24px;
 }
 
 .lt-fader::before {
@@ -268,8 +255,8 @@
   left: 50%;
   top: 0;
   bottom: 0;
-  width: 5px;
-  margin-left: -2.5px;
+  width: 6px;
+  margin-left: -3px;
   border-radius: 3px;
   background: var(--lt-track);
 }
@@ -278,8 +265,8 @@
   position: absolute;
   left: 50%;
   bottom: 0;
-  width: 5px;
-  margin-left: -2.5px;
+  width: 6px;
+  margin-left: -3px;
   border-radius: 3px;
   background: var(--c, #2fd0c8);
   opacity: 0.88;
@@ -290,18 +277,13 @@
   position: absolute;
   left: 0;
   right: 0;
-  height: 22px;
-  margin-bottom: -11px;
-  border-radius: 5px;
+  height: 24px;
+  margin-bottom: -12px;
+  border-radius: 6px;
   background: var(--lt-panel);
   border: 1px solid var(--lt-line);
   box-shadow: 0 2px 5px rgba(0, 0, 0, 0.38);
   pointer-events: none;
-}
-
-.lt-docked .lt-handle {
-  height: 18px;
-  margin-bottom: -9px;
 }
 
 .lt-handle::after {
@@ -310,22 +292,18 @@
   left: 4px;
   right: 4px;
   top: 50%;
-  height: 2.5px;
-  margin-top: -1.25px;
+  height: 3px;
+  margin-top: -1.5px;
   border-radius: 2px;
   background: var(--c, #2fd0c8);
 }
 
 .lt-meter {
   position: relative;
-  width: 7px;
+  width: 8px;
   border-radius: 3px;
   background: var(--lt-meter-bg);
   overflow: hidden;
-}
-
-.lt-docked .lt-meter {
-  width: 6px;
 }
 
 .lt-meter i {
@@ -352,45 +330,35 @@
 }
 
 .lt-db {
-  font-size: 10.5px;
-  font-weight: 600;
+  font-size: 11.5px;
+  font-weight: 700;
   background: var(--lt-panel);
   border: 1px solid var(--lt-line);
-  border-radius: 5px;
-  padding: 2px 0;
+  border-radius: 6px;
+  padding: 2.5px 0;
   width: 100%;
   text-align: center;
   color: var(--lt-text);
-}
-
-.lt-docked .lt-db {
-  font-size: 9.5px;
-  padding: 1px 0;
 }
 
 /* Mute / Solo & Bus Route Buttons */
 .lt-ms {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 3px;
+  gap: 4px;
   width: 100%;
 }
 
 .lt-ms button {
   border: 1px solid var(--lt-line);
   background: var(--lt-panel);
-  border-radius: 5px;
-  height: 23px;
+  border-radius: 6px;
+  height: 26px;
   font-weight: 700;
-  font-size: 11px;
+  font-size: 12px;
   color: var(--lt-text);
   transition: background-color 0.12s ease, border-color 0.12s ease, color 0.12s ease;
   cursor: pointer;
-}
-
-.lt-docked .lt-ms button {
-  height: 20px;
-  font-size: 10px;
 }
 
 .lt-ms button:hover {
@@ -413,18 +381,13 @@
   width: 100%;
   border: 1px solid var(--lt-line);
   background: var(--lt-panel);
-  border-radius: 5px;
-  height: 22px;
-  font-size: 10px;
+  border-radius: 6px;
+  height: 25px;
+  font-size: 11px;
   font-weight: 600;
   color: var(--lt-mut);
   transition: all 0.12s ease;
   cursor: pointer;
-}
-
-.lt-docked .lt-route {
-  height: 19px;
-  font-size: 9.5px;
 }
 
 .lt-route:hover {
@@ -440,42 +403,29 @@
 
 /* Output Master Buses (Main L/R & Click / Cue) */
 .lt-strip.lt-bus {
-  width: 92px;
+  width: 100px;
   background: var(--lt-panel);
   border-width: 2px;
 }
 
-.lt-docked .lt-strip.lt-bus {
-  width: 84px;
-}
-
 .lt-strip.lt-bus .lt-name {
-  font-size: 11.5px;
-}
-
-.lt-docked .lt-strip.lt-bus .lt-name {
-  font-size: 10.5px;
+  font-size: 12.5px;
 }
 
 .lt-strip.lt-bus .lt-handle {
-  height: 24px;
-  margin-bottom: -12px;
-}
-
-.lt-docked .lt-strip.lt-bus .lt-handle {
-  height: 20px;
-  margin-bottom: -10px;
+  height: 28px;
+  margin-bottom: -14px;
 }
 
 @media (max-width: 640px) {
   .lt-console {
     flex-direction: column;
-    padding: 10px;
+    padding: 12px;
   }
   .lt-buses {
     border-left: 0;
     border-top: 2px solid var(--lt-line);
-    padding: 10px 0 0;
+    padding: 12px 0 0;
     justify-content: center;
   }
 }
