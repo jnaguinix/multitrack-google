@@ -35,6 +35,7 @@ import { TopBar, WorkspaceView } from './components/TopBar';
 import { formatMmSs, TransportDeck } from './components/TransportDeck';
 import { RepertoireTreeSidebar } from './components/RepertoireTreeSidebar';
 import { SetlistPageView } from './components/SetlistPageView';
+import { LiveSetView } from './components/LiveSetView';
 import { TimelineArranger } from './components/TimelineArranger';
 import { MultitrackMixer } from './components/MultitrackMixer';
 import { StageRemoteView } from './components/StageRemoteView';
@@ -89,6 +90,7 @@ function getInitialViewFromHash(): WorkspaceView {
   const hash = window.location.hash.replace('#', '').toLowerCase();
   if (
     hash === 'setlist' ||
+    hash === 'live' ||
     hash === 'arranger' ||
     hash === 'mixer' ||
     hash === 'remote' ||
@@ -147,6 +149,8 @@ export default function App() {
   const autoAbortRef = useRef<Map<string, AbortController>>(new Map());
   const modalProjectIdRef = useRef<string | null>(null);
   const queuedOptimizeIdsRef = useRef<Set<string>>(new Set());
+  // Same set as state so the UI can show which songs are being prepared
+  const [preparingIds, setPreparingIds] = useState<Set<string>>(new Set());
   const [isActivatingProject, setIsActivatingProject] = useState(false);
 
   // 5. Medidores en un ref (no en el estado de App) para no recargar el hilo principal
@@ -311,6 +315,7 @@ export default function App() {
       if (!isOpfsSupported()) return;
       if (queuedOptimizeIdsRef.current.has(projectId)) return;
       queuedOptimizeIdsRef.current.add(projectId);
+      setPreparingIds(new Set(queuedOptimizeIdsRef.current));
       const controller = new AbortController();
       autoAbortRef.current.set(projectId, controller);
 
@@ -411,6 +416,7 @@ export default function App() {
           }
         } finally {
           queuedOptimizeIdsRef.current.delete(projectId);
+          setPreparingIds(new Set(queuedOptimizeIdsRef.current));
           autoAbortRef.current.delete(projectId);
           setImportStatusText(null);
           if (modalProjectIdRef.current === projectId) {
@@ -1362,6 +1368,16 @@ export default function App() {
     );
   };
 
+  // Live page: make a song the one that plays after the current one
+  const handleSetAsNextSong = (projectId: string) => {
+    const cur = setlistQueue.findIndex((s) => s.id === currentProjectRef.current?.id);
+    const from = setlistQueue.findIndex((s) => s.id === projectId);
+    if (from === -1 || from === cur) return;
+    const to = cur === -1 ? 0 : from > cur ? cur + 1 : cur;
+    if (from !== to) handleReorderSetlist(from, to);
+    showToast(`"${setlistQueue[from].title}" sonará a continuación`);
+  };
+
   const handleMoveInSetlist = (projectId: string, direction: 'up' | 'down') => {
     const idx = setlistQueue.findIndex((s) => s.id === projectId);
     if (idx === -1) return;
@@ -1488,8 +1504,8 @@ export default function App() {
         onOpenImportModal={() => setIsImportModalOpen(true)}
       />
 
-      {/* Studio Transport Deck (Shown when a song is loaded) */}
-      {currentProject && (
+      {/* Studio Transport Deck (Shown when a song is loaded; the Live page has its own) */}
+      {currentProject && activeView !== 'live' && (
         <TransportDeck
           project={currentProject}
           transport={transport}
@@ -1516,7 +1532,7 @@ export default function App() {
 
       {/* Main Body: Dockable Left Repertoire Sidebar + Active Workspace */}
       <div className="flex-1 flex overflow-hidden">
-        {activeView !== 'remote' && (
+        {activeView !== 'remote' && activeView !== 'live' && (
           <RepertoireTreeSidebar
             projects={projects}
             setlistQueue={setlistQueue}
@@ -1627,6 +1643,29 @@ export default function App() {
                 updateCurrentProject((p) => ({ ...p, cueMasterGain: gain }))
               }
               onResetMixer={handleResetMixer}
+            />
+          )}
+
+          {/* LIVE SET: performance page */}
+          {activeView === 'live' && (
+            <LiveSetView
+              project={currentProject}
+              transport={transport}
+              setlistQueue={setlistQueue}
+              setlistTransitionMode={setlistTransitionMode}
+              preparingIds={preparingIds}
+              onPlayPause={handlePlayPause}
+              onStop={handleStop}
+              onPrevSong={handlePrevSetlistSong}
+              onNextSong={() => handleNextSetlistSong(false)}
+              onLoadSong={(songId) => handleLoadProjectImmediately(songId, false)}
+              onSetAsNext={handleSetAsNextSong}
+              onJumpSection={handleJumpSection}
+              onCancelQueuedJump={handleCancelQueuedJump}
+              onToggleVamp={handleToggleVamp}
+              onChangeQuantize={handleChangeQuantize}
+              onChangeTransitionMode={setSetlistTransitionMode}
+              onGoToSetlist={() => handleSelectView('setlist')}
             />
           )}
 

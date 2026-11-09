@@ -2,7 +2,7 @@ import React from 'react';
 import { ListMusic, Cpu, HardDrive, Plus } from 'lucide-react';
 import { AudioEngineMode } from '../types/project';
 
-export type WorkspaceView = 'setlist' | 'arranger' | 'mixer' | 'remote' | 'library';
+export type WorkspaceView = 'setlist' | 'live' | 'arranger' | 'mixer' | 'remote' | 'library';
 
 interface TopBarProps {
   activeView: WorkspaceView;
@@ -31,6 +31,7 @@ export const TopBar: React.FC<TopBarProps> = ({
 }) => {
   const navItems: { id: WorkspaceView; label: string; badge?: number }[] = [
     { id: 'setlist', label: 'Setlist', badge: setlistCount },
+    { id: 'live', label: 'En vivo' },
     { id: 'arranger', label: 'Arranger (DAW)' },
     { id: 'mixer', label: 'Mixer' },
     { id: 'remote', label: 'Stage Remote' },
