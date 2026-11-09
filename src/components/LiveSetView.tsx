@@ -104,7 +104,7 @@ export const LiveSetView: React.FC<LiveSetViewProps> = ({
   if (setlistQueue.length === 0 && !project) {
     return (
       <div className="lt-live flex-1 flex flex-col items-center justify-center p-8 text-center">
-        <h2 className="font-display text-xl font-semibold text-[var(--lt-text)]">
+        <h2 className="text-xl font-semibold text-[var(--lt-text)]">
           Tu setlist está vacío
         </h2>
         <p className="text-sm text-[var(--lt-mut)] mt-2 max-w-sm">
@@ -361,7 +361,7 @@ export const LiveSetView: React.FC<LiveSetViewProps> = ({
       {/* ===================== SETLIST RAIL ===================== */}
       <aside aria-label="Setlist del show" className="lt-live-rail">
         <div className="px-4 pt-4 pb-2 flex items-baseline justify-between">
-          <h2 className="font-display text-base font-semibold text-[var(--lt-text)]">Setlist</h2>
+          <h2 className="text-base font-semibold text-[var(--lt-text)]">Setlist</h2>
           <span className="text-xs text-[var(--lt-mut)] tabular-nums">
             {currentIdx >= 0 ? `${currentIdx + 1} de ${setlistQueue.length}` : `${setlistQueue.length} canciones`}
           </span>
@@ -384,7 +384,7 @@ export const LiveSetView: React.FC<LiveSetViewProps> = ({
                   aria-current={isCurrent ? 'true' : undefined}
                   title={
                     isCurrent
-                      ? 'Sonando ahora'
+                      ? 'Canción cargada'
                       : transport.isPlaying
                       ? 'Poner como la siguiente canción'
                       : 'Cargar esta canción'
@@ -394,7 +394,7 @@ export const LiveSetView: React.FC<LiveSetViewProps> = ({
                   <span className="min-w-0 flex-1 text-left">
                     <span className="block truncate lt-live-song-title">{song.title}</span>
                     <span className="block text-xs text-[var(--lt-mut)] tabular-nums">
-                      {isCurrent ? 'Sonando' : isNext ? 'Siguiente' : `${song.bpm} BPM`}
+                      {isCurrent ? (transport.isPlaying ? 'Sonando' : 'Cargada') : isNext ? 'Siguiente' :`${song.bpm} BPM`}
                       {dur > 0 ? `, ${mmss(dur)}` : ''}
                     </span>
                   </span>

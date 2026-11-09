@@ -4,13 +4,10 @@ import {
   Pause,
   Square,
   Repeat,
-  Volume2,
-  Mic,
   Sliders,
   Flag,
   SkipBack,
   SkipForward,
-  ListMusic,
   X,
 } from 'lucide-react';
 import {
@@ -83,346 +80,117 @@ export const TransportDeck: React.FC<TransportDeckProps> = ({
   const activeSection = project.sections.find((s) => s.id === transport.activeSectionId);
   const queuedSection = project.sections.find((s) => s.id === transport.queuedSectionId);
 
-  const currentSetlistIdx = setlistQueue.findIndex((s) => s.id === project.id);
-
-  const quantizeOptions: { value: QuantizeMode; label: string }[] = [
-    { value: 'immediate', label: 'Inmed.' },
-    { value: '1-bar', label: '1 Comp.' },
-    { value: 'section-end', label: 'Fin Sec.' },
-  ];
+  const currentSetlistIdx = setlistQueue.findIndex((song) => song.id === project.id);
+  const split = project.splitRoutingMode === 'split-mono';
+  const notice = transport.mountingProgressText || importStatusText;
+  const playLabel = transport.isMountingSong ? 'Cargando…' : transport.isPlaying ? 'Pausar' : 'Reproducir';
 
   return (
-    <section
-      aria-label="Controles de Transporte y Setlist"
-      className="min-h-12 bg-[#111827] border-b border-slate-800 px-2.5 xl:px-3.5 py-1.5 flex flex-wrap items-center justify-between gap-x-2 xl:gap-x-2.5 gap-y-1.5 select-none shrink-0"
-    >
-      {/* Left: Project identity + Setlist Prev/Next + Transport */}
-      <div className="flex items-center gap-2.5 shrink-0">
-        <div className="max-w-[130px] xl:max-w-[190px] leading-tight">
-          <div
-            className="font-display text-[13px] font-bold text-slate-100 truncate"
-            title={`${project.title} (${project.keySignature} · ${project.bpm} BPM)`}
-          >
-            {project.title}
-          </div>
-          <div className="flex items-center gap-1.5 text-[11px] text-slate-300 truncate">
-            <span>{project.keySignature}</span>
-            <span aria-hidden="true">·</span>
-            <span className="font-mono tabular-nums">{project.bpm} BPM</span>
-            <span aria-hidden="true">·</span>
-            <span className="font-mono tabular-nums">
-              {formatMmSs(transport.totalDurationSec)}
-            </span>
-          </div>
-        </div>
+    <section aria-label="Transporte" className="lt-transport">
+      <div className="lt-transport-song min-w-0">
+        <p className="truncate text-base font-semibold" title={project.title}>{project.title}</p>
+        <p className="truncate text-xs text-neutral-400" title={notice || undefined}>
+          {notice ||`${project.keySignature} · ${project.bpm} BPM · ${activeSection?.name || 'Sin sección activa'}`}
+        </p>
+      </div>
 
-        {/* Setlist Live Mini-Controller */}
+      <div className="flex items-center gap-1.5">
         {setlistQueue.length > 0 && (
-          <div className="flex items-center gap-1 bg-[#0B0F17] border border-slate-800 rounded-lg px-2 py-1 h-8">
-            <button
-              type="button"
-              onClick={onPrevSetlistSong}
-              disabled={currentSetlistIdx <= 0}
-              title="Canción anterior en el Setlist"
-              className="p-0.5 rounded hover:bg-slate-800 text-slate-200 disabled:opacity-30 cursor-pointer"
-            >
-              <SkipBack className="w-3.5 h-3.5" />
-            </button>
-
-            <div className="px-1 text-xs font-mono font-bold text-amber-400 flex items-center gap-1">
-              <ListMusic className="w-3 h-3" />
-              <span>
-                {currentSetlistIdx >= 0
-                  ? `${currentSetlistIdx + 1}/${setlistQueue.length}`
-                  : `${setlistQueue.length}`}
-              </span>
-            </div>
-
-            <button
-              type="button"
-              onClick={onNextSetlistSong}
-              disabled={
-                currentSetlistIdx === -1
-                  ? setlistQueue.length === 0
-                  : currentSetlistIdx >= setlistQueue.length - 1
-              }
-              title="Siguiente canción en el Setlist"
-              className="p-0.5 rounded hover:bg-amber-500/20 text-amber-300 disabled:opacity-30 cursor-pointer"
-            >
-              <SkipForward className="w-3.5 h-3.5" />
-            </button>
-
-            <select
-              aria-label="Modo de transición del Setlist"
-              value={setlistTransitionMode}
-              onChange={(e) =>
-                onChangeSetlistTransitionMode(
-                  e.target.value as SetlistTransitionMode
-                )
-              }
-              title="Acción al terminar la canción en el Setlist"
-              className="bg-slate-900 border border-slate-800 rounded px-1.5 py-0.5 text-[11px] font-medium text-slate-200 focus:outline-none focus:border-amber-400 cursor-pointer"
-            >
-              <option value="stop">Fin: Parar</option>
-              <option value="cue-next">Fin: Prep. Sig.</option>
-              <option value="auto-play">Fin: Auto-Play</option>
-            </select>
-          </div>
+          <button type="button" onClick={onPrevSetlistSong} disabled={currentSetlistIdx <= 0} className="lt-control lt-icon-control" aria-label="Canción anterior" title="Canción anterior">
+            <SkipBack size={15} />
+          </button>
         )}
-
-        {/* Play/Pause, Stop, Vamp */}
-        <div className="flex items-center gap-1.5">
-          <button
-            type="button"
-            disabled={Boolean(transport.isMountingSong)}
-            onClick={onPlayPause}
-            title={
-              transport.isMountingSong
-                ? transport.mountingProgressText || 'Cargando pistas en RAM...'
-                : 'Reproducir / Pausar (Barra Espaciadora)'
-            }
-            className={`h-8 px-3 rounded-lg font-bold text-xs flex items-center gap-1.5 transition-all whitespace-nowrap shrink-0 cursor-pointer disabled:opacity-50 disabled:cursor-wait ${
-              transport.isMountingSong
-                ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
-                : transport.isPlaying
-                ? 'bg-emerald-500 text-slate-950 hover:bg-emerald-400'
-                : 'bg-slate-800 text-slate-100 hover:bg-slate-700 border border-slate-700'
-            }`}
-          >
-            {transport.isPlaying ? (
-              <Pause className="w-3.5 h-3.5 fill-current" />
-            ) : (
-              <Play className="w-3.5 h-3.5 fill-current" />
-            )}
-            <span>
-              {transport.isMountingSong
-                ? 'RAM...'
-                : transport.isPlaying
-                ? 'Pause'
-                : 'Play'}
-            </span>
+        <button type="button" onClick={onPlayPause} disabled={Boolean(transport.isMountingSong)} className="lt-primary" aria-keyshortcuts="Space" aria-label={playLabel} title={playLabel}>
+          {transport.isPlaying ? <Pause size={16} fill="currentColor" /> : <Play size={16} fill="currentColor" />}
+          <span className="hidden sm:inline">{playLabel}</span>
+        </button>
+        <button type="button" onClick={onStop} className="lt-control lt-icon-control" aria-label="Detener" title="Detener y volver al inicio">
+          <Square size={12} fill="currentColor" />
+        </button>
+        {setlistQueue.length > 0 && (
+          <button type="button" onClick={onNextSetlistSong} disabled={currentSetlistIdx >= setlistQueue.length - 1} className="lt-control lt-icon-control" aria-label="Siguiente canción" title="Siguiente canción">
+            <SkipForward size={15} />
           </button>
-
-          <button
-            type="button"
-            onClick={onStop}
-            title="Detener y volver a 00:00"
-            className="h-8 px-2.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-slate-200 border border-slate-800 text-xs font-semibold flex items-center gap-1.5 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
-          >
-            <Square className="w-3 h-3 fill-current" />
-            <span>Stop</span>
-          </button>
-
-          <button
-            type="button"
-            onClick={onToggleVamp}
-            title="Activar/Liberar Bucle en la Sección Actual (Tecla V)"
-            className={`h-8 px-2.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all whitespace-nowrap shrink-0 cursor-pointer border ${
-              transport.isVamping
-                ? 'bg-amber-500 text-slate-950 border-amber-400'
-                : 'bg-slate-900 text-slate-200 border-slate-800 hover:bg-slate-800'
-            }`}
-          >
-            <Repeat className="w-3.5 h-3.5" />
-            <span>{transport.isVamping ? 'Vamp ON' : 'Vamp'}</span>
-          </button>
-        </div>
+        )}
+        <button type="button" onClick={onToggleVamp} aria-pressed={transport.isVamping} className="lt-control lt-icon-control" aria-label="Repetir sección" title="Repetir sección (V)" aria-keyshortcuts="V">
+          <Repeat size={16} />
+        </button>
       </div>
 
-      {/* Center: Studio Digital Clock (MM:SS.d / Duration | Beat Pulse | Active Section) */}
-      <div className="flex items-center gap-2.5 bg-[#0B0F17] border border-slate-800 rounded-lg px-3 py-1 h-8.5 shrink-0">
-        {/* Primary Timecode MM:SS.d */}
-        <div className="flex items-baseline gap-1">
-          <span className="font-mono tabular-nums text-base font-bold text-cyan-400 tracking-tight">
-            {formatTimecode(transport.currentTimeSec)}
-          </span>
-          <span className="font-mono text-xs text-slate-500">/</span>
-          <span className="font-mono tabular-nums text-xs font-semibold text-slate-300">
-            {formatMmSs(transport.totalDurationSec)}
-          </span>
+      <div className="lt-transport-readout flex items-center gap-2.5">
+        <div className="flex items-baseline gap-1.5 whitespace-nowrap">
+          <span className="lt-transport-clock">{formatTimecode(transport.currentTimeSec)}</span>
+          <span className="text-xs text-neutral-400">/ {formatMmSs(transport.totalDurationSec)}</span>
         </div>
-
-        <div className="h-4 w-px bg-slate-800" />
-
-        {/* Visual Beat Pulse Bars */}
-        <div
-          className="flex items-center gap-1"
-          aria-label={`Pulso ${transport.currentBeat} de ${project.beatsPerBar}`}
-        >
-          {Array.from({ length: project.beatsPerBar }).map((_, idx) => {
-            const beatNum = idx + 1;
-            const isCurrent = transport.isPlaying && transport.currentBeat === beatNum;
-            const isDownbeat = beatNum === 1;
-            return (
-              <div
-                key={beatNum}
-                className={`w-2 h-3.5 rounded-xs transition-opacity ${
-                  isCurrent
-                    ? isDownbeat
-                      ? 'bg-amber-400 opacity-100'
-                      : 'bg-cyan-400 opacity-100'
-                    : 'bg-slate-800 opacity-50'
-                }`}
-              />
-            );
-          })}
-        </div>
-
-        <div className="h-4 w-px bg-slate-800" />
-
-        {/* Active & Queued Section Readout or Live Import / RAM Mounting Progress */}
-        <div className="flex items-center gap-1.5 max-w-[130px] xl:max-w-[180px]">
-          {transport.mountingProgressText || importStatusText ? (
-            <span className="text-xs font-semibold text-amber-400 truncate">
-              {transport.mountingProgressText || importStatusText}
-            </span>
-          ) : (
-            <>
-              <div className="text-xs truncate">
-                <span className="font-bold text-emerald-400">
-                  {activeSection ? activeSection.name : 'Sin marca'}
-                </span>
-              </div>
-              {queuedSection && (
-                <div className="flex items-center gap-1 text-xs font-mono tabular-nums text-amber-400 font-bold">
-                  <span>→ {queuedSection.code}</span>
-                  {onCancelQueuedJump && (
-                    <button
-                      type="button"
-                      onClick={onCancelQueuedJump}
-                      title="Cancelar salto en cola"
-                      className="p-0.5 rounded hover:bg-slate-800 text-slate-300 hover:text-white cursor-pointer"
-                    >
-                      <X className="w-3 h-3" />
-                    </button>
-                  )}
-                </div>
-              )}
-            </>
-          )}
-        </div>
-      </div>
-
-      {/* Right: Playhead Section Marker, Quantize, Tempo/Pitch, Click/Cues */}
-      <div className="flex items-center gap-1.5 shrink-0">
-        {/* Playhead Marker Creation & Section Time Editor */}
-        <button
-          type="button"
-          onClick={onAddMarkerAtPlayhead}
-          title="Crear marcador de sección exactamente en el segundo actual del cabezal"
-          className="h-8 px-2.5 rounded-lg bg-cyan-500/15 hover:bg-cyan-500/25 text-cyan-300 border border-cyan-500/40 text-xs font-bold flex items-center gap-1 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
-        >
-          <Flag className="w-3.5 h-3.5 text-cyan-400" />
-          <span className="hidden xl:inline">+Marca</span><span className="xl:hidden">+</span>
-        </button>
-
-        <button
-          type="button"
-          onClick={onOpenSectionEditor}
-          title="Abrir editor de secciones por minutos y segundos (mm:ss)"
-          className="h-8 px-2.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-slate-200 border border-slate-800 text-xs font-semibold flex items-center gap-1 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
-        >
-          <span>Sec<span className="hidden xl:inline"> ({project.sections.length})</span></span>
-        </button>
-
-        {/* Quantize Mode Selector */}
-        <div className="flex items-center bg-[#0B0F17] p-0.5 rounded-lg border border-slate-800 h-8">
-          <span className="hidden xl:inline text-[11px] text-slate-300 px-1.5 whitespace-nowrap shrink-0">
-            Salto:
-          </span>
-          {quantizeOptions.map((opt) => (
-            <button
-              key={opt.value}
-              type="button"
-              onClick={() => onChangeQuantize(opt.value)}
-              className={`px-2 py-0.5 text-xs font-semibold rounded-md transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
-                project.quantizeMode === opt.value
-                  ? 'bg-slate-800 text-cyan-300'
-                  : 'text-slate-400 hover:text-slate-100'
-              }`}
-            >
-              {opt.label}
-            </button>
+        <div className="flex items-center gap-0.5 max-sm:hidden" aria-label={`Pulso ${transport.currentBeat} de ${project.beatsPerBar}`}>
+          {Array.from({ length: project.beatsPerBar }, (_, index) => (
+            <span key={index} className="lt-beat" data-active={transport.isPlaying && transport.currentBeat === index + 1 || undefined} data-downbeat={index === 0 || undefined} />
           ))}
         </div>
+        {queuedSection && (
+          <div className="flex items-center gap-1 min-w-0 text-xs text-amber-300" title={`Salto en cola a ${queuedSection.name}`}>
+            <span className="truncate">→ {queuedSection.code}</span>
+            {onCancelQueuedJump && (
+              <button type="button" onClick={onCancelQueuedJump} className="p-1 cursor-pointer" aria-label="Cancelar salto en cola">
+                <X size={14} />
+              </button>
+            )}
+          </div>
+        )}
+      </div>
 
-        {/* BPM & Pitch controls */}
-        <div className="flex items-center gap-1.5 bg-[#0B0F17] px-2 py-0.5 rounded-lg border border-slate-800 h-8">
-          <label htmlFor="bpm-input" className="text-[11px] font-medium text-slate-300">
-            BPM
+      <div className="lt-transport-tools flex items-center gap-1.5">
+        <button type="button" onClick={onAddMarkerAtPlayhead} className="lt-control lt-icon-control" aria-label="Marcar sección aquí" title="Marcar sección aquí">
+          <Flag size={16} />
+        </button>
+        <button type="button" onClick={onOpenSectionEditor} className="lt-control">Secciones</button>
+        <button type="button" popoverTarget="playback-settings" className="lt-control lt-icon-control" aria-label="Ajustes de reproducción" title="Ajustes de reproducción">
+          <Sliders size={16} />
+        </button>
+        <section id="playback-settings" popover="auto" className="lt-popover space-y-3" aria-label="Ajustes de reproducción">
+          <h2 className="text-sm font-semibold">Ajustes de reproducción</h2>
+          {setlistQueue.length > 0 && (
+            <label className="lt-field">
+              Al terminar la canción
+              <select value={setlistTransitionMode} onChange={(event) => onChangeSetlistTransitionMode(event.target.value as SetlistTransitionMode)}>
+                <option value="stop">Detener</option>
+                <option value="cue-next">Preparar la siguiente</option>
+                <option value="auto-play">Reproducir la siguiente</option>
+              </select>
+            </label>
+          )}
+          <label className="lt-field">
+            Salto de sección
+            <select value={project.quantizeMode} onChange={(event) => onChangeQuantize(event.target.value as QuantizeMode)}>
+              <option value="immediate">Inmediato</option>
+              <option value="1-bar">Al siguiente compás</option>
+              <option value="2-bars">Cada dos compases</option>
+              <option value="section-end">Al final de la sección</option>
+            </select>
           </label>
-          <input
-            id="bpm-input"
-            type="number"
-            min={50}
-            max={220}
-            value={project.bpm}
-            onChange={(e) => {
-              const val = Number(e.target.value);
-              if (val >= 50 && val <= 220) onChangeBpm(val);
-            }}
-            className="w-12 bg-slate-900 border border-slate-800 rounded px-1.5 py-0.5 text-xs font-mono tabular-nums font-bold text-slate-100 text-right focus:outline-none focus:border-cyan-500"
-          />
-
-          <select
-            id="pitch-select"
-            aria-label="Transposición de tono"
-            value={project.pitchSemitones}
-            onChange={(e) => onChangePitch(Number(e.target.value))}
-            className="bg-slate-900 border border-slate-800 rounded px-1.5 py-0.5 text-xs font-mono tabular-nums font-bold text-slate-100 focus:outline-none focus:border-cyan-500 cursor-pointer"
-          >
-            {[-6, -5, -4, -3, -2, -1, 0, 1, 2, 3, 4, 5, 6].map((st) => (
-              <option key={st} value={st}>
-                {st > 0 ? `+${st} st` : `${st} st`}
-              </option>
-            ))}
-          </select>
-        </div>
-
-        {/* Click, Voice Cues, Split-Mono */}
-        <div className="flex items-center gap-1.5">
-          <button
-            type="button"
-            onClick={onToggleClick}
-            title="Activar/Desactivar Metrónomo (Click Bus)"
-            className={`h-8 px-2.5 rounded-lg text-xs font-semibold flex items-center gap-1 border transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
-              project.clickEnabled
-                ? 'bg-cyan-500/15 text-cyan-300 border-cyan-500/40'
-                : 'bg-slate-900 text-slate-300 border-slate-800'
-            }`}
-          >
-            <Volume2 className="w-3.5 h-3.5" />
-            <span className="hidden xl:inline">Click</span>
-          </button>
-
-          <button
-            type="button"
-            onClick={onToggleGuide}
-            title="Activar/Desactivar Cues de Guía Vocal"
-            className={`h-8 px-2.5 rounded-lg text-xs font-semibold flex items-center gap-1 border transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
-              project.guideCuesEnabled
-                ? 'bg-cyan-500/15 text-cyan-300 border-cyan-500/40'
-                : 'bg-slate-900 text-slate-300 border-slate-800'
-            }`}
-          >
-            <Mic className="w-3.5 h-3.5" />
-            <span className="hidden xl:inline">Cues</span>
-          </button>
-
-          <button
-            type="button"
-            onClick={onToggleSplitRouting}
-            title="Alternar salida Estéreo vs Split-Mono (L: Click/Guía · R: Pistas)"
-            className={`h-8 px-2.5 rounded-lg text-xs font-semibold flex items-center gap-1 border transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
-              project.splitRoutingMode === 'split-mono'
-                ? 'bg-amber-500/15 text-amber-300 border-amber-500/40'
-                : 'bg-slate-900 text-slate-300 border-slate-800'
-            }`}
-          >
-            <Sliders className="w-3.5 h-3.5" />
-            <span>{project.splitRoutingMode === 'split-mono' ? 'Split' : 'Stereo'}</span>
-          </button>
-        </div>
+          <div className="grid grid-cols-2 gap-2">
+            <label className="lt-field">
+              BPM
+              <input type="number" min={50} max={220} value={project.bpm} onChange={(event) => {
+                const bpm = Number(event.target.value);
+                if (bpm >= 50 && bpm <= 220) onChangeBpm(bpm);
+              }} />
+            </label>
+            <label className="lt-field">
+              Tono
+              <select value={project.pitchSemitones} onChange={(event) => onChangePitch(Number(event.target.value))}>
+                {Array.from({ length: 13 }, (_, index) => index - 6).map((st) => (
+                  <option key={st} value={st}>{st > 0 ? '+' : ''}{st} st</option>
+                ))}
+              </select>
+            </label>
+          </div>
+          <div className="flex flex-wrap gap-1.5">
+            <button type="button" onClick={onToggleClick} aria-pressed={project.clickEnabled} className="lt-control">Click</button>
+            <button type="button" onClick={onToggleGuide} aria-pressed={project.guideCuesEnabled} className="lt-control">Guía</button>
+            <button type="button" onClick={onToggleSplitRouting} aria-pressed={split} className="lt-control" title="Alternar entre estéreo y Split-Mono (L: guía y click · R: pistas)">{split ? 'Split-mono' : 'Estéreo'}</button>
+          </div>
+        </section>
       </div>
     </section>
   );

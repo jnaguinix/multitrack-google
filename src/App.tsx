@@ -120,6 +120,14 @@ export default function App() {
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState<boolean>(
     () => typeof window !== 'undefined' && window.innerWidth < 1280
   );
+  useEffect(() => {
+    const narrowWorkspace = window.matchMedia('(max-width: 720px)');
+    const collapseOnNarrowWorkspace = (event: MediaQueryListEvent) => {
+      if (event.matches) setIsSidebarCollapsed(true);
+    };
+    narrowWorkspace.addEventListener('change', collapseOnNarrowWorkspace);
+    return () => narrowWorkspace.removeEventListener('change', collapseOnNarrowWorkspace);
+  }, []);
   const [isDockedMixerOpen, setIsDockedMixerOpen] = useState<boolean>(false);
   const [projects, setProjects] = useState<SongProject[]>([]);
   const [currentProject, setCurrentProject] = useState<SongProject | null>(null);
@@ -1490,7 +1498,7 @@ export default function App() {
   };
 
   return (
-    <div className="min-h-screen h-dvh flex flex-col bg-[#0B0F17] text-slate-100 overflow-hidden relative">
+    <div className="min-h-screen h-dvh flex flex-col bg-studio-ground text-neutral-100 overflow-hidden relative">
       {/* Top Navigation Bar */}
       <TopBar
         activeView={activeView}
@@ -1531,7 +1539,7 @@ export default function App() {
       )}
 
       {/* Main Body: Dockable Left Repertoire Sidebar + Active Workspace */}
-      <div className="flex-1 flex overflow-hidden">
+      <div className="relative flex-1 flex overflow-hidden min-h-0">
         {activeView !== 'remote' && activeView !== 'live' && (
           <RepertoireTreeSidebar
             projects={projects}
@@ -1555,29 +1563,29 @@ export default function App() {
           onDragOver={handleDragOverDaw}
           onDragLeave={handleDragLeaveDaw}
           onDrop={handleDropOnDaw}
-          className="flex-1 flex flex-col overflow-hidden relative"
+          className="lt-workspace flex-1 flex flex-col overflow-hidden relative"
         >
           {/* Visual Drop Overlay when dragging a Repertoire Song or Audio Files */}
           {dragOverlayMode && (
-            <div className="absolute inset-0 z-50 bg-cyan-500/20 backdrop-blur-xs border-4 border-dashed border-cyan-400 flex items-center justify-center p-8 pointer-events-none">
-              <div className="bg-[#111827] border border-slate-700 rounded-2xl p-8 text-center shadow-2xl max-w-md">
+            <div className="absolute inset-0 z-50 bg-studio-ground/90 border-2 border-dashed border-studio-line flex items-center justify-center p-8 pointer-events-none">
+              <div className="bg-studio-panel border border-neutral-700 rounded-2xl p-8 text-center shadow-2xl max-w-md">
                 {dragOverlayMode === 'repertoire-song' ? (
                   <>
-                    <Music className="w-12 h-12 text-cyan-400 mx-auto mb-3" />
-                    <h2 className="font-display text-xl font-bold text-slate-100">
+                    <Music className="w-12 h-12 text-studio-ink mx-auto mb-3" />
+                    <h2 className="text-xl font-bold text-neutral-100">
                       Suelta aquí para montar la canción en consola
                     </h2>
-                    <p className="text-xs text-slate-400 mt-1">
+                    <p className="text-xs text-neutral-400 mt-1">
                       Se cargará en el Setlist y en el DAW inmediatamente.
                     </p>
                   </>
                 ) : (
                   <>
-                    <Upload className="w-12 h-12 text-cyan-400 mx-auto mb-3" />
-                    <h2 className="font-display text-xl font-bold text-slate-100">
+                    <Upload className="w-12 h-12 text-studio-ink mx-auto mb-3" />
+                    <h2 className="text-xl font-bold text-neutral-100">
                       Suelta tus Stems o Carpeta Aquí
                     </h2>
-                    <p className="text-xs text-slate-400 mt-1">
+                    <p className="text-xs text-neutral-400 mt-1">
                       Se guardará como una sola canción en tu repertorio con su duración real en minutos y segundos.
                     </p>
                   </>
@@ -1699,21 +1707,21 @@ export default function App() {
                 {isDockedMixerOpen && (
                   <div
                     onClick={() => setIsDockedMixerOpen(false)}
-                    className="fixed inset-0 z-50 bg-black/60 backdrop-blur-[2px] flex items-end justify-center p-3 sm:p-5"
+                    className="fixed inset-0 z-50 bg-black/60 flex items-end justify-center p-3 sm:p-5"
                   >
                     <div
                       role="dialog"
                       aria-modal="true"
                       aria-label="Consola Mixer Flotante"
                       onClick={(e) => e.stopPropagation()}
-                      className="w-full max-w-[1440px] bg-[#12161f] border-2 border-cyan-500/50 rounded-2xl shadow-[0_24px_70px_rgba(0,0,0,0.9)] overflow-hidden flex flex-col max-h-[86vh]"
+                      className="w-full max-w-[1440px] bg-studio-panel border-2 border-studio-line rounded-2xl shadow-[0_24px_70px_rgba(0,0,0,0.9)] overflow-hidden flex flex-col max-h-[86vh]"
                     >
-                      <div className="px-5 py-3 bg-[#151a24] border-b border-[#252d3c] flex items-center justify-between gap-4 shrink-0">
+                      <div className="px-5 py-3 bg-studio-panel border-b border-studio-line flex items-center justify-between gap-4 shrink-0">
                         <div>
-                          <h2 className="font-display text-base font-bold text-white">
+                          <h2 className="text-base font-bold text-white">
                             Consola Mixer — {currentProject.title}
                           </h2>
-                          <p className="text-xs text-slate-400">
+                          <p className="text-xs text-neutral-400">
                             Doble clic en fader = 0.0 dB · Doble clic en knob = Centrar (C) · Clic fuera para cerrar
                           </p>
                         </div>
@@ -1721,16 +1729,16 @@ export default function App() {
                           <button
                             type="button"
                             onClick={handleResetMixer}
-                            className="h-9 px-3.5 rounded-lg bg-[#171d29] hover:bg-slate-800 border border-[#252d3c] text-xs font-semibold text-slate-200 cursor-pointer"
+                            className="h-9 px-3.5 rounded-lg bg-studio-strip hover:bg-neutral-800 border border-studio-line text-xs font-semibold text-neutral-200 cursor-pointer"
                           >
                             Restablecer 0 dB
                           </button>
                           <button
                             type="button"
                             onClick={() => setIsDockedMixerOpen(false)}
-                            className="h-9 px-4 rounded-lg bg-rose-500 hover:bg-rose-400 text-white text-xs font-bold shadow-md cursor-pointer transition-colors"
+                            className="lt-control"
                           >
-                            ✕ Cerrar Mixer
+                            Cerrar mezcla
                           </button>
                         </div>
                       </div>
@@ -1767,20 +1775,20 @@ export default function App() {
                 )}
               </div>
             ) : (
-              <div className="flex-1 flex flex-col items-center justify-center p-12 text-center">
-                <FolderOpen className="w-12 h-12 text-cyan-400 mb-3 opacity-80" />
-                <h2 className="font-display text-lg font-bold text-slate-100">
-                  El DAW está listo (Ninguna canción cargada por defecto)
+              <div className="flex-1 flex flex-col items-center justify-center p-5 text-center">
+                <FolderOpen className="w-12 h-12 text-studio-ink mb-3 opacity-80" />
+                <h2 className="text-lg font-bold text-neutral-100">
+                  Arreglo
                 </h2>
-                <p className="text-xs text-slate-400 max-w-md mt-1 mb-5">
-                  Haz clic en una canción de tu <strong>Repertorio</strong> a la izquierda para confirmar su carga, arrástrala hacia aquí, o importa nuevos stems.
+                <p className="text-xs text-neutral-400 max-w-md mt-1 mb-5">
+                  Abre una canción del repertorio o importa pistas para ver su forma de onda.
                 </p>
                 <button
                   type="button"
                   onClick={() => setIsImportModalOpen(true)}
-                  className="px-4 py-2 rounded-lg bg-cyan-400 hover:bg-cyan-300 text-slate-950 text-xs font-bold cursor-pointer"
+                  className="px-4 py-2 rounded-lg bg-studio-ink hover:bg-neutral-200 text-studio-ground text-xs font-bold cursor-pointer"
                 >
-                  Importar Stems o Carpeta
+                  Importar pistas
                 </button>
               </div>
             ))}
@@ -1815,13 +1823,13 @@ export default function App() {
                 onResetMixer={handleResetMixer}
               />
             ) : (
-              <div className="flex-1 flex flex-col items-center justify-center p-12 text-center">
-                <Music className="w-10 h-10 text-cyan-400 mb-3 opacity-80" />
-                <h2 className="font-display text-base font-bold text-slate-100">
-                  Ninguna canción cargada en la Consola Mixer
+              <div className="flex-1 flex flex-col items-center justify-center p-5 text-center">
+                <Music className="w-10 h-10 text-studio-ink mb-3 opacity-80" />
+                <h2 className="text-base font-bold text-neutral-100">
+                  Mezcla
                 </h2>
-                <p className="text-xs text-slate-400 max-w-md mt-1">
-                  Selecciona o arrastra una canción desde tu Repertorio para mezclar sus canales.
+                <p className="text-xs text-neutral-400 max-w-md mt-1">
+                  Abre una canción del repertorio para mezclar sus pistas.
                 </p>
               </div>
             ))}
@@ -1854,18 +1862,18 @@ export default function App() {
                 onToggleTrackMute={handleToggleTrackMute}
               />
             ) : (
-              <div className="flex-1 flex flex-col items-center justify-center p-12 text-center">
-                <Music className="w-10 h-10 text-cyan-400 mb-3 opacity-80" />
-                <h2 className="font-display text-base font-bold text-slate-100">
-                  Sin canción activa para Stage Remote
+              <div className="flex-1 flex flex-col items-center justify-center p-5 text-center">
+                <Music className="w-10 h-10 text-studio-ink mb-3 opacity-80" />
+                <h2 className="text-base font-bold text-neutral-100">
+                  Control remoto
                 </h2>
-                <p className="text-xs text-slate-400 max-w-md mt-1 mb-4">
-                  Primero carga una canción en la vista Setlist o Arranger.
+                <p className="text-xs text-neutral-400 max-w-md mt-1 mb-4">
+                  Abre una canción desde Setlist o Arreglo para controlarla desde aquí.
                 </p>
                 <button
                   type="button"
                   onClick={() => handleSelectView('setlist')}
-                  className="px-4 py-2 rounded-lg bg-cyan-400 text-slate-950 text-xs font-bold cursor-pointer"
+                  className="px-4 py-2 rounded-lg bg-studio-ink text-studio-ground hover:bg-neutral-200 text-xs font-bold cursor-pointer"
                 >
                   Ir a Setlist
                 </button>
@@ -1949,7 +1957,7 @@ export default function App() {
       {toastMessage && (
         <div
           role="status"
-          className="fixed bottom-3 right-3 z-50 bg-slate-800 border border-cyan-500/50 text-white px-4 py-2.5 rounded-xl text-xs font-medium shadow-lg"
+          className="fixed bottom-3 right-3 z-50 bg-neutral-800 border border-studio-line text-white px-4 py-2.5 rounded-xl text-xs font-medium shadow-lg"
         >
           {toastMessage}
         </div>

@@ -68,45 +68,46 @@ export const StageRemoteView: React.FC<StageRemoteViewProps> = ({
   };
 
   return (
-    <div className="flex-1 bg-[#0B0F17] p-4 md:p-6 overflow-y-auto select-none">
-      <div className="max-w-7xl mx-auto flex flex-col gap-5">
+    <div className="flex-1 bg-studio-ground p-4 md:p-6 overflow-y-auto select-none">
+      <div className="max-w-7xl mx-auto flex flex-col gap-4">
+        <h1 className="text-xl font-semibold">Control remoto</h1>
         {/* Top Stage HUD: Giant Timecode Clock + Active/Queued Section & Setlist Banner */}
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 items-stretch">
           {/* Giant Timecode Telemetry Card (5 cols) */}
-          <div className="lg:col-span-5 bg-[#111827] border border-slate-800 rounded-2xl p-5 flex flex-col justify-between">
-            <div className="flex items-center justify-between text-xs text-slate-400">
-              <span className="font-semibold text-slate-200 truncate">
+          <div className="lg:col-span-5 bg-studio-panel border border-neutral-800 rounded-2xl p-5 flex flex-col justify-between">
+            <div className="flex items-center justify-between text-xs text-neutral-400">
+              <span className="font-semibold text-neutral-200 truncate">
                 {project.title}
               </span>
-              <span className="font-mono tabular-nums">
+              <span className="tabular-nums">
                 {project.bpm} BPM · {project.keySignature}
               </span>
             </div>
 
-            <div className="my-4 flex items-center justify-between gap-4">
+            <div className="my-4 flex flex-wrap items-center justify-between gap-3">
               <div className="flex items-baseline gap-2">
-                <span className="font-mono tabular-nums text-4xl sm:text-5xl font-bold text-cyan-400 tracking-tight">
+                <span className="tabular-nums text-4xl sm:text-5xl font-bold text-studio-ink tracking-tight">
                   {formatTimecode(transport.currentTimeSec)}
                 </span>
-                <span className="font-mono text-xl text-slate-600">
+                <span className="text-xl text-neutral-400">
                   / {formatMmSs(transport.totalDurationSec)}
                 </span>
               </div>
 
               {/* High-visibility Beat Blocks for Stage Peripheral Vision */}
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-1 sm:gap-2">
                 {Array.from({ length: project.beatsPerBar }).map((_, idx) => {
                   const beatNum = idx + 1;
                   const isCurrent = transport.isPlaying && transport.currentBeat === beatNum;
                   return (
                     <div
                       key={beatNum}
-                      className={`w-5 h-12 rounded-md transition-opacity ${
+                      className={`w-2.5 h-8 sm:w-5 sm:h-12 rounded-md transition-opacity ${
                         isCurrent
                           ? beatNum === 1
                             ? 'bg-amber-500 opacity-100'
-                            : 'bg-cyan-400 opacity-100'
-                          : 'bg-slate-800/80 opacity-40'
+                            : 'bg-studio-accent opacity-100'
+                          : 'bg-neutral-800/80 opacity-40'
                       }`}
                     />
                   );
@@ -114,20 +115,20 @@ export const StageRemoteView: React.FC<StageRemoteViewProps> = ({
               </div>
             </div>
 
-            <div className="flex items-center justify-between text-xs text-slate-400 pt-2 border-t border-slate-800/80">
-              <span className="flex items-center gap-1.5 text-cyan-300 font-medium">
+            <div className="flex items-center justify-between text-xs text-neutral-400 pt-2 border-t border-neutral-800/80">
+              <span className="flex items-center gap-1.5 text-studio-ink font-medium">
                 <Radio className="w-3.5 h-3.5" />
                 <span>Sync multi-ventana activo</span>
               </span>
               <button
                 type="button"
                 onClick={handleCopyRemoteUrl}
-                className="text-slate-300 hover:text-white flex items-center gap-1 cursor-pointer"
+                className="text-neutral-300 hover:text-white flex items-center gap-1 cursor-pointer"
               >
                 {copiedLink ? (
                   <>
-                    <Check className="w-3.5 h-3.5 text-emerald-400" />
-                    <span className="text-emerald-400">Enlace copiado</span>
+                    <Check className="w-3.5 h-3.5 text-studio-ink" />
+                    <span className="text-studio-ink">Enlace copiado</span>
                   </>
                 ) : (
                   <>
@@ -140,15 +141,15 @@ export const StageRemoteView: React.FC<StageRemoteViewProps> = ({
           </div>
 
           {/* Active & Queued Section Status HUD + Setlist Navigation (7 cols) */}
-          <div className="lg:col-span-7 bg-[#111827] border border-slate-800 rounded-2xl p-5 flex flex-col justify-between">
+          <div className="lg:col-span-7 bg-studio-panel border border-neutral-800 rounded-2xl p-5 flex flex-col justify-between">
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               {/* Current Active Section */}
-              <div className="bg-[#0B0F17] border border-slate-800 rounded-xl p-4">
-                <div className="text-xs text-slate-400 mb-1">Sección en Curso</div>
-                <div className="font-display text-2xl sm:text-3xl font-bold text-emerald-400 truncate">
+              <div className="bg-studio-ground border border-neutral-800 rounded-xl p-4">
+                <div className="text-xs text-neutral-400 mb-1">Sección en Curso</div>
+                <div className="text-2xl sm:text-3xl font-bold text-studio-ink truncate">
                   {activeSection ? activeSection.name : 'Reproducción Libre'}
                 </div>
-                <div className="text-xs font-mono tabular-nums text-slate-400 mt-1">
+                <div className="text-xs tabular-nums text-neutral-400 mt-1">
                   {activeSection
                     ? `${formatMmSs(activeSection.startTimeSec)} – ${formatMmSs(activeSection.endTimeSec)}`
                     : 'Sin marcadores activos'}
@@ -162,17 +163,17 @@ export const StageRemoteView: React.FC<StageRemoteViewProps> = ({
                     ? 'bg-amber-500/15 border-amber-500'
                     : transport.isVamping
                     ? 'bg-amber-500/10 border-amber-500/50'
-                    : 'bg-[#0B0F17] border-slate-800'
+                    : 'bg-studio-ground border-neutral-800'
                 }`}
               >
-                <div className="text-xs text-slate-300 mb-1">
+                <div className="text-xs text-neutral-300 mb-1">
                   {queuedSection
                     ? 'Salto en Cola'
                     : transport.isVamping
                     ? 'Modo Bucle Dinámico'
                     : 'Cola del Setlist en Vivo'}
                 </div>
-                <div className="font-display text-2xl sm:text-3xl font-bold text-amber-300 truncate">
+                <div className="text-2xl sm:text-3xl font-bold text-amber-300 truncate">
                   {queuedSection
                     ? `→ ${queuedSection.name}`
                     : transport.isVamping
@@ -181,7 +182,7 @@ export const StageRemoteView: React.FC<StageRemoteViewProps> = ({
                     ? `Tema ${currentSetlistIdx + 1} de ${setlistQueue.length}`
                     : `${setlistQueue.length} temas en Setlist`}
                 </div>
-                <div className="text-xs font-mono tabular-nums text-slate-300 mt-1 flex items-center justify-between">
+                <div className="text-xs tabular-nums text-neutral-300 mt-1 flex items-center justify-between">
                   <span>
                     {queuedSection
                       ? `Entra en ${formatMmSs(queuedSection.startTimeSec)}`
@@ -195,7 +196,7 @@ export const StageRemoteView: React.FC<StageRemoteViewProps> = ({
             </div>
 
             {/* Setlist Prev/Next + Quantize Selector Bar */}
-            <div className="mt-4 flex flex-wrap items-center justify-between gap-2 pt-3 border-t border-slate-800">
+            <div className="mt-4 flex flex-wrap items-center justify-between gap-2 pt-3 border-t border-neutral-800">
               <div className="flex items-center gap-2">
                 <span className="text-xs font-semibold text-amber-300 flex items-center gap-1">
                   <ListMusic className="w-3.5 h-3.5" />
@@ -205,7 +206,7 @@ export const StageRemoteView: React.FC<StageRemoteViewProps> = ({
                   type="button"
                   onClick={onPrevSetlistSong}
                   disabled={currentSetlistIdx <= 0}
-                  className="min-h-[38px] px-3 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 disabled:opacity-30 text-slate-200 border border-slate-800 text-xs font-semibold flex items-center gap-1.5 cursor-pointer"
+                  className="min-h-[38px] px-3 py-1.5 rounded-lg bg-neutral-900 hover:bg-neutral-800 disabled:opacity-30 text-neutral-200 border border-neutral-800 text-xs font-semibold flex items-center gap-1.5 cursor-pointer"
                 >
                   <SkipBack className="w-3.5 h-3.5" />
                   <span>Anterior</span>
@@ -217,7 +218,7 @@ export const StageRemoteView: React.FC<StageRemoteViewProps> = ({
                     setlistQueue.length === 0 ||
                     currentSetlistIdx >= setlistQueue.length - 1
                   }
-                  className="min-h-[38px] px-3 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-400 disabled:opacity-30 text-slate-950 text-xs font-bold flex items-center gap-1.5 cursor-pointer"
+                  className="min-h-[38px] px-3 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-400 disabled:opacity-30 text-neutral-950 text-xs font-bold flex items-center gap-1.5 cursor-pointer"
                 >
                   <span>Siguiente Canción</span>
                   <SkipForward className="w-3.5 h-3.5" />
@@ -238,8 +239,8 @@ export const StageRemoteView: React.FC<StageRemoteViewProps> = ({
                     onClick={() => onChangeQuantize(q.id)}
                     className={`min-h-[38px] px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors cursor-pointer ${
                       project.quantizeMode === q.id
-                        ? 'bg-cyan-400 text-slate-950'
-                        : 'bg-slate-900 text-slate-300 border border-slate-800 hover:bg-slate-800'
+                        ? 'bg-studio-ink text-studio-ground hover:bg-neutral-200'
+                        : 'bg-neutral-900 text-neutral-300 border border-neutral-800 hover:bg-neutral-800'
                     }`}
                   >
                     {q.label}
@@ -253,16 +254,16 @@ export const StageRemoteView: React.FC<StageRemoteViewProps> = ({
         {/* Stretch Zone: Large Tactile Section Jump Pads */}
         <div>
           <div className="flex items-center justify-between mb-2.5">
-            <h2 className="font-display text-base font-semibold text-slate-200">
+            <h2 className="text-base font-semibold text-neutral-200">
               Pads de Sección en Vivo (Minutos y Segundos)
             </h2>
-            <span className="text-xs text-slate-400">
+            <span className="text-xs text-neutral-400">
               Toca una sección para saltar a su marca de tiempo (mm:ss)
             </span>
           </div>
 
           {project.sections.length === 0 ? (
-            <div className="p-8 rounded-2xl bg-[#111827] border border-slate-800 text-center text-xs text-slate-400">
+            <div className="p-8 rounded-2xl bg-studio-panel border border-neutral-800 text-center text-xs text-neutral-400">
               Esta canción aún no tiene marcadores de sección. Puedes añadirlos con el botón «+ Marcar aquí» en la barra de transporte.
             </div>
           ) : (
@@ -283,29 +284,29 @@ export const StageRemoteView: React.FC<StageRemoteViewProps> = ({
                         : isVampingHere
                         ? 'bg-amber-500/15 border-amber-500 text-amber-200'
                         : isActive
-                        ? 'bg-emerald-500/20 border-emerald-500 text-emerald-100'
-                        : 'bg-[#111827] border-slate-800 text-slate-200 hover:bg-slate-800/80'
+                        ? 'bg-studio-strip border-studio-line text-emerald-100'
+                        : 'bg-studio-panel border-neutral-800 text-neutral-200 hover:bg-neutral-800/80'
                     }`}
                   >
                     <div className="flex items-center justify-between w-full">
                       <span
                         style={{ backgroundColor: sec.color }}
-                        className="px-2 py-0.5 rounded text-xs font-mono font-bold text-white"
+                        className="px-2 py-0.5 rounded text-xs font-bold text-white"
                       >
                         {sec.code || idx + 1}
                       </span>
-                      <span className="font-mono tabular-nums text-xs text-slate-400">
+                      <span className="tabular-nums text-xs text-neutral-400">
                         {formatMmSs(sec.startTimeSec)}
                       </span>
                     </div>
 
                     <div className="my-2">
-                      <div className="font-display text-lg font-bold leading-snug truncate">
+                      <div className="text-lg font-bold leading-snug truncate">
                         {sec.name}
                       </div>
                     </div>
 
-                    <div className="text-xs font-mono tabular-nums flex items-center justify-between">
+                    <div className="text-xs tabular-nums flex items-center justify-between">
                       {isQueued ? (
                         <span className="text-amber-300 font-bold">EN COLA</span>
                       ) : isVampingHere ? (
@@ -313,11 +314,11 @@ export const StageRemoteView: React.FC<StageRemoteViewProps> = ({
                           <Repeat className="w-3.5 h-3.5" /> VAMP ACTIVO
                         </span>
                       ) : isActive ? (
-                        <span className="text-emerald-300 font-semibold">
+                        <span className="text-studio-ink font-semibold">
                           REPRODUCIENDO
                         </span>
                       ) : (
-                        <span className="text-slate-500">Tocar para saltar</span>
+                        <span className="text-neutral-400">Tocar para saltar</span>
                       )}
                     </div>
                   </button>
@@ -330,14 +331,14 @@ export const StageRemoteView: React.FC<StageRemoteViewProps> = ({
         {/* Bottom Natural Thumb Zone: Primary Stage Transport Triggers + Quick Mix & Stems Mute */}
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 items-stretch">
           {/* Big Stage Transport Controls (6 cols) */}
-          <div className="lg:col-span-6 bg-[#111827] border border-slate-800 rounded-2xl p-4 grid grid-cols-3 gap-3">
+          <div className="lg:col-span-6 bg-studio-panel border border-neutral-800 rounded-2xl p-4 grid grid-cols-3 gap-3">
             <button
               type="button"
               onClick={onPlayPause}
-              className={`min-h-[72px] rounded-xl font-display text-base font-bold flex flex-col items-center justify-center gap-1.5 transition-transform active:scale-[0.98] cursor-pointer ${
+              className={`min-h-[72px] rounded-xl text-base font-bold flex flex-col items-center justify-center gap-1.5 transition-transform active:scale-[0.98] cursor-pointer ${
                 transport.isPlaying
-                  ? 'bg-emerald-500 text-slate-950'
-                  : 'bg-cyan-400 text-slate-950'
+                  ? 'bg-studio-ink text-studio-ground hover:bg-neutral-200'
+                  : 'bg-studio-ink text-studio-ground hover:bg-neutral-200'
               }`}
             >
               {transport.isPlaying ? (
@@ -351,10 +352,10 @@ export const StageRemoteView: React.FC<StageRemoteViewProps> = ({
             <button
               type="button"
               onClick={onToggleVamp}
-              className={`min-h-[72px] rounded-xl font-display text-base font-bold flex flex-col items-center justify-center gap-1.5 border transition-transform active:scale-[0.98] cursor-pointer ${
+              className={`min-h-[72px] rounded-xl text-base font-bold flex flex-col items-center justify-center gap-1.5 border transition-transform active:scale-[0.98] cursor-pointer ${
                 transport.isVamping
-                  ? 'bg-amber-400 text-slate-950 border-amber-300'
-                  : 'bg-slate-900 text-slate-200 border-slate-700 hover:bg-slate-800'
+                  ? 'bg-amber-400 text-neutral-950 border-amber-300'
+                  : 'bg-neutral-900 text-neutral-200 border-neutral-700 hover:bg-neutral-800'
               }`}
             >
               <Repeat className="w-6 h-6" />
@@ -364,7 +365,7 @@ export const StageRemoteView: React.FC<StageRemoteViewProps> = ({
             <button
               type="button"
               onClick={onStop}
-              className="min-h-[72px] rounded-xl bg-slate-900 hover:bg-red-500/15 text-slate-200 hover:text-red-300 border border-slate-800 font-display text-base font-bold flex flex-col items-center justify-center gap-1.5 transition-transform active:scale-[0.98] cursor-pointer"
+              className="min-h-[72px] rounded-xl bg-neutral-900 hover:bg-red-500/15 text-neutral-200 hover:text-red-300 border border-neutral-800 text-base font-bold flex flex-col items-center justify-center gap-1.5 transition-transform active:scale-[0.98] cursor-pointer"
             >
               <Square className="w-6 h-6 fill-current" />
               <span>STOP / INICIO</span>
@@ -372,22 +373,22 @@ export const StageRemoteView: React.FC<StageRemoteViewProps> = ({
           </div>
 
           {/* Quick Monitor Bus Faders & Stem Mute Matrix (6 cols) */}
-          <div className="lg:col-span-6 bg-[#111827] border border-slate-800 rounded-2xl p-4 flex flex-col justify-between gap-4">
+          <div className="lg:col-span-6 bg-studio-panel border border-neutral-800 rounded-2xl p-4 flex flex-col justify-between gap-4">
             {/* Click, Cues, Master Touch Sliders */}
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-              <div className="bg-[#0B0F17] border border-slate-800 rounded-xl p-3">
+              <div className="bg-studio-ground border border-neutral-800 rounded-xl p-3">
                 <div className="flex items-center justify-between mb-2">
                   <button
                     type="button"
                     onClick={onToggleClick}
                     className={`text-xs font-semibold flex items-center gap-1 cursor-pointer ${
-                      project.clickEnabled ? 'text-cyan-400' : 'text-slate-400 line-through'
+                      project.clickEnabled ? 'text-studio-ink' : 'text-neutral-400 line-through'
                     }`}
                   >
                     <Volume2 className="w-3.5 h-3.5" />
                     <span>Click</span>
                   </button>
-                  <span className="font-mono tabular-nums text-xs text-slate-400">
+                  <span className="tabular-nums text-xs text-neutral-400">
                     {Math.round(project.clickGain * 100)}%
                   </span>
                 </div>
@@ -399,23 +400,23 @@ export const StageRemoteView: React.FC<StageRemoteViewProps> = ({
                   step={0.02}
                   value={project.clickGain}
                   onChange={(e) => onChangeClickGain(Number(e.target.value))}
-                  className="w-full accent-cyan-400 h-2 bg-slate-800 rounded-lg cursor-pointer"
+                  className="w-full accent-studio-accent h-2 bg-neutral-800 rounded-lg cursor-pointer"
                 />
               </div>
 
-              <div className="bg-[#0B0F17] border border-slate-800 rounded-xl p-3">
+              <div className="bg-studio-ground border border-neutral-800 rounded-xl p-3">
                 <div className="flex items-center justify-between mb-2">
                   <button
                     type="button"
                     onClick={onToggleGuide}
                     className={`text-xs font-semibold flex items-center gap-1 cursor-pointer ${
-                      project.guideCuesEnabled ? 'text-cyan-400' : 'text-slate-400 line-through'
+                      project.guideCuesEnabled ? 'text-studio-ink' : 'text-neutral-400 line-through'
                     }`}
                   >
                     <Mic className="w-3.5 h-3.5" />
                     <span>Guía Vocal</span>
                   </button>
-                  <span className="font-mono tabular-nums text-xs text-slate-400">
+                  <span className="tabular-nums text-xs text-neutral-400">
                     {Math.round(project.guideGain * 100)}%
                   </span>
                 </div>
@@ -427,16 +428,16 @@ export const StageRemoteView: React.FC<StageRemoteViewProps> = ({
                   step={0.02}
                   value={project.guideGain}
                   onChange={(e) => onChangeGuideGain(Number(e.target.value))}
-                  className="w-full accent-cyan-400 h-2 bg-slate-800 rounded-lg cursor-pointer"
+                  className="w-full accent-studio-accent h-2 bg-neutral-800 rounded-lg cursor-pointer"
                 />
               </div>
 
-              <div className="bg-[#0B0F17] border border-slate-800 rounded-xl p-3">
+              <div className="bg-studio-ground border border-neutral-800 rounded-xl p-3">
                 <div className="flex items-center justify-between mb-2">
-                  <span className="text-xs font-semibold text-emerald-400">
+                  <span className="text-xs font-semibold text-studio-ink">
                     Master L/R
                   </span>
-                  <span className="font-mono tabular-nums text-xs text-slate-400">
+                  <span className="tabular-nums text-xs text-neutral-400">
                     {Math.round(project.masterGain * 100)}%
                   </span>
                 </div>
@@ -448,7 +449,7 @@ export const StageRemoteView: React.FC<StageRemoteViewProps> = ({
                   step={0.02}
                   value={project.masterGain}
                   onChange={(e) => onChangeMasterGain(Number(e.target.value))}
-                  className="w-full accent-emerald-400 h-2 bg-slate-800 rounded-lg cursor-pointer"
+                  className="w-full accent-emerald-400 h-2 bg-neutral-800 rounded-lg cursor-pointer"
                 />
               </div>
             </div>
@@ -463,7 +464,7 @@ export const StageRemoteView: React.FC<StageRemoteViewProps> = ({
                   className={`min-h-[44px] px-3 py-2 rounded-xl text-xs font-semibold border flex items-center gap-2 transition-colors cursor-pointer ${
                     trk.muted
                       ? 'bg-red-500/15 border-red-500/50 text-red-300 line-through'
-                      : 'bg-[#0B0F17] border-slate-800 text-slate-200 hover:bg-slate-800'
+                      : 'bg-studio-ground border-neutral-800 text-neutral-200 hover:bg-neutral-800'
                   }`}
                 >
                   <span

@@ -3,6 +3,7 @@ import {
   FolderOpen,
   Upload,
   Download,
+  MoreHorizontal,
   Plus,
   Trash2,
   X,
@@ -69,22 +70,22 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
   };
 
   return (
-    <div className="flex-1 bg-[#0B0F17] p-6 overflow-y-auto">
+    <div className="flex-1 min-w-0 bg-studio-ground p-4 sm:p-6 overflow-y-auto">
       <div className="max-w-6xl mx-auto space-y-8">
         {/* Header & JSON Project Import/Export */}
-        <div className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-800 pb-5">
+        <div className="flex flex-wrap items-center justify-between gap-4 border-b border-neutral-800 pb-5">
           <div>
-            <h1 className="font-display text-2xl font-bold text-slate-100">
-              Gestión de Repertorio y Copias de Seguridad
+            <h1 className="text-2xl font-bold text-neutral-100">
+              Biblioteca
             </h1>
-            <p className="text-sm text-slate-400 mt-1">
-              Puedes arrastrar tus canciones desde el panel lateral hacia el DAW o al Modo Setlist.
+            <p className="text-sm text-neutral-400 mt-1">
+              Canciones guardadas en este navegador.
             </p>
           </div>
 
           <div className="flex items-center gap-3">
-            <label className="px-4 py-2 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 text-xs font-semibold text-slate-200 flex items-center gap-2 cursor-pointer transition-colors">
-              <Upload className="w-4 h-4 text-cyan-400" />
+            <label className="px-4 py-2 rounded-lg bg-neutral-900 hover:bg-neutral-800 border border-neutral-800 text-xs font-semibold text-neutral-200 flex items-center gap-2 cursor-pointer transition-colors">
+              <Upload className="w-4 h-4 text-studio-ink" />
               <span>Importar .libretracks.json</span>
               <input
                 type="file"
@@ -101,10 +102,10 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
             <button
               type="button"
               onClick={onOpenStemImporter}
-              className="px-4 py-2 rounded-lg bg-cyan-400 hover:bg-cyan-300 text-slate-950 text-xs font-semibold flex items-center gap-2 cursor-pointer transition-colors"
+              className="px-4 py-2 rounded-lg bg-studio-ink hover:bg-neutral-200 text-studio-ground text-xs font-semibold flex items-center gap-2 cursor-pointer transition-colors"
             >
               <Music className="w-4 h-4" />
-              <span>Importar Nueva Canción o Stems</span>
+              <span>Importar pistas</span>
             </button>
           </div>
         </div>
@@ -113,12 +114,13 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
           {/* Saved Songs List (8 cols) */}
           <div className="lg:col-span-8 space-y-3">
-            <h2 className="font-display text-base font-semibold text-slate-200">
-              Canciones en tu Biblioteca ({projects.length})
+            <h2 className="text-base font-semibold text-neutral-200">
+              Canciones ({projects.length})
             </h2>
 
-            <div className="space-y-3">
-              {projects.map((proj) => {
+            <div className="divide-y divide-studio-line">
+              {projects.length === 0 && <p className="rounded-lg bg-studio-panel p-4 text-sm text-studio-muted">Importa pistas o crea una canción para empezar.</p>}
+              {projects.map((proj, index) => {
                 const isCurrent = proj.id === currentProjectId;
                 const durSec =
                   proj.durationSec || ((proj.totalBars || 24) * 4 * 60) / (proj.bpm || 120);
@@ -128,27 +130,23 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                 return (
                   <div
                     key={proj.id}
-                    className={`p-4 rounded-xl border transition-colors flex flex-wrap items-center justify-between gap-4 ${
-                      isCurrent
-                        ? 'bg-[#111827] border-cyan-500/60'
-                        : 'bg-[#111827]/70 border-slate-800 hover:border-slate-700'
-                    }`}
+                    className="flex flex-wrap items-center justify-between gap-3 py-3.5"
                   >
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center gap-2">
-                        <h3 className="font-display text-base font-bold text-slate-100 truncate">
+                    <div className="min-w-[10rem] flex-1">
+                      <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                        <h3 className="text-base font-bold text-neutral-100 truncate">
                           {proj.title}
                         </h3>
                         {isCurrent && (
-                          <span className="text-xs font-medium text-cyan-400 flex items-center gap-1">
-                            <CheckCircle2 className="w-3.5 h-3.5" /> En el DAW
+                          <span className="text-xs font-medium text-studio-ink flex items-center gap-1">
+                            <CheckCircle2 className="w-3.5 h-3.5" /> Activa
                           </span>
                         )}
                         {/* OPFS Streaming PCM Status Badge */}
                         {isPcmReady ? (
                           <span
                             title={`Audio PCM Int16 optimizado en OPFS (~${pcmMB} MB en disco). Carga rápida y streaming por ventanas.`}
-                            className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 flex items-center gap-1"
+                            className="px-2 py-0.5 rounded text-[11px] font-bold bg-studio-strip text-studio-ink border border-studio-line flex items-center gap-1"
                           >
                             <HardDrive className="w-3 h-3" />
                             <span>PCM listo ({pcmMB} MB)</span>
@@ -156,98 +154,106 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                         ) : (
                           <span
                             title="Esta canción aún no tiene archivos PCM generados en OPFS. Pulsa 'Optimizar' para generar PCM en disco."
-                            className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-amber-500/20 text-amber-300 border border-amber-500/40 flex items-center gap-1"
+                            className="px-2 py-0.5 rounded text-[11px] text-studio-muted flex items-center gap-1"
                           >
                             <span>Sin optimizar</span>
                           </span>
                         )}
                       </div>
 
-                      <div className="flex flex-wrap items-center gap-2 text-xs text-slate-400 mt-1">
+                      <div className="flex flex-wrap items-center gap-2 text-xs text-neutral-400 mt-1">
                         <span>{proj.artist}</span>
                         <span aria-hidden="true">·</span>
-                        <span className="font-mono tabular-nums">{formatMmSs(durSec)}</span>
+                        <span className="tabular-nums">{formatMmSs(durSec)}</span>
                         <span aria-hidden="true">·</span>
-                        <span className="font-mono tabular-nums">{proj.bpm} BPM</span>
+                        <span className="tabular-nums">{proj.bpm} BPM</span>
                         <span aria-hidden="true">·</span>
                         <span>{proj.keySignature}</span>
                         <span aria-hidden="true">·</span>
-                        <span className="font-mono tabular-nums">
+                        <span className="tabular-nums">
                           {proj.tracks.length} pistas
                         </span>
                         <span aria-hidden="true">·</span>
-                        <span className="font-mono tabular-nums">
+                        <span className="tabular-nums">
                           {proj.sections.length} marcadores
                         </span>
                       </div>
                     </div>
 
                     <div className="flex items-center gap-2 shrink-0">
-                      {/* Relink original files (moved/renamed folder or permission lost) */}
-                      {!isPcmReady && onRelinkProject && isFsAccessSupported() && (
+                      <button type="button" className="lt-control" onClick={() => onSelectProject(proj.id)}>{isCurrent ? 'Abierta' : 'Abrir'}</button>
+                      <button type="button" popoverTarget={`library-song-${index}`} aria-label={`Acciones de ${proj.title}`} className="lt-control lt-icon-control">
+                        <MoreHorizontal size={17} />
+                      </button>
+                      <div id={`library-song-${index}`} popover="auto" className="lt-popover lt-library-actions space-y-1">
+                        {/* Relink original files (moved/renamed folder or permission lost) */}
+                        {!isPcmReady && onRelinkProject && isFsAccessSupported() && (
+                          <button
+                            type="button"
+                            onClick={(event) => {
+                              event.currentTarget.closest<HTMLElement>('[popover]')?.hidePopover();
+                              onRelinkProject(proj);
+                            }}
+                            title="Elegir la carpeta donde están ahora los stems originales de esta canción"
+                            className="px-3 py-2 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-neutral-200 border border-neutral-700 text-xs font-semibold flex items-center gap-1.5 cursor-pointer transition-colors"
+                          >
+                            <FolderPlus className="w-3.5 h-3.5 text-studio-ink" />
+                            <span>Reubicar archivos</span>
+                          </button>
+                        )}
+
+                        {/* Optimize for Streaming Button if not yet optimized */}
+                        {!isPcmReady && proj.tracks.length > 0 && (
+                          <button
+                            type="button"
+                            onClick={(event) => {
+                              event.currentTarget.closest<HTMLElement>('[popover]')?.hidePopover();
+                              onOptimizeProject(proj);
+                            }}
+                            title="Convertir stems a PCM estéreo Int16 en OPFS para streaming estilo REAPER"
+                            className="px-3 py-2 rounded-lg bg-studio-strip hover:bg-neutral-700 text-studio-ink border border-studio-line text-xs font-semibold flex items-center gap-1.5 cursor-pointer transition-colors"
+                          >
+                            <Zap className="w-3.5 h-3.5 text-studio-ink" />
+                            <span>Optimizar para streaming</span>
+                          </button>
+                        )}
+
                         <button
                           type="button"
-                          onClick={() => onRelinkProject(proj)}
-                          title="Elegir la carpeta donde están ahora los stems originales de esta canción"
-                          className="px-3 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-semibold flex items-center gap-1.5 cursor-pointer transition-colors"
+                          onClick={(event) => {
+                              event.currentTarget.closest<HTMLElement>('[popover]')?.hidePopover();
+                              onAddToSetlist(proj.id);
+                            }}
+                          className="px-3 py-2 rounded-lg bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 border border-amber-500/40 text-xs font-semibold flex items-center gap-1.5 cursor-pointer transition-colors"
                         >
-                          <FolderPlus className="w-3.5 h-3.5 text-emerald-400" />
-                          <span>Reubicar archivos</span>
+                          <ListMusic className="w-3.5 h-3.5" />
+                          <span>Añadir al Setlist</span>
                         </button>
-                      )}
 
-                      {/* Optimize for Streaming Button if not yet optimized */}
-                      {!isPcmReady && proj.tracks.length > 0 && (
                         <button
                           type="button"
-                          onClick={() => onOptimizeProject(proj)}
-                          title="Convertir stems a PCM estéreo Int16 en OPFS para streaming estilo REAPER"
-                          className="px-3 py-2 rounded-lg bg-cyan-500/15 hover:bg-cyan-500/25 text-cyan-300 border border-cyan-500/40 text-xs font-semibold flex items-center gap-1.5 cursor-pointer transition-colors"
+                          onClick={(event) => {
+                              event.currentTarget.closest<HTMLElement>('[popover]')?.hidePopover();
+                              onExportJson(proj);
+                            }}
+                          title="Exportar configuración del proyecto en JSON"
+                          className="p-2 rounded-lg bg-neutral-900 hover:bg-neutral-800 text-neutral-300 border border-neutral-800 cursor-pointer"
                         >
-                          <Zap className="w-3.5 h-3.5 text-cyan-400" />
-                          <span>Optimizar para streaming</span>
+                          <Download className="w-4 h-4" /> Exportar JSON
                         </button>
-                      )}
 
-                      <button
-                        type="button"
-                        onClick={() => onAddToSetlist(proj.id)}
-                        className="px-3 py-2 rounded-lg bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 border border-amber-500/40 text-xs font-semibold flex items-center gap-1.5 cursor-pointer transition-colors"
-                      >
-                        <ListMusic className="w-3.5 h-3.5" />
-                        <span>+ Setlist</span>
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={() => onSelectProject(proj.id)}
-                        className={`px-3.5 py-2 rounded-lg text-xs font-semibold flex items-center gap-1.5 cursor-pointer transition-colors ${
-                          isCurrent
-                            ? 'bg-emerald-500/15 text-emerald-300 border border-emerald-500/40'
-                            : 'bg-cyan-400 text-slate-950 hover:bg-cyan-300'
-                        }`}
-                      >
-                        <FolderOpen className="w-3.5 h-3.5" />
-                        <span>{isCurrent ? 'Abierto en Consola' : 'Cargar en DAW'}</span>
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={() => onExportJson(proj)}
-                        title="Exportar configuración del proyecto en JSON"
-                        className="p-2 rounded-lg bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-800 cursor-pointer"
-                      >
-                        <Download className="w-4 h-4" />
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={() => onDeleteProject(proj.id)}
-                        title="Eliminar proyecto de la biblioteca"
-                        className="p-2 rounded-lg bg-slate-900 hover:bg-red-500/20 text-slate-400 hover:text-red-400 border border-slate-800 cursor-pointer"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
+                        <button
+                          type="button"
+                          onClick={(event) => {
+                              event.currentTarget.closest<HTMLElement>('[popover]')?.hidePopover();
+                              onDeleteProject(proj.id);
+                            }}
+                          title="Eliminar proyecto de la biblioteca"
+                          className="p-2 rounded-lg bg-neutral-900 hover:bg-red-500/20 text-neutral-400 hover:text-red-400 border border-neutral-800 cursor-pointer"
+                        >
+                          <Trash2 className="w-4 h-4" /> Eliminar canción
+                        </button>
+                      </div>
                     </div>
                   </div>
                 );
@@ -258,17 +264,17 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
           {/* Create New Song Project Card (4 cols) */}
           <form
             onSubmit={handleCreate}
-            className="lg:col-span-4 bg-[#111827] border border-slate-800 rounded-xl p-5 space-y-4"
+            className="lg:col-span-4 bg-studio-panel border border-neutral-800 rounded-xl p-5 space-y-4"
           >
-            <h2 className="font-display text-base font-bold text-slate-100">
-              Crear Nueva Canción Multipista
+            <h2 className="text-base font-bold text-neutral-100">
+              Crear canción
             </h2>
-            <p className="text-xs text-slate-400">
+            <p className="text-xs text-neutral-400">
               Inicia una sesión vacía o suelta directamente tus archivos de audio para crearla.
             </p>
 
             <div>
-              <label className="block text-xs font-medium text-slate-300 mb-1">
+              <label className="block text-xs font-medium text-neutral-300 mb-1">
                 Título de la Canción
               </label>
               <input
@@ -277,12 +283,12 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                 placeholder="Ej. Amanecer Eléctrico (Live)"
                 value={newTitle}
                 onChange={(e) => setNewTitle(e.target.value)}
-                className="w-full bg-[#0B0F17] border border-slate-800 rounded-lg px-3 py-2 text-sm text-slate-100 focus:outline-none focus:border-cyan-500"
+                className="w-full bg-studio-ground border border-neutral-800 rounded-lg px-3 py-2 text-sm text-neutral-100 focus:outline-none focus:border-studio-line"
               />
             </div>
 
             <div>
-              <label className="block text-xs font-medium text-slate-300 mb-1">
+              <label className="block text-xs font-medium text-neutral-300 mb-1">
                 Artista / Ensamble
               </label>
               <input
@@ -290,13 +296,13 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                 placeholder="Ej. Banda Principal"
                 value={newArtist}
                 onChange={(e) => setNewArtist(e.target.value)}
-                className="w-full bg-[#0B0F17] border border-slate-800 rounded-lg px-3 py-2 text-sm text-slate-100 focus:outline-none focus:border-cyan-500"
+                className="w-full bg-studio-ground border border-neutral-800 rounded-lg px-3 py-2 text-sm text-neutral-100 focus:outline-none focus:border-studio-line"
               />
             </div>
 
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <label className="block text-xs font-medium text-slate-300 mb-1">
+                <label className="block text-xs font-medium text-neutral-300 mb-1">
                   Tempo (BPM)
                 </label>
                 <input
@@ -305,26 +311,26 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                   max={220}
                   value={newBpm}
                   onChange={(e) => setNewBpm(Number(e.target.value))}
-                  className="w-full bg-[#0B0F17] border border-slate-800 rounded-lg px-3 py-2 text-sm font-mono tabular-nums text-slate-100 focus:outline-none focus:border-cyan-500"
+                  className="w-full bg-studio-ground border border-neutral-800 rounded-lg px-3 py-2 text-sm tabular-nums text-neutral-100 focus:outline-none focus:border-studio-line"
                 />
               </div>
 
               <div>
-                <label className="block text-xs font-medium text-slate-300 mb-1">
+                <label className="block text-xs font-medium text-neutral-300 mb-1">
                   Tonalidad
                 </label>
                 <input
                   type="text"
                   value={newKey}
                   onChange={(e) => setNewKey(e.target.value)}
-                  className="w-full bg-[#0B0F17] border border-slate-800 rounded-lg px-3 py-2 text-sm text-slate-100 focus:outline-none focus:border-cyan-500"
+                  className="w-full bg-studio-ground border border-neutral-800 rounded-lg px-3 py-2 text-sm text-neutral-100 focus:outline-none focus:border-studio-line"
                 />
               </div>
             </div>
 
             <button
               type="submit"
-              className="w-full py-2.5 bg-cyan-400 hover:bg-cyan-300 text-slate-950 font-semibold text-xs rounded-lg flex items-center justify-center gap-1.5 cursor-pointer transition-colors"
+              className="w-full py-2.5 bg-studio-ink hover:bg-neutral-200 text-studio-ground font-semibold text-xs rounded-lg flex items-center justify-center gap-1.5 cursor-pointer transition-colors"
             >
               <Plus className="w-4 h-4" />
               <span>Crear Proyecto y Abrir Consola</span>
@@ -364,18 +370,18 @@ export const ConfirmSongActionModal: React.FC<ConfirmSongActionModalProps> = ({
     song.durationSec || ((song.totalBars || 24) * 4 * 60) / (song.bpm || 120);
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-xs flex items-center justify-center p-4">
-      <div className="bg-[#111827] border border-slate-800 rounded-2xl max-w-md w-full p-6 space-y-5 shadow-2xl">
+    <div className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4">
+      <div className="bg-studio-panel border border-neutral-800 rounded-2xl max-w-md w-full p-6 space-y-5 shadow-2xl">
         <div className="flex items-start justify-between gap-3">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-cyan-500/15 border border-cyan-500/30 flex items-center justify-center shrink-0">
-              <Music className="w-5 h-5 text-cyan-400" />
+            <div className="w-10 h-10 rounded-xl bg-studio-strip border border-studio-line flex items-center justify-center shrink-0">
+              <Music className="w-5 h-5 text-studio-ink" />
             </div>
             <div>
-              <h2 className="font-display text-base font-bold text-slate-100">
+              <h2 className="text-base font-bold text-neutral-100">
                 {song.title}
               </h2>
-              <p className="text-xs text-slate-400">
+              <p className="text-xs text-neutral-400">
                 {song.artist} · {formatMmSs(durSec)} · {song.bpm} BPM · {song.keySignature}
               </p>
             </div>
@@ -384,28 +390,28 @@ export const ConfirmSongActionModal: React.FC<ConfirmSongActionModalProps> = ({
           <button
             type="button"
             onClick={onClose}
-            className="text-slate-400 hover:text-white p-1 cursor-pointer"
+            className="text-neutral-400 hover:text-white p-1 cursor-pointer"
           >
             <X className="w-5 h-5" />
           </button>
         </div>
 
-        <div className="bg-[#0B0F17] border border-slate-800 rounded-xl p-3.5 text-xs text-slate-300 space-y-1">
+        <div className="bg-studio-ground border border-neutral-800 rounded-xl p-3.5 text-xs text-neutral-300 space-y-1">
           <div className="flex items-center justify-between">
-            <span className="text-slate-400">Pistas multipista incluidas:</span>
-            <span className="font-mono font-bold text-cyan-300">
+            <span className="text-neutral-400">Pistas multipista incluidas:</span>
+            <span className="font-bold text-studio-ink">
               {song.tracks.length} stems
             </span>
           </div>
           <div className="flex items-center justify-between">
-            <span className="text-slate-400">Marcadores de sección:</span>
-            <span className="font-mono font-bold text-slate-200">
+            <span className="text-neutral-400">Marcadores de sección:</span>
+            <span className="font-bold text-neutral-200">
               {song.sections.length}
             </span>
           </div>
         </div>
 
-        <p className="text-xs text-slate-400">
+        <p className="text-xs text-neutral-400">
           ¿Confirmas que deseas montar esta canción en el DAW ahora, o prefieres enviarla a la cola del Modo Setlist?
         </p>
 
@@ -416,7 +422,7 @@ export const ConfirmSongActionModal: React.FC<ConfirmSongActionModalProps> = ({
               onConfirmLoadInDaw(song.id);
               onClose();
             }}
-            className="flex-1 py-2.5 px-4 rounded-xl bg-cyan-400 hover:bg-cyan-300 text-slate-950 font-bold text-xs flex items-center justify-center gap-2 cursor-pointer transition-colors"
+            className="flex-1 py-2.5 px-4 rounded-xl bg-studio-ink hover:bg-neutral-200 text-studio-ground font-bold text-xs flex items-center justify-center gap-2 cursor-pointer transition-colors"
           >
             <Play className="w-3.5 h-3.5 fill-current" />
             <span>
@@ -439,7 +445,7 @@ export const ConfirmSongActionModal: React.FC<ConfirmSongActionModalProps> = ({
           <button
             type="button"
             onClick={onClose}
-            className="py-2.5 px-3.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium cursor-pointer transition-colors"
+            className="py-2.5 px-3.5 rounded-xl bg-neutral-800 hover:bg-neutral-700 text-neutral-300 text-xs font-medium cursor-pointer transition-colors"
           >
             Cancelar
           </button>
@@ -475,30 +481,30 @@ export const StemImporterModal: React.FC<StemImporterModalProps> = ({
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
-      <div className="bg-[#111827] border border-slate-800 rounded-2xl max-w-lg w-full p-6 space-y-5 shadow-xl">
+    <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4">
+      <div className="bg-studio-panel border border-neutral-800 rounded-xl max-w-lg w-full max-h-[92dvh] overflow-y-auto p-4 sm:p-6 space-y-5 shadow-xl">
         <div className="flex items-center justify-between">
-          <h2 className="font-display text-lg font-bold text-slate-100">
+          <h2 className="text-lg font-bold text-neutral-100">
             Importación Instantánea de Canción o Stems
           </h2>
           <button
             type="button"
             onClick={onClose}
-            className="text-slate-400 hover:text-white p-1 cursor-pointer"
+            className="text-neutral-400 hover:text-white p-1 cursor-pointer"
           >
             <X className="w-5 h-5" />
           </button>
         </div>
 
         {/* Mode Selection: Create New Song vs Add to Current */}
-        <div className="grid grid-cols-2 gap-2 bg-[#0B0F17] p-1 rounded-xl border border-slate-800">
+        <div className="grid grid-cols-2 gap-2 bg-studio-ground p-1 rounded-xl border border-neutral-800">
           <button
             type="button"
             onClick={() => setImportMode('new-song')}
             className={`py-2 px-3 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors cursor-pointer ${
               importMode === 'new-song'
-                ? 'bg-slate-800 text-cyan-300 shadow-2xs'
-                : 'text-slate-400'
+                ? 'bg-neutral-800 text-studio-ink shadow-2xs'
+                : 'text-neutral-400'
             }`}
           >
             <Music className="w-3.5 h-3.5" />
@@ -509,8 +515,8 @@ export const StemImporterModal: React.FC<StemImporterModalProps> = ({
             onClick={() => setImportMode('current-song')}
             className={`py-2 px-3 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors cursor-pointer ${
               importMode === 'current-song'
-                ? 'bg-slate-800 text-cyan-300 shadow-2xs'
-                : 'text-slate-400'
+                ? 'bg-neutral-800 text-studio-ink shadow-2xs'
+                : 'text-neutral-400'
             }`}
           >
             <Plus className="w-3.5 h-3.5" />
@@ -518,22 +524,22 @@ export const StemImporterModal: React.FC<StemImporterModalProps> = ({
           </button>
         </div>
 
-        <p className="text-xs text-slate-400 leading-relaxed">
-          Selecciona tus pistas (<code className="text-slate-200">.wav</code>,{' '}
-          <code className="text-slate-200">.mp3</code>,{' '}
-          <code className="text-slate-200">.ogg</code>,{' '}
-          <code className="text-slate-200">.flac</code>,{' '}
-          <code className="text-slate-200">.m4a</code>). La canción se cargará limpia con su duración real en minutos y segundos.
+        <p className="text-xs text-neutral-400 leading-relaxed">
+          Selecciona tus pistas (<code className="text-neutral-200">.wav</code>,{' '}
+          <code className="text-neutral-200">.mp3</code>,{' '}
+          <code className="text-neutral-200">.ogg</code>,{' '}
+          <code className="text-neutral-200">.flac</code>,{' '}
+          <code className="text-neutral-200">.m4a</code>). La canción se cargará limpia con su duración real en minutos y segundos.
         </p>
 
         <div>
-          <label className="block text-xs font-medium text-slate-300 mb-1.5">
+          <label className="block text-xs font-medium text-neutral-300 mb-1.5">
             Bus de Salida Predeterminado
           </label>
           <select
             value={defaultBus}
             onChange={(e) => setDefaultBus(e.target.value as OutputBus)}
-            className="w-full bg-[#0B0F17] border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-100 focus:outline-none focus:border-cyan-500"
+            className="w-full bg-studio-ground border border-neutral-800 rounded-lg px-3 py-2 text-xs text-neutral-100 focus:outline-none focus:border-studio-line"
           >
             <option value="main">Main L/R (Pistas Click/Guide van a Cue automáticamente)</option>
             <option value="cue-click">Click / Cue Bus (Solo Monitoreo)</option>
@@ -552,13 +558,13 @@ export const StemImporterModal: React.FC<StemImporterModalProps> = ({
                 onImportFiles(files, defaultBus, importMode);
               });
             }}
-            className="border-2 border-dashed border-slate-700 hover:border-cyan-400 rounded-xl p-6 flex flex-col items-center justify-center text-center cursor-pointer transition-colors bg-[#0B0F17]/60"
+            className="border-2 border-dashed border-neutral-700 hover:border-studio-line rounded-xl p-6 flex flex-col items-center justify-center text-center cursor-pointer transition-colors bg-studio-ground/60"
           >
-            <Upload className="w-7 h-7 text-cyan-400 mb-2" />
-            <span className="text-xs font-bold text-slate-200">
+            <Upload className="w-7 h-7 text-studio-ink mb-2" />
+            <span className="text-xs font-bold text-neutral-200">
               Elegir Archivos de Audio
             </span>
-            <span className="text-[11px] text-slate-400 mt-1">
+            <span className="text-[11px] text-neutral-400 mt-1">
               Selección múltiple (.wav, .mp3...)
             </span>
             <input
@@ -586,13 +592,13 @@ export const StemImporterModal: React.FC<StemImporterModalProps> = ({
                 onImportFiles(files, defaultBus, importMode);
               })
             }
-            className="border-2 border-dashed border-slate-700 hover:border-cyan-400 rounded-xl p-6 flex flex-col items-center justify-center text-center cursor-pointer transition-colors bg-[#0B0F17]/60"
+            className="border-2 border-dashed border-neutral-700 hover:border-studio-line rounded-xl p-6 flex flex-col items-center justify-center text-center cursor-pointer transition-colors bg-studio-ground/60"
           >
-            <FolderPlus className="w-7 h-7 text-emerald-400 mb-2" />
-            <span className="text-xs font-bold text-slate-200">
+            <FolderPlus className="w-7 h-7 text-studio-ink mb-2" />
+            <span className="text-xs font-bold text-neutral-200">
               Importar Carpeta Completa
             </span>
-            <span className="text-[11px] text-slate-400 mt-1">
+            <span className="text-[11px] text-neutral-400 mt-1">
               Detecta título y todos los stems
             </span>
           </button>
@@ -620,7 +626,7 @@ export const StemImporterModal: React.FC<StemImporterModalProps> = ({
           <button
             type="button"
             onClick={onClose}
-            className="px-4 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs font-medium text-slate-200 cursor-pointer"
+            className="px-4 py-2 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-xs font-medium text-neutral-200 cursor-pointer"
           >
             Cerrar
           </button>
@@ -762,37 +768,37 @@ export const SectionEditorModal: React.FC<SectionEditorModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-xs flex items-center justify-center p-4">
-      <div className="bg-[#111827] border border-slate-800 rounded-2xl max-w-3xl w-full p-6 space-y-5 max-h-[90vh] flex flex-col shadow-2xl">
+    <div className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4">
+      <div className="bg-studio-panel border border-neutral-800 rounded-2xl max-w-3xl w-full p-6 space-y-5 max-h-[90vh] flex flex-col shadow-2xl">
         <div className="flex items-center justify-between">
           <div>
-            <h2 className="font-display text-lg font-bold text-slate-100">
+            <h2 className="text-lg font-bold text-neutral-100">
               Marcadores de Sección por Tiempo (Minutos y Segundos)
             </h2>
-            <p className="text-xs text-slate-400">
-              Define en qué minuto y segundo (<code className="text-cyan-300">mm:ss</code>) empieza y termina cada parte de la canción.
+            <p className="text-xs text-neutral-400">
+              Define en qué minuto y segundo (<code className="text-studio-ink">mm:ss</code>) empieza y termina cada parte de la canción.
             </p>
           </div>
           <button
             type="button"
             onClick={onClose}
-            className="text-slate-400 hover:text-white p-1 cursor-pointer"
+            className="text-neutral-400 hover:text-white p-1 cursor-pointer"
           >
             <X className="w-5 h-5" />
           </button>
         </div>
 
         {/* Playhead Quick Insert Box */}
-        <div className="bg-[#0B0F17] border border-slate-800 rounded-xl p-3.5 space-y-2.5">
+        <div className="bg-studio-ground border border-neutral-800 rounded-xl p-3.5 space-y-2.5">
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <div className="flex items-center gap-2 text-xs text-slate-300">
-              <Flag className="w-4 h-4 text-cyan-400" />
+            <div className="flex items-center gap-2 text-xs text-neutral-300">
+              <Flag className="w-4 h-4 text-studio-ink" />
               <span>
                 Insertar sección en la posición actual del cabezal:{' '}
-                <strong className="font-mono text-cyan-300">
+                <strong className="text-studio-ink">
                   {formatMmSs(currentTimeSec)}
                 </strong>{' '}
-                <span className="text-slate-500">
+                <span className="text-neutral-400">
                   (Duración total: {formatMmSs(safeDuration)})
                 </span>
               </span>
@@ -805,7 +811,7 @@ export const SectionEditorModal: React.FC<SectionEditorModalProps> = ({
                 key={preset.name}
                 type="button"
                 onClick={() => handleAddPresetAtTime(preset, currentTimeSec)}
-                className="px-2.5 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-700 text-xs font-medium text-slate-200 flex items-center gap-1.5 cursor-pointer transition-colors"
+                className="px-2.5 py-1 rounded-lg bg-neutral-900 hover:bg-neutral-800 border border-neutral-700 text-xs font-medium text-neutral-200 flex items-center gap-1.5 cursor-pointer transition-colors"
               >
                 <span
                   style={{ backgroundColor: preset.color }}
@@ -820,14 +826,14 @@ export const SectionEditorModal: React.FC<SectionEditorModalProps> = ({
         {/* Section List in MM:SS */}
         <div className="flex-1 overflow-y-auto space-y-2 pr-1">
           {sections.length === 0 ? (
-            <div className="p-8 text-center border border-dashed border-slate-800 rounded-xl text-xs text-slate-400">
+            <div className="p-8 text-center border border-dashed border-neutral-800 rounded-xl text-xs text-neutral-400">
               Esta canción no tiene marcadores de sección. Usa los botones de arriba para añadir un marcador en el segundo actual del cabezal.
             </div>
           ) : (
             sections.map((sec) => (
               <div
                 key={sec.id}
-                className="bg-[#0B0F17] border border-slate-800 rounded-xl p-3 flex flex-wrap items-center gap-2.5"
+                className="bg-studio-ground border border-neutral-800 rounded-xl p-3 flex flex-wrap items-center gap-2.5"
               >
                 <input
                   type="color"
@@ -843,7 +849,7 @@ export const SectionEditorModal: React.FC<SectionEditorModalProps> = ({
                   onChange={(e) =>
                     handleUpdateField(sec.id, 'code', e.target.value.toUpperCase())
                   }
-                  className="w-12 bg-slate-900 border border-slate-800 rounded px-2 py-1 text-xs font-mono font-bold text-slate-100 text-center"
+                  className="w-12 bg-neutral-900 border border-neutral-800 rounded px-2 py-1 text-xs font-bold text-neutral-100 text-center"
                   title="Código corto (ej. IN, V1, CO)"
                 />
 
@@ -851,12 +857,12 @@ export const SectionEditorModal: React.FC<SectionEditorModalProps> = ({
                   type="text"
                   value={sec.name}
                   onChange={(e) => handleUpdateField(sec.id, 'name', e.target.value)}
-                  className="flex-1 min-w-[130px] bg-slate-900 border border-slate-800 rounded px-2.5 py-1 text-xs text-slate-100"
+                  className="flex-1 min-w-[130px] bg-neutral-900 border border-neutral-800 rounded px-2.5 py-1 text-xs text-neutral-100"
                   placeholder="Nombre de sección"
                 />
 
                 {/* Start Time MM:SS + Capture Playhead */}
-                <div className="flex items-center gap-1 text-xs text-slate-400">
+                <div className="flex items-center gap-1 text-xs text-neutral-400">
                   <span>Inicio:</span>
                   <input
                     type="text"
@@ -867,7 +873,7 @@ export const SectionEditorModal: React.FC<SectionEditorModalProps> = ({
                       handleUpdateField(sec.id, 'startTimeSec', parsed);
                     }}
                     placeholder="00:00"
-                    className="w-15 bg-slate-900 border border-slate-800 rounded px-2 py-1 text-xs font-mono tabular-nums text-cyan-300 text-center"
+                    className="w-15 bg-neutral-900 border border-neutral-800 rounded px-2 py-1 text-xs tabular-nums text-studio-ink text-center"
                     title="Formato mm:ss (ej. 01:15)"
                   />
                   <button
@@ -880,7 +886,7 @@ export const SectionEditorModal: React.FC<SectionEditorModalProps> = ({
                       )
                     }
                     title={`Fijar inicio en el cabezal actual (${formatMmSs(currentTimeSec)})`}
-                    className="px-1.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-[10px] text-cyan-300 flex items-center gap-1 cursor-pointer"
+                    className="px-1.5 py-1 rounded bg-neutral-800 hover:bg-neutral-700 text-[11px] text-studio-ink flex items-center gap-1 cursor-pointer"
                   >
                     <Clock className="w-3 h-3" />
                     <span>Cabezal</span>
@@ -888,7 +894,7 @@ export const SectionEditorModal: React.FC<SectionEditorModalProps> = ({
                 </div>
 
                 {/* End Time MM:SS */}
-                <div className="flex items-center gap-1 text-xs text-slate-400">
+                <div className="flex items-center gap-1 text-xs text-neutral-400">
                   <span>Fin:</span>
                   <input
                     type="text"
@@ -903,7 +909,7 @@ export const SectionEditorModal: React.FC<SectionEditorModalProps> = ({
                       );
                     }}
                     placeholder="00:30"
-                    className="w-15 bg-slate-900 border border-slate-800 rounded px-2 py-1 text-xs font-mono tabular-nums text-slate-200 text-center"
+                    className="w-15 bg-neutral-900 border border-neutral-800 rounded px-2 py-1 text-xs tabular-nums text-neutral-200 text-center"
                     title="Formato mm:ss (ej. 01:45)"
                   />
                 </div>
@@ -917,7 +923,7 @@ export const SectionEditorModal: React.FC<SectionEditorModalProps> = ({
                   className={`px-2 py-1 rounded text-xs font-medium flex items-center gap-1 border cursor-pointer ${
                     sec.vampByDefault
                       ? 'bg-amber-500/20 border-amber-500 text-amber-300'
-                      : 'bg-slate-900 border-slate-800 text-slate-400'
+                      : 'bg-neutral-900 border-neutral-800 text-neutral-400'
                   }`}
                 >
                   <Repeat className="w-3 h-3" />
@@ -928,7 +934,7 @@ export const SectionEditorModal: React.FC<SectionEditorModalProps> = ({
                   type="button"
                   onClick={() => handleRemoveSection(sec.id)}
                   title="Eliminar este marcador de sección"
-                  className="p-1.5 rounded bg-slate-900 hover:bg-red-500/20 text-slate-400 hover:text-red-400 cursor-pointer"
+                  className="p-1.5 rounded bg-neutral-900 hover:bg-red-500/20 text-neutral-400 hover:text-red-400 cursor-pointer"
                 >
                   <Trash2 className="w-3.5 h-3.5" />
                 </button>
@@ -937,7 +943,7 @@ export const SectionEditorModal: React.FC<SectionEditorModalProps> = ({
           )}
         </div>
 
-        <div className="flex flex-wrap items-center justify-between gap-2 pt-3 border-t border-slate-800">
+        <div className="flex flex-wrap items-center justify-between gap-2 pt-3 border-t border-neutral-800">
           <div className="flex items-center gap-2">
             <button
               type="button"
@@ -951,7 +957,7 @@ export const SectionEditorModal: React.FC<SectionEditorModalProps> = ({
                   currentTimeSec
                 )
               }
-              className="px-3.5 py-2 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 text-xs font-semibold text-cyan-400 flex items-center gap-1.5 cursor-pointer"
+              className="px-3.5 py-2 rounded-lg bg-neutral-900 hover:bg-neutral-800 border border-neutral-800 text-xs font-semibold text-studio-ink flex items-center gap-1.5 cursor-pointer"
             >
               <Plus className="w-4 h-4" />
               <span>Añadir en {formatMmSs(currentTimeSec)}</span>
@@ -961,7 +967,7 @@ export const SectionEditorModal: React.FC<SectionEditorModalProps> = ({
               <button
                 type="button"
                 onClick={() => setSections([])}
-                className="px-3 py-2 rounded-lg bg-slate-900 hover:bg-red-500/15 border border-slate-800 text-xs font-medium text-slate-400 hover:text-red-300 cursor-pointer"
+                className="px-3 py-2 rounded-lg bg-neutral-900 hover:bg-red-500/15 border border-neutral-800 text-xs font-medium text-neutral-400 hover:text-red-300 cursor-pointer"
               >
                 Borrar todas
               </button>
@@ -972,14 +978,14 @@ export const SectionEditorModal: React.FC<SectionEditorModalProps> = ({
             <button
               type="button"
               onClick={onClose}
-              className="px-4 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs font-medium text-slate-300 cursor-pointer"
+              className="px-4 py-2 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-xs font-medium text-neutral-300 cursor-pointer"
             >
               Cancelar
             </button>
             <button
               type="button"
               onClick={handleSave}
-              className="px-4 py-2 rounded-lg bg-cyan-400 hover:bg-cyan-300 text-slate-950 text-xs font-semibold cursor-pointer"
+              className="px-4 py-2 rounded-lg bg-studio-ink hover:bg-neutral-200 text-studio-ground text-xs font-semibold cursor-pointer"
             >
               Guardar Secciones (mm:ss)
             </button>
@@ -1047,18 +1053,18 @@ export const OptimizationProgressModal: React.FC<OptimizationProgressModalProps>
   const isCancelled = progress?.phase === 'cancelled';
 
   return (
-    <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-xs flex items-center justify-center p-4">
-      <div className="bg-[#111827] border border-slate-700 rounded-2xl w-full max-w-md shadow-2xl p-6 space-y-5 animate-in fade-in zoom-in-95 duration-150">
+    <div className="fixed inset-0 z-50 bg-neutral-950/80 flex items-center justify-center p-4">
+      <div className="bg-studio-panel border border-neutral-700 rounded-2xl w-full max-w-md shadow-2xl p-6 space-y-5 animate-in fade-in zoom-in-95 duration-150">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2.5">
-            <div className="p-2 rounded-xl bg-cyan-500/20 text-cyan-400">
+            <div className="p-2 rounded-xl bg-studio-strip text-studio-ink">
               <Zap className="w-5 h-5" />
             </div>
             <div>
-              <h2 className="font-display text-base font-bold text-slate-100">
+              <h2 className="text-base font-bold text-neutral-100">
                 Optimizar para Streaming OPFS
               </h2>
-              <p className="text-xs text-slate-400 truncate max-w-xs">{songTitle}</p>
+              <p className="text-xs text-neutral-400 truncate max-w-xs">{songTitle}</p>
             </div>
           </div>
           {!isComplete && !isCancelled && (
@@ -1066,7 +1072,7 @@ export const OptimizationProgressModal: React.FC<OptimizationProgressModalProps>
               type="button"
               onClick={onHide ?? onCancel}
               title={onHide ? 'Ocultar (sigue en segundo plano)' : 'Cancelar'}
-              className="text-slate-400 hover:text-slate-200 cursor-pointer"
+              className="text-neutral-400 hover:text-neutral-200 cursor-pointer"
             >
               <X className="w-4 h-4" />
             </button>
@@ -1074,9 +1080,9 @@ export const OptimizationProgressModal: React.FC<OptimizationProgressModalProps>
         </div>
 
         {/* Status description */}
-        <div className="bg-[#0B0F17] border border-slate-800 rounded-xl p-3.5 space-y-2">
-          <div className="flex items-center justify-between text-xs font-mono">
-            <span className="text-slate-300 font-semibold truncate max-w-[240px]">
+        <div className="bg-studio-ground border border-neutral-800 rounded-xl p-3.5 space-y-2">
+          <div className="flex items-center justify-between text-xs">
+            <span className="text-neutral-300 font-semibold truncate max-w-[240px]">
               {progress?.phase === 'checking'
                 ? 'Verificando almacenamiento...'
                 : progress?.phase === 'converting'
@@ -1087,25 +1093,24 @@ export const OptimizationProgressModal: React.FC<OptimizationProgressModalProps>
                 ? '¡Listo! Audio optimizado en OPFS'
                 : 'Cancelando...'}
             </span>
-            <span className="text-cyan-400 font-bold">{percent}%</span>
+            <span className="text-studio-ink font-bold">{percent}%</span>
           </div>
 
           {/* Progress bar */}
-          <div className="w-full h-2.5 bg-slate-800 rounded-full overflow-hidden">
+          <div className="w-full h-2.5 bg-neutral-800 rounded-full overflow-hidden">
             <div
-              className={`h-full transition-all duration-200 rounded-full ${
+              className={`h-full transition-colors duration-200 rounded-full ${
                 isComplete
                   ? 'bg-emerald-400'
                   : isCancelled
                   ? 'bg-red-400'
-                  : 'bg-gradient-to-r from-cyan-500 to-emerald-400'
-              }`}
+                  : 'bg-studio-accent'              }`}
               style={{ width: `${percent}%` }}
             />
           </div>
         </div>
 
-        <p className="text-[11px] text-slate-400 leading-relaxed">
+        <p className="text-[11px] text-neutral-400 leading-relaxed">
           Guarda cada pista una sola vez en el disco del navegador (OPFS) para reproducirla en streaming sin ocupar RAM. Se procesan varias pistas en paralelo; puedes cerrar esta ventana y seguirá en segundo plano.</p>
 
         {/* Actions */}
@@ -1114,7 +1119,7 @@ export const OptimizationProgressModal: React.FC<OptimizationProgressModalProps>
             <button
               type="button"
               onClick={onCancel}
-              className="px-4 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-slate-300 cursor-pointer transition-colors"
+              className="px-4 py-2 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-xs font-semibold text-neutral-300 cursor-pointer transition-colors"
             >
               Cancelar
             </button>
@@ -1124,4 +1129,3 @@ export const OptimizationProgressModal: React.FC<OptimizationProgressModalProps>
     </div>
   );
 };
-

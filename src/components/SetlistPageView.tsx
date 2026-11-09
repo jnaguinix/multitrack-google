@@ -5,9 +5,7 @@ import {
   MoreHorizontal,
   Plus,
   FolderOpen,
-  ArrowRight,
   GripHorizontal,
-  Edit3,
   Flag,
   Filter,
   Upload,
@@ -78,6 +76,10 @@ interface SetlistPageViewProps {
   onOptimizeProject: (song: SongProject) => void;
 }
 
+function closePopover(event: React.MouseEvent<HTMLButtonElement>) {
+  event.currentTarget.closest<HTMLElement>('[popover]')?.hidePopover();
+}
+
 function formatTrackDb(gain: number): string {
   const db = gainToDb(gain);
   if (!isFinite(db)) return '-∞ dB';
@@ -118,8 +120,6 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
   onChangeCueMasterGain,
   onResetMixer,
 }) => {
-  const [openCardMenuId, setOpenCardMenuId] = useState<string | null>(null);
-  const [isNewSongDropdownOpen, setIsNewSongDropdownOpen] = useState(false);
   const [trackFilterText, setTrackFilterText] = useState('');
   const [isFilterOpen, setIsFilterOpen] = useState(false);
   const [dragOverCardIdx, setDragOverCardIdx] = useState<number | null>(null);
@@ -214,7 +214,7 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
     ctx.scale(dpr, dpr);
     ctx.clearRect(0, 0, width, height);
 
-    ctx.fillStyle = '#263030';
+    ctx.fillStyle = '#151515';
     ctx.fillRect(0, 0, width, height);
 
     if (!project || masterPeaks.length === 0 || totalDurationSec <= 0) {
@@ -230,7 +230,7 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
       const isQueued = sec.id === transport.queuedSectionId;
 
       if (isActive) {
-        ctx.fillStyle = 'rgba(47, 208, 200, 0.12)';
+        ctx.fillStyle = 'rgba(141, 214, 205, 0.07)';
         ctx.fillRect(startX, 0, Math.max(2, endX - startX), height);
       } else if (isQueued) {
         ctx.fillStyle = 'rgba(255, 194, 51, 0.14)';
@@ -264,7 +264,7 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
       const x = i * stepX;
       const halfH = amp * (height * 0.44);
 
-      ctx.strokeStyle = x <= playheadX ? '#a8d5d1' : '#859c9a';
+      ctx.strokeStyle = x <= playheadX ? '#7fc5bc' : '#777c7b';
       ctx.lineWidth = Math.max(1, stepX * 0.75);
       ctx.beginPath();
       ctx.moveTo(x, midY - halfH);
@@ -273,7 +273,7 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
     }
 
     // Playhead cursor line
-    ctx.strokeStyle = '#2fd0c8';
+    ctx.strokeStyle = '#8dd6cd';
     ctx.lineWidth = 2.5;
     ctx.beginPath();
     ctx.moveTo(playheadX, 0);
@@ -319,10 +319,22 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
   const meters = metersRef.current.tracks;
 
   return (
-    <div className="flex-1 flex flex-col bg-[#0e1118] text-[#e9ecf2] overflow-hidden select-none relative">
-      {/* 1. HORIZONTAL SETLIST SONG CARDS ROW (Clear, legible 60px cards) */}
-      <div className="bg-[#0e1118] px-3.5 py-2 flex items-center justify-between gap-3 border-b border-[#252d3c] shrink-0">
-        <div className="flex items-center gap-2 overflow-x-auto pb-0.5">
+    <section className="lt-setlist flex-1 flex flex-col overflow-y-auto min-w-0" aria-labelledby="setlist-title">
+      <div className="flex items-center justify-between gap-3 flex-wrap shrink-0">
+        <div>
+          <h1 id="setlist-title" className="text-2xl font-semibold tracking-tight">Setlist</h1>
+          <p className="text-sm text-neutral-400">{setlistQueue.length === 1 ? '1 canción' : `${setlistQueue.length} canciones`}</p>
+        </div>
+        <div className="flex items-center gap-2">
+          {(project || setlistQueue.length > 0) && <button type="button" popoverTarget="setlist-add" className="lt-control"><Plus size={16} /> Añadir canción</button>}
+          {project && (
+            <button type="button" onClick={() => setIsFloatingMixerOpen(true)} className="lt-control">
+              <Sliders size={16} /> Mezcla
+            </button>
+          )}
+        </div>
+      </div>
+      <div className="flex items-center gap-2 overflow-x-auto shrink-0 pb-1" role="group" aria-label="Orden de reproducción">
           {setlistQueue.map((song, idx) => {
             const isCurrent = project?.id === song.id;
             const isPlayingThis = isCurrent && transport.isPlaying;
@@ -335,8 +347,8 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
               ((song.totalBars || 24) * 4 * 60) / (song.bpm || 120);
 
             return (
-              <React.Fragment key={song.id}>
-                <div
+              <div
+                  key={song.id}
                   draggable
                   onDragStart={(e) => {
                     e.dataTransfer.setData(
@@ -355,6 +367,7 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
                   onDragLeave={() => setDragOverCardIdx(null)}
                   onDrop={(e) => {
                     e.preventDefault();
+                    if (e.dataTransfer.types.includes('application/x-libretracks-setlist-index')) e.stopPropagation();
                     setDragOverCardIdx(null);
                     const fromIdxStr = e.dataTransfer.getData(
                       'application/x-libretracks-setlist-index'
@@ -376,23 +389,19 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
                       onRequestSongAction(song);
                     }
                   }}
-                  className={`relative w-56 h-15 rounded-xl px-3 py-2 flex flex-col justify-between shrink-0 border transition-all cursor-pointer ${
-                    dragOverCardIdx === idx
-                      ? 'border-amber-400 bg-amber-500/20'
-                      : isCurrent
-                      ? 'border-[#2fd0c8] bg-[#162929] shadow-[0_0_0_1px_rgba(47,208,200,0.3)]'
-                      : 'border-[#252d3c] bg-[#161c24] hover:border-slate-500'
-                  }`}
+                  className="lt-queue-item relative flex flex-col justify-between shrink-0 cursor-pointer"
+                  data-current={isCurrent || undefined}
+                  data-dragging={dragOverCardIdx === idx || undefined}
                 >
                   {/* Row 1: Grip + Index Badge + Song Title + Play + Menu */}
                   <div className="flex items-center justify-between gap-1.5 min-w-0">
                     <div className="flex items-center gap-1.5 min-w-0 flex-1">
-                      <GripHorizontal className="w-3.5 h-3.5 text-[#7f8899] cursor-grab shrink-0" />
-                      <span className="px-1.5 py-0.2 rounded bg-black/60 text-[11px] font-mono font-bold text-slate-200 shrink-0">
+                      <GripHorizontal className="w-3.5 h-3.5 text-studio-muted cursor-grab shrink-0" />
+                      <span className="w-4 text-xs text-neutral-400 shrink-0">
                         {idx + 1}
                       </span>
                       <span
-                        className="text-[13px] font-bold text-[#e9ecf2] truncate"
+                        className="text-[13px] font-bold text-studio-ink truncate"
                         title={song.title}
                       >
                         {song.title}
@@ -422,7 +431,7 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
                             ? 'En RAM: Montar y reproducir al instante'
                             : 'Montar en consola en 00:00'
                         }
-                        className="w-6 h-6 rounded-md bg-[#0c1414] hover:bg-emerald-500 text-emerald-400 hover:text-slate-950 border border-emerald-500/40 flex items-center justify-center cursor-pointer transition-colors disabled:opacity-40 disabled:cursor-wait"
+                        className="lt-control lt-queue-action"
                       >
                         {isPlayingThis ? (
                           <Pause className="w-3 h-3 fill-current" />
@@ -433,13 +442,10 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
 
                       <button
                         type="button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setOpenCardMenuId((prev) =>
-                            prev === song.id ? null : song.id
-                          );
-                        }}
-                        className="w-6 h-6 rounded-md bg-[#0c1414] hover:bg-slate-800 text-slate-300 flex items-center justify-center cursor-pointer"
+                        onClick={(event) => event.stopPropagation()}
+                        popoverTarget={`song-actions-${idx}`}
+                        aria-label={`Acciones de ${song.title}`}
+                        className="lt-control lt-queue-action"
                       >
                         <MoreHorizontal className="w-3.5 h-3.5" />
                       </button>
@@ -447,8 +453,8 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
                   </div>
 
                   {/* Row 2: BPM + Duration + RAM Status + PCM/Opt Badge */}
-                  <div className="flex items-center justify-between gap-1.5 text-[11px] font-mono">
-                    <span className="text-slate-300 truncate">
+                  <div className="flex items-center justify-between gap-1.5 text-[11px]">
+                    <span className="text-neutral-300 truncate">
                       {song.bpm} BPM · {formatMmSs(durSec)}
                     </span>
 
@@ -464,14 +470,14 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
                               ? `100% en caché RAM (${cacheInfo.cachedCount}/${cacheInfo.totalCount} pistas · ${((cacheInfo.cachedBytes || 0) / (1024 * 1024)).toFixed(0)} MB)`
                               : `${cacheInfo.cachedCount}/${cacheInfo.totalCount} pistas en RAM`
                           }
-                          className={`px-1.5 py-0.2 rounded text-[10px] font-mono font-bold tracking-tight ${
+                          className={`px-1.5 py-0.2 rounded text-[11px] font-bold tracking-tight ${
                             cacheInfo.isReady
-                              ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
+                              ? 'bg-studio-strip text-studio-ink border border-studio-line'
                               : cacheInfo.skippedByRamBudget
                               ? 'bg-rose-500/15 text-rose-300 border border-rose-500/40'
                               : cacheInfo.isPreloading || cacheInfo.cachedCount > 0
                               ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
-                              : 'bg-slate-800/80 text-slate-400 border border-slate-700'
+                              : 'bg-neutral-800/80 text-neutral-400 border border-neutral-700'
                           }`}
                         >
                           {isStreamSong
@@ -489,7 +495,7 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
                       {isPcmReady ? (
                         <span
                           title={`Guardada en el disco del navegador (OPFS, ~${pcmMB} MB)`}
-                          className="px-1.5 py-0.2 rounded text-[10px] font-mono font-bold bg-cyan-500/20 text-cyan-300 border border-cyan-500/40"
+                          className="px-1.5 py-0.2 rounded text-[11px] font-bold bg-studio-strip text-studio-ink border border-studio-line"
                         >
                           PCM
                         </span>
@@ -502,7 +508,7 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
                               onOptimizeProject(song);
                             }}
                             title="Optimizar canción para streaming OPFS"
-                            className="px-1.5 py-0.2 rounded text-[10px] font-mono font-bold bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 cursor-pointer flex items-center gap-0.5"
+                            className="px-1.5 py-0.2 rounded text-[11px] font-bold bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 cursor-pointer flex items-center gap-0.5"
                           >
                             <Zap className="w-2.5 h-2.5 text-amber-400" />
                             <span>Opt</span>
@@ -513,29 +519,30 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
                   </div>
 
                   {/* Card Context Menu Popover */}
-                  {openCardMenuId === song.id && (
-                    <div
-                      onClick={(e) => e.stopPropagation()}
-                      className="absolute top-14 right-1 z-30 w-44 bg-[#151a24] border border-[#252d3c] rounded-xl shadow-2xl p-1.5 text-xs space-y-0.5"
+                  <div
+                      id={`song-actions-${idx}`}
+                      popover="auto"
+                      onClick={(event) => event.stopPropagation()}
+                      className="lt-popover space-y-1"
                     >
                       <button
                         type="button"
-                        onClick={() => {
+                        onClick={(event) => {
                           onLoadAndPlaySong(song.id, false);
-                          setOpenCardMenuId(null);
+                          closePopover(event);
                         }}
-                        className="w-full px-2.5 py-1.5 text-left rounded-lg hover:bg-slate-800 text-cyan-300 font-semibold cursor-pointer"
+                        className="w-full px-2.5 py-1.5 text-left rounded-lg hover:bg-neutral-800 text-studio-ink font-semibold cursor-pointer"
                       >
                         Montar en consola (00:00)
                       </button>
                       {!isPcmReady && song.tracks.length > 0 && (
                         <button
                           type="button"
-                          onClick={() => {
+                          onClick={(event) => {
                             onOptimizeProject(song);
-                            setOpenCardMenuId(null);
+                          closePopover(event);
                           }}
-                          className="w-full px-2.5 py-1.5 text-left rounded-lg hover:bg-slate-800 text-amber-300 flex items-center gap-1.5 cursor-pointer font-medium"
+                          className="w-full px-2.5 py-1.5 text-left rounded-lg hover:bg-neutral-800 text-amber-300 flex items-center gap-1.5 cursor-pointer font-medium"
                         >
                           <Zap className="w-3.5 h-3.5 text-amber-400" /> Optimizar (OPFS)
                         </button>
@@ -543,45 +550,41 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
                       <button
                         type="button"
                         disabled={idx === 0}
-                        onClick={() => {
+                        onClick={(event) => {
                           onMoveInSetlist(song.id, 'up');
-                          setOpenCardMenuId(null);
+                          closePopover(event);
                         }}
-                        className="w-full px-2.5 py-1.5 text-left rounded-lg hover:bg-slate-800 text-slate-200 flex items-center gap-1.5 disabled:opacity-30 cursor-pointer"
+                        className="w-full px-2.5 py-1.5 text-left rounded-lg hover:bg-neutral-800 text-neutral-200 flex items-center gap-1.5 disabled:opacity-30 cursor-pointer"
                       >
                         <ChevronLeft className="w-3.5 h-3.5" /> Mover antes
                       </button>
                       <button
                         type="button"
                         disabled={idx === setlistQueue.length - 1}
-                        onClick={() => {
+                        onClick={(event) => {
                           onMoveInSetlist(song.id, 'down');
-                          setOpenCardMenuId(null);
+                          closePopover(event);
                         }}
-                        className="w-full px-2.5 py-1.5 text-left rounded-lg hover:bg-slate-800 text-slate-200 flex items-center gap-1.5 disabled:opacity-30 cursor-pointer"
+                        className="w-full px-2.5 py-1.5 text-left rounded-lg hover:bg-neutral-800 text-neutral-200 flex items-center gap-1.5 disabled:opacity-30 cursor-pointer"
                       >
                         <ChevronRight className="w-3.5 h-3.5" /> Mover después
                       </button>
                       <button
                         type="button"
-                        onClick={() => {
+                        onClick={(event) => {
                           onRemoveFromSetlist(song.id);
-                          setOpenCardMenuId(null);
+                          closePopover(event);
                         }}
                         className="w-full px-2.5 py-1.5 text-left rounded-lg hover:bg-red-500/20 text-red-400 flex items-center gap-1.5 cursor-pointer"
                       >
                         <Trash2 className="w-3.5 h-3.5" /> Quitar del Setlist
                       </button>
                     </div>
-                  )}
                 </div>
-
-                <ArrowRight className="w-3.5 h-3.5 text-[#7f8899] shrink-0" />
-              </React.Fragment>
             );
           })}
 
-          {/* "+ Nueva canción" Dashed Tile */}
+          {/* Folder import and quick-add menu */}
           <div
             onDragOver={(e) => e.preventDefault()}
             onDrop={async (e) => {
@@ -598,37 +601,28 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
                 onQuickImportNewSongFiles(audioFiles);
               }
             }}
-            className="relative h-15 px-3.5 rounded-xl border border-dashed border-[#252d3c] hover:border-[#2fd0c8] bg-[#12161f]/60 flex items-center justify-center gap-2 shrink-0 transition-colors"
+            className="relative flex items-center shrink-0"
           >
             <button
-              type="button"
-              onClick={() => setIsNewSongDropdownOpen((prev) => !prev)}
-              className="px-2 py-1 text-xs font-bold text-[#e9ecf2] hover:text-[#2fd0c8] flex items-center gap-1.5 cursor-pointer"
-            >
-              <Plus className="w-4 h-4" />
-              <span>Nueva canción</span>
-            </button>
-
-            <button
+              hidden={!project && setlistQueue.length === 0}
               type="button"
               onClick={() => newSongFolderInputRef.current?.click()}
-              title="Importar carpeta de stems al Setlist"
-              className="p-2 rounded-lg bg-[#171d29] hover:bg-slate-800 text-slate-200 border border-[#252d3c] cursor-pointer"
+              title="Importar carpeta de pistas al Setlist" aria-label="Importar carpeta de pistas"
+              className="lt-control lt-icon-control"
             >
               <FolderOpen className="w-4 h-4" />
             </button>
 
             {/* Dropdown to pick from existing Repertoire or Import */}
-            {isNewSongDropdownOpen && (
-              <div className="absolute top-16 left-0 z-40 w-64 bg-[#151a24] border border-[#252d3c] rounded-xl shadow-2xl p-2.5 space-y-2">
-                <div className="flex items-center justify-between px-2 py-1 border-b border-[#252d3c]">
-                  <span className="text-xs font-bold text-slate-200">
+            <div id="setlist-add" popover="auto" className="lt-popover space-y-2">
+                <div className="flex items-center justify-between px-2 py-1 border-b border-studio-line">
+                  <span className="text-xs font-bold text-neutral-200">
                     Añadir al Setlist
                   </span>
                   <button
                     type="button"
-                    onClick={() => setIsNewSongDropdownOpen(false)}
-                    className="text-slate-400 hover:text-white cursor-pointer"
+                    popoverTarget="setlist-add" popoverTargetAction="hide" aria-label="Cerrar"
+                    className="text-neutral-400 hover:text-white cursor-pointer"
                   >
                     <X className="w-4 h-4" />
                   </button>
@@ -636,21 +630,21 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
 
                 {allProjects.length > 0 && (
                   <div className="max-h-40 overflow-y-auto space-y-0.5">
-                    <div className="px-2 py-0.5 text-[11px] text-[#7f8899] uppercase font-semibold">
-                      Desde tu Repertorio:
+                    <div className="px-2 py-0.5 text-[11px] text-studio-muted font-semibold">
+                      Desde el repertorio
                     </div>
                     {allProjects.map((repSong) => (
                       <button
                         key={repSong.id}
                         type="button"
-                        onClick={() => {
+                        onClick={(event) => {
                           onAddToSetlist(repSong.id);
-                          setIsNewSongDropdownOpen(false);
+                          closePopover(event);
                         }}
-                        className="w-full px-2.5 py-1.5 rounded-lg hover:bg-slate-800 text-left text-xs text-slate-100 flex items-center justify-between cursor-pointer"
+                        className="w-full px-2.5 py-1.5 rounded-lg hover:bg-neutral-800 text-left text-xs text-neutral-100 flex items-center justify-between cursor-pointer"
                       >
                         <span className="truncate font-medium">{repSong.title}</span>
-                        <span className="text-[11px] font-mono text-cyan-400 ml-2 shrink-0 font-bold">
+                        <span className="text-[11px] text-studio-ink ml-2 shrink-0 font-bold">
                           + Añadir
                         </span>
                       </button>
@@ -658,32 +652,31 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
                   </div>
                 )}
 
-                <div className="pt-1 border-t border-[#252d3c] flex flex-col gap-1.5">
+                <div className="pt-1 border-t border-studio-line flex flex-col gap-1.5">
                   <button
                     type="button"
-                    onClick={() => {
-                      setIsNewSongDropdownOpen(false);
+                    onClick={(event) => {
+                      closePopover(event);
                       newSongFilesInputRef.current?.click();
                     }}
-                    className="w-full px-2.5 py-1.5 rounded-lg bg-cyan-500/15 hover:bg-cyan-500/25 text-cyan-300 text-xs font-semibold flex items-center gap-2 cursor-pointer"
+                    className="w-full px-2.5 py-1.5 rounded-lg bg-studio-strip hover:bg-neutral-700 text-studio-ink text-xs font-semibold flex items-center gap-2 cursor-pointer"
                   >
                     <Upload className="w-3.5 h-3.5" />
                     <span>Importar archivos de audio...</span>
                   </button>
                   <button
                     type="button"
-                    onClick={() => {
-                      setIsNewSongDropdownOpen(false);
+                    onClick={(event) => {
+                      closePopover(event);
                       newSongFolderInputRef.current?.click();
                     }}
-                    className="w-full px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold flex items-center gap-2 cursor-pointer"
+                    className="w-full px-2.5 py-1.5 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-neutral-200 text-xs font-semibold flex items-center gap-2 cursor-pointer"
                   >
-                    <FolderOpen className="w-3.5 h-3.5 text-emerald-400" />
+                    <FolderOpen className="w-3.5 h-3.5 text-studio-ink" />
                     <span>Importar carpeta de canción...</span>
                   </button>
                 </div>
               </div>
-            )}
 
             <input
               ref={newSongFilesInputRef}
@@ -716,103 +709,47 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
               }}
             />
           </div>
-        </div>
-
-        {/* Right Actions on Song Cards Row */}
-        <div className="flex items-center gap-2 shrink-0">
-          <button
-            type="button"
-            disabled={!project}
-            onClick={onAddMarkerAtPlayhead}
-            className="h-9 px-3 rounded-lg bg-[#171d29] hover:bg-slate-800 border border-[#252d3c] text-xs font-semibold text-cyan-300 flex items-center gap-1.5 disabled:opacity-40 cursor-pointer"
-          >
-            <Flag className="w-3.5 h-3.5" />
-            <span>+ Marcar ({formatMmSs(transport.currentTimeSec)})</span>
-          </button>
-
-          <button
-            type="button"
-            disabled={!project}
-            onClick={onOpenSectionEditor}
-            className="h-9 px-3 rounded-lg bg-[#171d29] hover:bg-slate-800 border border-[#252d3c] text-xs font-semibold text-[#e9ecf2] flex items-center gap-1.5 disabled:opacity-40 cursor-pointer"
-          >
-            <Edit3 className="w-3.5 h-3.5" />
-            <span>Editar secciones</span>
-          </button>
-
-          <button
-            type="button"
-            disabled={!project}
-            onClick={() => setIsFloatingMixerOpen((prev) => !prev)}
-            className={`h-9 px-3.5 rounded-lg text-xs font-bold flex items-center gap-2 border transition-all disabled:opacity-40 cursor-pointer ${
-              isFloatingMixerOpen
-                ? 'bg-cyan-400 text-slate-950 border-cyan-300 shadow-[0_0_16px_rgba(34,211,238,0.35)]'
-                : 'bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border-emerald-500/50'
-            }`}
-          >
-            <Sliders className="w-4 h-4" />
-            <span>{isFloatingMixerOpen ? 'Cerrar Mixer' : 'Abrir Mixer'}</span>
-          </button>
-        </div>
       </div>
 
-      {/* 2. LARGE MASTER WAVEFORM OVERVIEW (180px height for clear visual structure) */}
-      <div className="relative h-44 shrink-0 bg-[#263030] border-b border-[#252d3c] overflow-hidden">
-        <canvas
-          ref={masterCanvasRef}
-          onClick={handleMasterWaveformClick}
-          className="w-full h-full block cursor-pointer"
-        />
+      {project ? (
+        <div className="lt-waveform relative shrink-0 overflow-hidden">
+          <canvas
+            ref={masterCanvasRef}
+            onClick={handleMasterWaveformClick}
+            className="w-full h-full block cursor-pointer"
+          />
 
-        {project ? (
-          <>
-            {/* Top-left Song Title & Duration Overlay */}
-            <div className="absolute top-3 left-4 pointer-events-none flex items-baseline gap-2.5">
-              <span className="font-display text-base font-bold text-white drop-shadow">
-                {project.title}
-              </span>
-              <span className="font-mono text-sm font-semibold text-slate-200/90">
-                {formatMmSs(totalDurationSec)}
-              </span>
-            </div>
-
-            {/* Mounting in RAM Progress Overlay Banner */}
-            {transport.isMountingSong && (
-              <div className="absolute inset-0 bg-slate-950/75 backdrop-blur-xs flex flex-col items-center justify-center p-4 text-center z-20">
-                <div className="px-4 py-2.5 rounded-xl bg-[#151a24] border border-amber-500/50 text-amber-300 text-sm font-bold shadow-xl">
-                  {transport.mountingProgressText || 'Cargando pistas en RAM...'}
+          <span className="absolute top-3 left-4 pointer-events-none text-xs text-neutral-300">Forma de onda</span>
+              {transport.isMountingSong && (
+                <div className="absolute inset-0 bg-neutral-950/75 flex flex-col items-center justify-center p-4 text-center z-20">
+                  <div className="px-4 py-2.5 rounded-xl bg-studio-panel border border-amber-500/50 text-amber-300 text-sm font-bold shadow-xl">
+                    {transport.mountingProgressText || 'Cargando pistas en RAM...'}
+                  </div>
                 </div>
-              </div>
-            )}
-          </>
-        ) : (
-          /* Clean Empty State when no song is loaded on startup */
-          <div className="absolute inset-0 flex flex-col items-center justify-center p-6 text-center">
-            <Music className="w-8 h-8 text-[#2fd0c8] mb-2 opacity-80" />
-            <h3 className="font-display text-base font-bold text-slate-100">
-              Ninguna canción cargada en consola
-            </h3>
-            <p className="text-xs text-slate-200/80 max-w-lg mt-1">
-              Haz clic en una canción de tu <strong>Repertorio</strong> izquierdo, arrástrala hacia aquí o pulsa <strong>+ Nueva canción</strong> arriba.
-            </p>
-          </div>
-        )}
-      </div>
+              )}
+        </div>
+      ) : (
+        <div className="lt-empty shrink-0">
+          <Music size={24} className="text-neutral-400" aria-hidden="true" />
+          <h2>{setlistQueue.length ? 'Elige una canción' : 'Prepara tu setlist'}</h2>
+          <p>Importa las pistas de una canción o añade una desde tu repertorio para empezar.</p>
+          <button type="button" popoverTarget="setlist-add" className="lt-primary"><Plus size={16} /> Añadir canción</button>
+        </div>
+      )}
 
-      {/* 3. MAIN SETLIST PERFORMANCE DECK: LARGE SECTION PADS + QUICK TRACK MUTE/SOLO */}
-      <div className="flex-1 overflow-y-auto p-4 space-y-4">
+      <div className="space-y-4">
         {project ? (
           <>
             {/* 3A. LARGE SECTION JUMP PADS */}
-            <div className="bg-[#12161f] border border-[#252d3c] rounded-xl p-3.5">
-              <div className="flex items-center justify-between gap-2 mb-2.5">
+            <div className="border-t border-studio-line py-3">
+              <div className="flex flex-wrap items-center justify-between gap-2 mb-2.5">
                 <div className="flex items-center gap-2">
-                  <Flag className="w-4 h-4 text-cyan-400" />
-                  <h3 className="font-display text-sm font-bold text-slate-100">
-                    Secciones de la Canción ({project.sections.length})
+                  <Flag className="w-4 h-4 text-studio-ink" />
+                  <h3 className="text-sm font-bold text-neutral-100">
+                    Secciones
                   </h3>
                   {activeSection && (
-                    <span className="px-2 py-0.5 rounded-md bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 text-xs font-bold">
+                    <span className="px-2 py-0.5 rounded-md bg-studio-strip border border-studio-line text-studio-ink text-xs font-bold">
                       Actual: {activeSection.name}
                     </span>
                   )}
@@ -822,30 +759,30 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
                   <button
                     type="button"
                     onClick={onAddMarkerAtPlayhead}
-                    className="px-3 py-1.5 rounded-lg bg-cyan-500/15 hover:bg-cyan-500/25 border border-cyan-500/40 text-cyan-300 text-xs font-bold flex items-center gap-1.5 cursor-pointer"
+                    className="px-3 py-1.5 rounded-lg bg-studio-strip hover:bg-neutral-700 border border-studio-line text-studio-ink text-xs font-bold flex items-center gap-1.5 cursor-pointer"
                   >
                     <Flag className="w-3.5 h-3.5" />
-                    <span>+ Marcar aquí ({formatMmSs(transport.currentTimeSec)})</span>
+                    <span>Marcar aquí</span>
                   </button>
                   <button
                     type="button"
                     onClick={onOpenSectionEditor}
-                    className="px-3 py-1.5 rounded-lg bg-[#171d29] hover:bg-slate-800 border border-[#252d3c] text-slate-200 text-xs font-semibold cursor-pointer"
+                    className="px-3 py-1.5 rounded-lg bg-studio-strip hover:bg-neutral-800 border border-studio-line text-neutral-200 text-xs font-semibold cursor-pointer"
                   >
-                    Editar secciones (mm:ss)...
+                    Editar secciones
                   </button>
                 </div>
               </div>
 
               {project.sections.length === 0 ? (
-                <div className="py-3 px-4 rounded-lg bg-[#0e1118] border border-slate-800/80 text-xs text-slate-300 flex items-center justify-between">
+                <div className="py-3 px-4 rounded-lg bg-studio-ground border border-neutral-800/80 text-xs text-neutral-300 flex items-center justify-between">
                   <span>
                     Esta canción aún no tiene secciones marcadas. Pulsa <strong>+ Marcar aquí</strong> mientras reproduces para dividirla en Intro, Verso, Coro, Puente, etc.
                   </span>
                 </div>
               ) : (
                 <div className="flex flex-wrap items-center gap-2">
-                  {project.sections.map((sec, idx) => {
+                  {project.sections.map((sec) => {
                     const isActive = sec.id === transport.activeSectionId;
                     const isQueued = sec.id === transport.queuedSectionId;
                     const isVampHere = isActive && transport.isVamping;
@@ -855,21 +792,20 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
                         key={sec.id}
                         type="button"
                         onClick={() => onJumpSection(sec.id)}
-                        className={`min-h-[42px] px-4 py-2 rounded-xl text-sm font-bold flex items-center gap-2 border transition-all cursor-pointer ${
+                        className={`min-h-[42px] px-4 py-2 rounded-xl text-sm font-bold flex items-center gap-2 border transition-colors cursor-pointer ${
                           isQueued
-                            ? 'bg-amber-500/25 border-amber-400 text-amber-200 shadow-[0_0_12px_rgba(245,158,11,0.25)]'
+                            ? 'bg-amber-500/25 border-amber-400 text-amber-200'
                             : isActive
-                            ? 'bg-emerald-500 text-slate-950 border-emerald-300 shadow-[0_0_12px_rgba(16,185,129,0.3)]'
-                            : 'bg-[#171d29] hover:bg-slate-800 border-[#252d3c] text-slate-100'
+                            ? 'bg-studio-ink text-studio-ground hover:bg-neutral-200 border-studio-line'
+                            : 'bg-studio-strip hover:bg-neutral-800 border-studio-line text-neutral-100'
                         }`}
                       >
-                        <span className="font-mono text-xs opacity-75">{idx + 1}.</span>
                         <span
                           style={{ backgroundColor: sec.color }}
                           className="w-3 h-3 rounded-full shrink-0"
                         />
                         <span>{sec.name}</span>
-                        <span className="font-mono text-xs opacity-80">
+                        <span className="text-xs opacity-80">
                           {formatMmSs(sec.startTimeSec)}
                         </span>
                         {isVampHere && <Repeat className="w-3.5 h-3.5" />}
@@ -888,31 +824,31 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
       {isFloatingMixerOpen && filteredProjectForMixer && (
         <div
           onClick={() => setIsFloatingMixerOpen(false)}
-          className="fixed inset-0 z-50 bg-black/60 backdrop-blur-[2px] flex items-end justify-center p-3 sm:p-5"
+          className="fixed inset-0 z-50 bg-black/60 flex items-end justify-center p-3 sm:p-5"
         >
           <div
             role="dialog"
             aria-modal="true"
-            aria-label="Consola Mixer Flotante"
+            aria-label="Mezcla de la canción"
             onClick={(e) => e.stopPropagation()}
-            className="w-full max-w-[1440px] bg-[#12161f] border-2 border-cyan-500/50 rounded-2xl shadow-[0_24px_70px_rgba(0,0,0,0.9)] overflow-hidden flex flex-col max-h-[86vh]"
+            className="w-full max-w-[1440px] bg-studio-panel border-2 border-studio-line rounded-2xl shadow-[0_24px_70px_rgba(0,0,0,0.9)] overflow-hidden flex flex-col max-h-[86vh]"
           >
             {/* Floating Card Header with Intuitive Close Button */}
-            <div className="px-5 py-3 bg-[#151a24] border-b border-[#252d3c] flex items-center justify-between gap-4 shrink-0">
+            <div className="px-4 py-3 bg-studio-panel border-b border-studio-line flex flex-wrap items-center justify-between gap-2 shrink-0">
               <div className="flex items-center gap-3">
-                <div className="w-8 h-8 rounded-lg bg-cyan-500/15 border border-cyan-500/40 flex items-center justify-center text-cyan-300">
+                <div className="w-8 h-8 rounded-lg bg-studio-strip border border-studio-line flex items-center justify-center text-studio-ink">
                   <Sliders className="w-4 h-4" />
                 </div>
                 <div>
                   <div className="flex items-center gap-2">
-                    <h2 className="font-display text-base font-bold text-white">
+                    <h2 className="text-base font-bold text-white">
                       Consola Mixer — {filteredProjectForMixer.title}
                     </h2>
-                    <span className="px-2 py-0.5 rounded bg-emerald-500/15 border border-emerald-500/40 text-emerald-300 font-mono text-xs font-bold">
+                    <span className="px-2 py-0.5 rounded bg-studio-strip border border-studio-line text-studio-ink text-xs font-bold">
                       Compás {String(transport.currentBar).padStart(3, '0')}
                     </span>
                   </div>
-                  <p className="text-xs text-slate-400">
+                  <p className="text-xs text-neutral-400">
                     Doble clic en fader = 0.0 dB · Doble clic en knob = Centrar (C) · Pulsa Esc o fuera de la tarjeta para cerrar
                   </p>
                 </div>
@@ -922,7 +858,7 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
                 <button
                   type="button"
                   onClick={onResetMixer}
-                  className="h-9 px-3.5 rounded-lg bg-[#171d29] hover:bg-slate-800 border border-[#252d3c] text-xs font-semibold text-slate-200 flex items-center gap-1.5 cursor-pointer"
+                  className="h-9 px-3.5 rounded-lg bg-studio-strip hover:bg-neutral-800 border border-studio-line text-xs font-semibold text-neutral-200 flex items-center gap-1.5 cursor-pointer"
                 >
                   <RotateCcw className="w-3.5 h-3.5" />
                   <span>Restablecer mezcla a 0 dB</span>
@@ -931,10 +867,10 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
                 <button
                   type="button"
                   onClick={() => setIsFloatingMixerOpen(false)}
-                  className="h-9 px-4 rounded-lg bg-rose-500 hover:bg-rose-400 text-white text-xs font-bold flex items-center gap-1.5 shadow-md cursor-pointer transition-colors"
+                  className="lt-control"
                 >
                   <X className="w-4 h-4 stroke-[2.5]" />
-                  <span>Cerrar Mixer</span>
+                  <span>Cerrar mezcla</span>
                 </button>
               </div>
             </div>
@@ -965,10 +901,10 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
       )}
 
       {cursorNotice && (
-        <div className="fixed bottom-4 right-4 z-40 bg-[#151a24] border border-[#252d3c] text-slate-200 px-3 py-1.5 rounded-lg text-xs font-mono shadow-lg">
+        <div className="fixed bottom-4 right-4 z-40 bg-studio-panel border border-studio-line text-neutral-200 px-3 py-1.5 rounded-lg text-xs shadow-lg">
           {cursorNotice}
         </div>
       )}
-    </div>
+    </section>
   );
 };

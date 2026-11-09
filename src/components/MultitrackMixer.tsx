@@ -345,15 +345,15 @@ export const MultitrackMixer: React.FC<MultitrackMixerProps> = ({
     >
       {/* Mixer Top Sub-bar (shown only in standalone Mixer view; when docked, Setlist/Arranger toolbar already provides these controls) */}
       {!docked && (
-        <div className="flex items-center justify-between gap-4 px-4 py-1.5 border-b border-[#252d3c] bg-[#151a24]/70 shrink-0">
+        <div className="flex items-center justify-between gap-4 px-4 py-1.5 border-b border-studio-line bg-studio-panel/70 shrink-0">
           <div className="flex items-center gap-3">
-            <div className="text-sm font-semibold tracking-tight text-[#e9ecf2] font-mono tabular-nums">
+            <div className="text-sm font-semibold tracking-tight text-studio-ink tabular-nums">
               {String(transport.currentBar).padStart(3, '0')}
-              <small className="text-xs font-medium text-[#7f8899] ml-2 font-sans">
+              <small className="text-xs font-medium text-studio-muted ml-2 font-sans">
                 {activeSection ? activeSection.name : 'Listo'}
               </small>
             </div>
-            <span className="text-[11px] text-[#7f8899] hidden sm:inline">
+            <span className="text-[11px] text-studio-muted hidden sm:inline">
               · Doble clic en fader = 0.0 dB · Doble clic en knob = Centrar (C)
             </span>
           </div>
@@ -361,7 +361,7 @@ export const MultitrackMixer: React.FC<MultitrackMixerProps> = ({
           <button
             type="button"
             onClick={onResetMixer}
-            className="text-xs font-medium text-[#7f8899] hover:text-[#e9ecf2] underline underline-offset-3 cursor-pointer"
+            className="text-xs font-medium text-studio-muted hover:text-studio-ink underline underline-offset-3 cursor-pointer"
           >
             Restablecer mezcla a 0 dB
           </button>
