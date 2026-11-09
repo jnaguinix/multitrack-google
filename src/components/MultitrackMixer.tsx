@@ -369,7 +369,7 @@ export const MultitrackMixer: React.FC<MultitrackMixerProps> = ({
       )}
 
       {/* Main Console Strip Container */}
-      <main className={`lt-console ${docked ? 'lt-docked' : ''}`}>
+      <main className={`lt-console ${docked ? 'lt-docked' : 'lt-console-full'}`}>
         {/* Left: Scrollable Individual Channel Strips (#channels) */}
         <section className="lt-channels" aria-label="Canales">
           {project.tracks.map((track: TrackChannel) => {

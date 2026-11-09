@@ -434,6 +434,7 @@
   .lt-strip { width: 76px; padding: 0 5px 8px; }
   .lt-docked .lt-strip { width: 74px; }
   .lt-strip.lt-bus { width: 90px; }
+  .lt-console-full .lt-cap { margin-inline: -5px; }
   .lt-console { gap: 8px; }
   .lt-buses { gap: 6px; padding-left: 8px; }
 }
@@ -448,6 +449,44 @@
     border-top: 2px solid var(--lt-line);
     padding: 12px 0 0;
     justify-content: flex-start;
+  }
+}
+
+.lt-console-full .lt-channels > .lt-strip {
+  flex: 1 0 auto;
+  max-width: 144px;
+}
+
+.lt-console-full .lt-fx {
+  width: min(100%, 96px);
+  gap: 4px;
+}
+
+.lt-console-full .lt-fader {
+  flex: 1;
+  min-width: 22px;
+}
+
+@media (min-width: 641px) {
+  .lt-console-full {
+    flex: 1 0 auto;
+  }
+
+  .lt-console-full .lt-channels {
+    flex: 1;
+    padding-bottom: 0;
+  }
+
+  .lt-console-full .lt-fx {
+    flex: 1;
+    height: auto;
+    min-height: 130px;
+  }
+}
+
+@media (max-width: 640px) {
+  .lt-console-full .lt-bus {
+    flex: 1;
   }
 }
 

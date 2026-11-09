@@ -1540,7 +1540,7 @@ export default function App() {
 
       {/* Main Body: Dockable Left Repertoire Sidebar + Active Workspace */}
       <div className="relative flex-1 flex overflow-hidden min-h-0">
-        {activeView !== 'remote' && activeView !== 'live' && (
+        {(activeView === 'setlist' || activeView === 'library') && (
           <RepertoireTreeSidebar
             projects={projects}
             setlistQueue={setlistQueue}
@@ -1781,15 +1781,16 @@ export default function App() {
                   Arreglo
                 </h2>
                 <p className="text-xs text-neutral-400 max-w-md mt-1 mb-5">
-                  Abre una canción del repertorio o importa pistas para ver su forma de onda.
+                  Abre una canción desde el Setlist o importa pistas para ver su forma de onda.
                 </p>
-                <button
-                  type="button"
-                  onClick={() => setIsImportModalOpen(true)}
-                  className="px-4 py-2 rounded-lg bg-studio-ink hover:bg-neutral-200 text-studio-ground text-xs font-bold cursor-pointer"
-                >
-                  Importar pistas
-                </button>
+                <div className="flex flex-wrap justify-center gap-2">
+                  <button type="button" onClick={() => handleSelectView('setlist')} className="lt-control">
+                    Ir al Setlist
+                  </button>
+                  <button type="button" onClick={() => setIsImportModalOpen(true)} className="lt-primary">
+                    Importar pistas
+                  </button>
+                </div>
               </div>
             ))}
 
@@ -1829,8 +1830,11 @@ export default function App() {
                   Mezcla
                 </h2>
                 <p className="text-xs text-neutral-400 max-w-md mt-1">
-                  Abre una canción del repertorio para mezclar sus pistas.
+                  Abre una canción desde el Setlist para mezclar sus pistas.
                 </p>
+                <button type="button" onClick={() => handleSelectView('setlist')} className="lt-control mt-3">
+                  Ir al Setlist
+                </button>
               </div>
             ))}
 
