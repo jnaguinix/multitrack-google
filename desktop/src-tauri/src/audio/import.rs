@@ -1,5 +1,6 @@
 use super::cache::{
-    extract_waveform_peaks, is_effectively_mono, write_track_pcm_and_metadata,
+    delete_track_cache, extract_waveform_peaks, is_effectively_mono,
+    read_track_metadata, should_reconvert_track, write_track_pcm_and_metadata,
     CACHE_FORMAT_VERSION,
 };
 pub use super::cache::{ImportProgressEvent, ProjectCacheStatus, TrackPcmMetadata};
@@ -7,6 +8,7 @@ use rubato::{FftFixedInOut, Resampler};
 use serde::{Deserialize, Serialize};
 use std::fs::File;
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -62,6 +64,20 @@ pub fn quantize_f32_to_i16_with_dither(sample: f32, rng: &mut TpdfDitherRng) -> 
     }
 }
 
+#[inline]
+pub fn quantize_f32_to_i16_exact(sample: f32) -> i16 {
+    let clamped = sample.clamp(-1.0, 1.0);
+    if clamped >= 1.0 {
+        32767
+    } else if clamped <= -1.0 {
+        -32768
+    } else if clamped >= 0.0 {
+        (clamped * 32768.0).min(32767.0).round() as i16
+    } else {
+        (clamped * 32768.0).max(-32768.0).round() as i16
+    }
+}
+
 /// Resamples multiple channels of audio from `from_rate` to `to_rate` using sinc interpolation (`rubato`).
 pub fn resample_channels(
     channels: &[Vec<f32>],
@@ -111,8 +127,19 @@ pub fn resample_channels(
     Ok(out_channels)
 }
 
+pub struct DecodedAudioInfo {
+    pub channels: Vec<Vec<f32>>,
+    pub sample_rate: u32,
+    pub original_channels: u16,
+    pub bits_per_sample: Option<u32>,
+}
+
 /// Decodes any audio file (WAV, FLAC, MP3, OGG, AAC/M4A) into `Vec<Vec<f32>>` using `symphonia`.
-pub fn decode_audio_file(file_path: &Path) -> Result<(Vec<Vec<f32>>, u32, u16), String> {
+/// Supports cooperative cancellation via `cancel_flag`.
+pub fn decode_audio_file(
+    file_path: &Path,
+    cancel_flag: Option<&AtomicBool>,
+) -> Result<DecodedAudioInfo, String> {
     let file = File::open(file_path).map_err(|e| format!("No se pudo abrir el archivo {:?}: {e}", file_path))?;
     let mss = symphonia::core::io::MediaSourceStream::new(Box::new(file), Default::default());
 
@@ -138,6 +165,7 @@ pub fn decode_audio_file(file_path: &Path) -> Result<(Vec<Vec<f32>>, u32, u16), 
     let track_id = track.id;
     let original_sample_rate = track.codec_params.sample_rate.unwrap_or(44100);
     let original_channels = track.codec_params.channels.map(|c| c.count() as u16).unwrap_or(2);
+    let bits_per_sample = track.codec_params.bits_per_sample;
 
     let dec_opts: symphonia::core::codecs::DecoderOptions = Default::default();
     let mut decoder = symphonia::default::get_codecs()
@@ -148,6 +176,12 @@ pub fn decode_audio_file(file_path: &Path) -> Result<(Vec<Vec<f32>>, u32, u16), 
     let mut sample_buf: Option<symphonia::core::audio::SampleBuffer<f32>> = None;
 
     loop {
+        if let Some(flag) = cancel_flag {
+            if flag.load(Ordering::Relaxed) {
+                return Err("Importación cancelada por el usuario".to_string());
+            }
+        }
+
         let packet = match format.next_packet() {
             Ok(p) => p,
             Err(symphonia::core::errors::Error::IoError(e))
@@ -204,23 +238,58 @@ pub fn decode_audio_file(file_path: &Path) -> Result<(Vec<Vec<f32>>, u32, u16), 
         }
     }
 
-    Ok((channels, original_sample_rate, original_channels))
+    Ok(DecodedAudioInfo {
+        channels,
+        sample_rate: original_sample_rate,
+        original_channels,
+        bits_per_sample,
+    })
 }
 
 /// Decodes an audio file, detects mono/effectively-mono, resamples to `target_sample_rate`,
 /// extracts 320 peaks, applies TPDF dither, and writes PCM + JSON atomically to disk.
+/// Respects `cancel_flag` and reuses cache if source file size/mtime match.
 pub fn decode_and_cache_track(
     base_dir: &Path,
     project_id: &str,
     track_id: &str,
     input_file_path: &Path,
     target_sample_rate: u32,
+    cancel_flag: Option<&AtomicBool>,
 ) -> Result<TrackPcmMetadata, String> {
-    let (decoded_channels, original_sample_rate, original_channels) =
-        decode_audio_file(input_file_path)?;
+    // 0. Cache hit check: if file is already converted and original file hasn't changed, reuse!
+    if !should_reconvert_track(base_dir, project_id, target_sample_rate, track_id, input_file_path) {
+        if let Ok(cached_meta) = read_track_metadata(base_dir, project_id, target_sample_rate, track_id) {
+            return Ok(cached_meta);
+        }
+    }
+
+    let fs_meta = std::fs::metadata(input_file_path)
+        .map_err(|e| format!("No se pudo leer metadatos de archivo fuente {:?}: {e}", input_file_path))?;
+    let original_file_size = fs_meta.len();
+    let original_modified_ms = fs_meta
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    let original_path = input_file_path.to_string_lossy().to_string();
+
+    let decoded_info = decode_audio_file(input_file_path, cancel_flag)?;
+    let decoded_channels = decoded_info.channels;
+    let original_sample_rate = decoded_info.sample_rate;
+    let original_channels = decoded_info.original_channels;
+    let bits_per_sample = decoded_info.bits_per_sample.unwrap_or(16);
 
     if decoded_channels.is_empty() || decoded_channels[0].is_empty() {
         return Err(format!("El archivo de audio {:?} no contiene muestras audibles", input_file_path));
+    }
+
+    if let Some(flag) = cancel_flag {
+        if flag.load(Ordering::Relaxed) {
+            delete_track_cache(base_dir, project_id, target_sample_rate, track_id);
+            return Err("Importación cancelada por el usuario".to_string());
+        }
     }
 
     // 1. Mono / Effectively-Mono detection
@@ -252,6 +321,13 @@ pub fn decode_and_cache_track(
         working_channels
     };
 
+    if let Some(flag) = cancel_flag {
+        if flag.load(Ordering::Relaxed) {
+            delete_track_cache(base_dir, project_id, target_sample_rate, track_id);
+            return Err("Importación cancelada por el usuario".to_string());
+        }
+    }
+
     let channels_count = resampled.len() as u16;
     let frame_count = resampled[0].len() as u64;
     let duration_sec = frame_count as f64 / target_sample_rate as f64;
@@ -259,19 +335,42 @@ pub fn decode_and_cache_track(
     // 3. Extract 320 waveform peaks
     let peaks = extract_waveform_peaks(&resampled[0], 320);
 
-    // 4. Quantize to i16 with TPDF dither (interleaved if stereo)
+    // 4. Quantize to i16 (exact copy if source is 16-bit and sample rates match, else TPDF dither)
+    let is_exact_16bit = bits_per_sample <= 16 && original_sample_rate == target_sample_rate;
     let mut rng = TpdfDitherRng::new(frame_count ^ (target_sample_rate as u64));
     let mut pcm_samples = Vec::with_capacity((frame_count as usize) * (channels_count as usize));
 
     if channels_count == 1 {
         for &s in &resampled[0] {
-            pcm_samples.push(quantize_f32_to_i16_with_dither(s, &mut rng));
+            let sample_i16 = if is_exact_16bit {
+                quantize_f32_to_i16_exact(s)
+            } else {
+                quantize_f32_to_i16_with_dither(s, &mut rng)
+            };
+            pcm_samples.push(sample_i16);
         }
     } else {
         let len = resampled[0].len().min(resampled[1].len());
         for i in 0..len {
-            pcm_samples.push(quantize_f32_to_i16_with_dither(resampled[0][i], &mut rng));
-            pcm_samples.push(quantize_f32_to_i16_with_dither(resampled[1][i], &mut rng));
+            let s0 = if is_exact_16bit {
+                quantize_f32_to_i16_exact(resampled[0][i])
+            } else {
+                quantize_f32_to_i16_with_dither(resampled[0][i], &mut rng)
+            };
+            let s1 = if is_exact_16bit {
+                quantize_f32_to_i16_exact(resampled[1][i])
+            } else {
+                quantize_f32_to_i16_with_dither(resampled[1][i], &mut rng)
+            };
+            pcm_samples.push(s0);
+            pcm_samples.push(s1);
+        }
+    }
+
+    if let Some(flag) = cancel_flag {
+        if flag.load(Ordering::Relaxed) {
+            delete_track_cache(base_dir, project_id, target_sample_rate, track_id);
+            return Err("Importación cancelada por el usuario".to_string());
         }
     }
 
@@ -289,6 +388,9 @@ pub fn decode_and_cache_track(
         target_sample_rate,
         original_sample_rate,
         original_channels,
+        original_path,
+        original_file_size,
+        original_modified_ms,
         channels: channels_count,
         is_effectively_mono: is_eff_mono,
         frame_count,
@@ -306,42 +408,144 @@ pub fn decode_and_cache_track(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::audio::cache;
 
-    fn write_test_wav(path: &Path, sample_rate: u32, channels: u16, frames: usize) {
+    fn write_test_wav_16bit(path: &Path, sample_rate: u32, channels: u16, samples_per_channel: &[i16]) {
         use std::io::Write;
         let mut f = File::create(path).unwrap();
         let bytes_per_sample = 2u16;
         let block_align = channels * bytes_per_sample;
         let byte_rate = sample_rate * block_align as u32;
+        let frames = samples_per_channel.len();
         let data_len = frames as u32 * block_align as u32;
         let total_len = 36 + data_len;
 
-        // RIFF header
         f.write_all(b"RIFF").unwrap();
         f.write_all(&(total_len.to_le_bytes())).unwrap();
         f.write_all(b"WAVE").unwrap();
 
-        // fmt chunk
         f.write_all(b"fmt ").unwrap();
-        f.write_all(&(16u32.to_le_bytes())).unwrap(); // chunk size
-        f.write_all(&(1u16.to_le_bytes())).unwrap();  // PCM
+        f.write_all(&(16u32.to_le_bytes())).unwrap();
+        f.write_all(&(1u16.to_le_bytes())).unwrap();
         f.write_all(&(channels.to_le_bytes())).unwrap();
         f.write_all(&(sample_rate.to_le_bytes())).unwrap();
         f.write_all(&(byte_rate.to_le_bytes())).unwrap();
         f.write_all(&(block_align.to_le_bytes())).unwrap();
-        f.write_all(&(16u16.to_le_bytes())).unwrap(); // bits per sample
+        f.write_all(&(16u16.to_le_bytes())).unwrap();
 
-        // data chunk
+        f.write_all(b"data").unwrap();
+        f.write_all(&(data_len.to_le_bytes())).unwrap();
+
+        for &val in samples_per_channel {
+            for _ in 0..channels {
+                f.write_all(&val.to_le_bytes()).unwrap();
+            }
+        }
+    }
+
+    fn write_test_wav_24bit(path: &Path, sample_rate: u32, channels: u16, frames: usize) {
+        use std::io::Write;
+        let mut f = File::create(path).unwrap();
+        let bytes_per_sample = 3u16;
+        let block_align = channels * bytes_per_sample;
+        let byte_rate = sample_rate * block_align as u32;
+        let data_len = frames as u32 * block_align as u32;
+        let total_len = 36 + data_len;
+
+        f.write_all(b"RIFF").unwrap();
+        f.write_all(&(total_len.to_le_bytes())).unwrap();
+        f.write_all(b"WAVE").unwrap();
+
+        f.write_all(b"fmt ").unwrap();
+        f.write_all(&(16u32.to_le_bytes())).unwrap();
+        f.write_all(&(1u16.to_le_bytes())).unwrap();
+        f.write_all(&(channels.to_le_bytes())).unwrap();
+        f.write_all(&(sample_rate.to_le_bytes())).unwrap();
+        f.write_all(&(byte_rate.to_le_bytes())).unwrap();
+        f.write_all(&(block_align.to_le_bytes())).unwrap();
+        f.write_all(&(24u16.to_le_bytes())).unwrap();
+
         f.write_all(b"data").unwrap();
         f.write_all(&(data_len.to_le_bytes())).unwrap();
 
         for i in 0..frames {
             let t = i as f32 / sample_rate as f32;
-            let val = ((2.0 * std::f32::consts::PI * 440.0 * t).sin() * 16000.0) as i16;
+            let val = ((2.0 * std::f32::consts::PI * 440.0 * t).sin() * 8000000.0) as i32;
+            let bytes = val.to_le_bytes(); // 24-bit PCM takes first 3 bytes little-endian
             for _ in 0..channels {
-                f.write_all(&val.to_le_bytes()).unwrap();
+                f.write_all(&bytes[0..3]).unwrap();
             }
         }
+    }
+
+    #[test]
+    fn test_wav_16bit_exact_copy_no_dither() {
+        let temp_dir = std::env::temp_dir().join(format!("omnitracks_exact_16_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        std::fs::create_dir_all(&temp_dir).unwrap();
+
+        let wav_path = temp_dir.join("test_exact_16.wav");
+        let test_samples: Vec<i16> = vec![0, 1000, -2000, 15000, -32000, 32767, -32768, 555, -999];
+        // Mono 16-bit at 48000 Hz, matching device 48000 Hz
+        write_test_wav_16bit(&wav_path, 48000, 1, &test_samples);
+
+        let meta = decode_and_cache_track(&temp_dir, "test_proj", "stem_exact", &wav_path, 48000, None).unwrap();
+        assert_eq!(meta.frame_count, test_samples.len() as u64);
+
+        let pcm_path = cache::get_track_pcm_path(&temp_dir, "test_proj", 48000, "stem_exact");
+        let pcm_bytes = std::fs::read(&pcm_path).unwrap();
+        let mut loaded_samples = Vec::new();
+        for chunk in pcm_bytes.chunks_exact(2) {
+            loaded_samples.push(i16::from_le_bytes([chunk[0], chunk[1]]));
+        }
+
+        // Compare sample by sample: must be 100% exact identical
+        for (i, (&orig, &loaded)) in test_samples.iter().zip(loaded_samples.iter()).enumerate() {
+            assert_eq!(orig, loaded, "Muestra diferenció en índice {i}: original {orig} vs cargada {loaded}");
+        }
+
+        let _ = std::fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn test_wav_24bit_dither_and_duration() {
+        let temp_dir = std::env::temp_dir().join(format!("omnitracks_dither_24_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        std::fs::create_dir_all(&temp_dir).unwrap();
+
+        let wav_path = temp_dir.join("test_24bit.wav");
+        let frames = 48000; // 1 second
+        write_test_wav_24bit(&wav_path, 48000, 2, frames);
+
+        let meta = decode_and_cache_track(&temp_dir, "test_proj", "stem_24", &wav_path, 48000, None).unwrap();
+        assert_eq!(meta.frame_count, frames as u64);
+        assert!((meta.duration_sec - 1.0).abs() < 0.001);
+
+        let pcm_path = cache::get_track_pcm_path(&temp_dir, "test_proj", 48000, "stem_24");
+        assert!(pcm_path.exists());
+        // Since L/R are identical, is_effectively_mono reduces to 1 channel:
+        assert_eq!(meta.channels, 1);
+        assert_eq!(pcm_path.metadata().unwrap().len(), (frames * 2) as u64);
+
+        let _ = std::fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn test_cancelled_import_leaves_no_files() {
+        let temp_dir = std::env::temp_dir().join(format!("omnitracks_cancel_test_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        std::fs::create_dir_all(&temp_dir).unwrap();
+
+        let wav_path = temp_dir.join("test_cancel.wav");
+        write_test_wav_16bit(&wav_path, 48000, 1, &[100, 200, 300, 400]);
+
+        let cancel_flag = AtomicBool::new(true); // cancelled immediately
+        let res = decode_and_cache_track(&temp_dir, "test_proj", "stem_cancel", &wav_path, 48000, Some(&cancel_flag));
+        assert!(res.is_err());
+
+        let pcm_path = cache::get_track_pcm_path(&temp_dir, "test_proj", 48000, "stem_cancel");
+        let json_path = cache::get_track_json_path(&temp_dir, "test_proj", 48000, "stem_cancel");
+        assert!(!pcm_path.exists());
+        assert!(!json_path.exists());
+
+        let _ = std::fs::remove_dir_all(temp_dir);
     }
 
     #[test]
@@ -350,15 +554,16 @@ mod tests {
         std::fs::create_dir_all(&temp_dir).unwrap();
 
         let wav_path = temp_dir.join("test_stem.wav");
-        write_test_wav(&wav_path, 44100, 2, 44100); // 1 second 44.1kHz stereo with identical L/R
+        let samples: Vec<i16> = (0..44100).map(|i| ((i % 1000) as i16) * 10).collect();
+        write_test_wav_16bit(&wav_path, 44100, 2, &samples);
 
-        let meta = decode_and_cache_track(&temp_dir, "test_proj", "stem_01", &wav_path, 48000).unwrap();
+        let meta = decode_and_cache_track(&temp_dir, "test_proj", "stem_01", &wav_path, 48000, None).unwrap();
 
         assert_eq!(meta.track_id, "stem_01");
         assert_eq!(meta.original_sample_rate, 44100);
         assert_eq!(meta.target_sample_rate, 48000);
         assert_eq!(meta.original_channels, 2);
-        assert!(meta.is_effectively_mono); // Identical channels -> effectively mono!
+        assert!(meta.is_effectively_mono);
         assert_eq!(meta.channels, 1);
         assert_eq!(meta.peaks.len(), 320);
         assert!((meta.duration_sec - 1.0).abs() < 0.05);

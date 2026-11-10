@@ -1117,20 +1117,18 @@ export default function App() {
         `[AudioEngine][InstantImport] "${effectiveSongTitle}" (${initialTracks.length} pistas, ${restoredSectionsCount} marcadores) montada en consola en ${mountMs.toFixed(1)} ms`
       );
 
-      // Desktop Native: Si el motor nativo de Rust ya generó el caché PCM y picos,
-      // se omite completamente el pipeline de Web Workers / OPFS en JavaScript.
+      // Desktop Native: Registramos la disponibilidad de la caché PCM nativa generada en Rust.
+      // Hasta la Fase 6 (cuando el reproductor nativo reemplace por completo al Web Audio),
+      // se conserva la ruta de optimización OPFS para que WebView2 siga sonando sin caídas a RAM.
       const isNativePcmReady =
         isDesktopApp &&
         initialTracks.length > 0 &&
         initialTracks.every((t) => Boolean(t.pcm) && t.pcm!.frames > 0);
 
       if (isNativePcmReady) {
-        showToast(
-          restoredSectionsCount > 0
-            ? `"${effectiveSongTitle}" lista con motor nativo (${initialTracks.length} pistas · ${restoredSectionsCount} marcadores restaurados)`
-            : `"${effectiveSongTitle}" lista con motor nativo (${initialTracks.length} pistas)`
+        console.info(
+          `[AudioImport][Desktop] Caché PCM nativa en Rust lista para "${effectiveSongTitle}" (${initialTracks.length} pistas).`
         );
-        return;
       }
 
       // Single-pass pipeline: decode each stem ONCE, straight into the OPFS cache (peaks and

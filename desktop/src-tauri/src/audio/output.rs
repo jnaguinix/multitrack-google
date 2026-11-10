@@ -1,7 +1,7 @@
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
@@ -72,6 +72,7 @@ pub struct AudioEngineState {
     pub settings_path: PathBuf,
     pub current_settings: Mutex<AudioSettings>,
     pub stats: Arc<AudioStreamStats>,
+    pub import_cancellation: Mutex<std::collections::HashMap<String, Arc<AtomicBool>>>,
 }
 
 impl AudioEngineState {
@@ -82,7 +83,27 @@ impl AudioEngineState {
             settings_path,
             current_settings: Mutex::new(initial_settings),
             stats: Arc::new(AudioStreamStats::default()),
+            import_cancellation: Mutex::new(std::collections::HashMap::new()),
         }
+    }
+
+    pub async fn create_import_cancel_flag(&self, project_id: &str) -> Arc<AtomicBool> {
+        let flag = Arc::new(AtomicBool::new(false));
+        let mut map = self.import_cancellation.lock().await;
+        map.insert(project_id.to_string(), Arc::clone(&flag));
+        flag
+    }
+
+    pub async fn cancel_import(&self, project_id: &str) {
+        let map = self.import_cancellation.lock().await;
+        if let Some(flag) = map.get(project_id) {
+            flag.store(true, Ordering::Relaxed);
+        }
+    }
+
+    pub async fn clear_import_cancel_flag(&self, project_id: &str) {
+        let mut map = self.import_cancellation.lock().await;
+        map.remove(project_id);
     }
 
     pub fn get_stats(&self) -> AudioStreamStatsSnapshot {

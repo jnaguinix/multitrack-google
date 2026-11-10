@@ -19,6 +19,7 @@
     "allow-audio-get-stats",
     "allow-audio-test-tone",
     "allow-audio-import-tracks",
+    "allow-audio-cancel-import",
     "allow-audio-get-project-cache-status"
   ]
 }

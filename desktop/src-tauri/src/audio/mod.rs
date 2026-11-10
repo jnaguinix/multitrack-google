@@ -84,6 +84,15 @@ pub async fn audio_test_tone(
 }
 
 #[tauri::command]
+pub async fn audio_cancel_import(
+    state: State<'_, AudioEngineState>,
+    project_id: String,
+) -> Result<(), String> {
+    state.cancel_import(&project_id).await;
+    Ok(())
+}
+
+#[tauri::command]
 pub async fn audio_import_tracks(
     app: tauri::AppHandle,
     state: State<'_, AudioEngineState>,
@@ -103,53 +112,96 @@ pub async fn audio_import_tracks(
         settings.sample_rate.unwrap_or(48000)
     };
 
+    // 1. Check free disk space before starting (with 1.2x safety margin)
+    let mut total_estimated_needed: u64 = 0;
+    for file in &files {
+        let size = std::fs::metadata(&file.file_path).map(|m| m.len()).unwrap_or(20 * 1024 * 1024);
+        total_estimated_needed += (size * 4).max(10 * 1024 * 1024);
+    }
+    cache::check_free_disk_space(&local_data, total_estimated_needed)?;
+
     let total_tracks = files.len();
+    let cancel_flag = state.create_import_cancel_flag(&project_id).await;
+
+    let semaphore = Arc::new(tokio::sync::Semaphore::new(2)); // Max 2 concurrent track decoders
+    let mut tasks = Vec::new();
+
+    for (idx, file) in files.into_iter().enumerate() {
+        let sem = Arc::clone(&semaphore);
+        let flag = Arc::clone(&cancel_flag);
+        let app_clone = app.clone();
+        let local_data_clone = local_data.clone();
+        let proj_id_clone = project_id.clone();
+
+        tasks.push(tokio::spawn(async move {
+            let _permit = sem.acquire().await.map_err(|e| e.to_string())?;
+
+            if flag.load(std::sync::atomic::Ordering::Relaxed) {
+                return Err("Cancelado por el usuario".to_string());
+            }
+
+            let input_path = Path::new(&file.file_path);
+            let track_name = input_path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("Pista")
+                .to_string();
+
+            let _ = app_clone.emit(
+                "audio://import-progress",
+                ImportProgressEvent {
+                    project_id: proj_id_clone.clone(),
+                    track_index: idx,
+                    total_tracks,
+                    track_name: track_name.clone(),
+                    percent: (idx as f32 / total_tracks.max(1) as f32) * 100.0,
+                    completed: false,
+                },
+            );
+
+            let res = import::decode_and_cache_track(
+                &local_data_clone,
+                &proj_id_clone,
+                &file.track_id,
+                input_path,
+                sample_rate,
+                Some(&flag),
+            );
+
+            match res {
+                Ok(meta) => Ok(meta),
+                Err(e) => Err(format!("{track_name}: {e}")),
+            }
+        }));
+    }
+
     let mut tracks = Vec::new();
     let mut errors = Vec::new();
 
-    for (idx, file) in files.iter().enumerate() {
-        let input_path = Path::new(&file.file_path);
-        let track_name = input_path
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or("Pista")
-            .to_string();
+    for task in tasks {
+        match task.await {
+            Ok(Ok(meta)) => tracks.push(meta),
+            Ok(Err(e)) => errors.push(e),
+            Err(e) => errors.push(e.to_string()),
+        }
+    }
 
+    state.clear_import_cancel_flag(&project_id).await;
+
+    let is_cancelled = cancel_flag.load(std::sync::atomic::Ordering::Relaxed);
+    if !is_cancelled {
         let _ = app.emit(
             "audio://import-progress",
             ImportProgressEvent {
                 project_id: project_id.clone(),
-                track_index: idx,
+                track_index: total_tracks,
                 total_tracks,
-                track_name: track_name.clone(),
-                percent: (idx as f32 / total_tracks.max(1) as f32) * 100.0,
-                completed: false,
+                track_name: "Completado".to_string(),
+                percent: 100.0,
+                completed: true,
             },
         );
-
-        match import::decode_and_cache_track(
-            &local_data,
-            &project_id,
-            &file.track_id,
-            input_path,
-            sample_rate,
-        ) {
-            Ok(meta) => tracks.push(meta),
-            Err(e) => errors.push(format!("{track_name}: {e}")),
-        }
     }
-
-    let _ = app.emit(
-        "audio://import-progress",
-        ImportProgressEvent {
-            project_id: project_id.clone(),
-            track_index: total_tracks,
-            total_tracks,
-            track_name: "Completado".to_string(),
-            percent: 100.0,
-            completed: true,
-        },
-    );
 
     Ok(ImportResult { tracks, errors })
 }
