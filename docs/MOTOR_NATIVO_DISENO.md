@@ -347,4 +347,49 @@ Verificadas en el archivo actual del repositorio:
 
 ---
 
-*Fin del documento de diseño actualizado. Esperando aprobación formal para proceder a la Fase 1.*
+## 8. Formato y Jerarquía de Caché PCM por Frecuencia de Dispositivo (Fase 2)
+
+### 8.1 Estructura en Disco
+Para evitar cualquier remuestreo en tiempo real durante la reproducción en vivo con tono normal (`pitchSemitones == 0`), los stems de audio se decodifican y almacenan en disco a la frecuencia de muestreo nativa del dispositivo de salida configurado en Windows (por ejemplo, 48.000 Hz):
+
+- **Ruta del PCM crudo:**
+  `{AppLocalDataDir}/pcm/{projectId}/{sampleRate}/{trackId}.pcm`
+  - Formato: PCM lineal crudo (Headerless raw PCM).
+  - Canales: 1 canal (mono / efectivamente mono) o 2 canales (estéreo entrelazado L/R).
+  - Profundidad de bits: Entero con signo de 16 bits (`i16` little-endian, 2 bytes por muestra) con tramado TPDF (Triangular Probability Density Function dither) aplicado durante la reducción de precisión desde fuentes de 24/32 bits, o `f32` IEEE-754 según preferencia del perfil de rendimiento.
+  - Escritura atómica: Se escribe primero como `{trackId}.pcm.tmp` y al concluir la escritura y verificación de suma de verificación o longitud de frames, se renombra de manera atómica a `{trackId}.pcm`.
+
+- **Ruta de Metadatos de Pista:**
+  `{AppLocalDataDir}/pcm/{projectId}/{sampleRate}/{trackId}.json`
+  - Contenido:
+    ```json
+    {
+      "formatVersion": 1,
+      "trackId": "stem-drums-123",
+      "targetSampleRate": 48000,
+      "originalSampleRate": 44100,
+      "originalChannels": 2,
+      "channels": 1,
+      "isEffectivelyMono": true,
+      "frameCount": 11520000,
+      "durationSec": 240.0,
+      "peaks": [0.12, 0.45, 0.88, ...],
+      "createdAt": "2026-11-10T16:30:00Z"
+    }
+    ```
+  - `peaks`: Array exactamente de 320 valores normalizados de 0.0 a 1.0 (equivalente exacto a `extractWaveformPeaks` de la aplicación web), permitiendo al canvas de la forma de onda dibujar el stem de inmediato sin decodificar de nuevo.
+
+### 8.2 Omisión de Remuestreo en Vivo (Zero-Resampling Bypass)
+- Cuando el motor reproduce un proyecto donde la frecuencia de la caché coincide con la del dispositivo (`sampleRate == deviceSampleRate`) y no hay cambio de tono (`pitchSemitones == 0`):
+  - **El remuestreador `rubato` no se instancia ni se ejecuta.**
+  - El hilo feeder copia las muestras leídas del búfer I/O directamente al búfer circular `rtrb` con una simple copia de memoria o conversión de formato.
+  - Cero latencia de filtro sinc, cero consumo innecesario de ciclos de CPU y máxima pureza espectral sin artefactos de aliasing ni ripple de banda pasante.
+- Si el usuario modifica la tonalidad en vivo (`pitchSemitones != 0`):
+  - El feeder activa dinámicamente `rubato` ajustando el ratio $r = 2^{(\text{pitchSemitones}/12)}$ sobre el flujo continuo con compensación de fase.
+- Si el usuario cambia el dispositivo físico de salida a otra frecuencia (por ejemplo, de 48.000 Hz a 96.000 Hz):
+  - Si ya existe la carpeta de caché `pcm/{projectId}/96000/`, se conmuta a ella instantáneamente.
+  - Si aún no existe, el motor nativo remuestrea al vuelo desde la carpeta existente (48.000 Hz) mientras un proceso en segundo plano de baja prioridad genera la caché nativa a 96.000 Hz.
+
+---
+
+*Fin del documento de diseño actualizado.*

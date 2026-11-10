@@ -1,7 +1,7 @@
 pub mod output;
 
 use output::{
-    AudioDeviceInfo, AudioEngineState, AudioSettings, TestToneResult,
+    AudioDeviceInfo, AudioEngineState, AudioSettings, AudioStreamStatsSnapshot, TestToneResult,
 };
 use std::sync::Arc;
 use tauri::State;
@@ -36,6 +36,13 @@ pub async fn audio_set_config(
 }
 
 #[tauri::command]
+pub async fn audio_get_stats(
+    state: State<'_, AudioEngineState>,
+) -> Result<AudioStreamStatsSnapshot, String> {
+    Ok(state.get_stats())
+}
+
+#[tauri::command]
 pub async fn audio_test_tone(
     state: State<'_, AudioEngineState>,
     device_name: Option<String>,
@@ -46,7 +53,13 @@ pub async fn audio_test_tone(
     let freq = frequency.unwrap_or(440.0);
     let dur = duration_ms.unwrap_or(1200);
 
-    let (stream, result) = output::play_test_tone(device_name.as_deref(), channel, freq, dur)?;
+    let (stream, result) = output::play_test_tone(
+        device_name.as_deref(),
+        channel,
+        freq,
+        dur,
+        Some(Arc::clone(&state.stats)),
+    )?;
 
     let active_slot = Arc::clone(&state.active_test_stream);
     {

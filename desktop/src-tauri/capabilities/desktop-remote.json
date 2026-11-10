@@ -16,6 +16,7 @@
     "allow-audio-list-devices",
     "allow-audio-get-config",
     "allow-audio-set-config",
+    "allow-audio-get-stats",
     "allow-audio-test-tone"
   ]
 }

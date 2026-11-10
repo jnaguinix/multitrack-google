@@ -14,6 +14,7 @@ fn main() {
             "audio_list_devices",
             "audio_get_config",
             "audio_set_config",
+            "audio_get_stats",
             "audio_test_tone",
         ]);
         tauri_build::try_build(tauri_build::Attributes::new().app_manifest(manifest))

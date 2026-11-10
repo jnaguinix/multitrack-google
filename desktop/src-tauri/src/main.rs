@@ -220,6 +220,7 @@ fn main() {
             omnitracks_desktop::audio::audio_list_devices,
             omnitracks_desktop::audio::audio_get_config,
             omnitracks_desktop::audio::audio_set_config,
+            omnitracks_desktop::audio::audio_get_stats,
             omnitracks_desktop::audio::audio_test_tone
         ])
         .run(tauri::generate_context!())

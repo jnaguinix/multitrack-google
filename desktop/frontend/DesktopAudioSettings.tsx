@@ -1,6 +1,6 @@
 import React, { memo, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Sliders, Volume2, Check, AlertTriangle, Info, RefreshCw, X } from 'lucide-react';
+import { Sliders, Volume2, Check, AlertTriangle, Info, RefreshCw, X, Activity } from 'lucide-react';
 import './connection.css';
 
 type Invoke = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
@@ -24,6 +24,12 @@ interface AudioSettings {
   sampleRate: number | null;
   bufferSize: number | null;
   testChannel: number | null;
+}
+
+interface AudioStreamStatsSnapshot {
+  underruns: number;
+  callbacks: number;
+  maxCallbackDurationUs: number;
 }
 
 interface TestToneResult {
@@ -52,6 +58,21 @@ export default memo(function DesktopAudioSettings({ triggerHost }: Props) {
   const [savingNotice, setSavingNotice] = useState('');
   const [statusNotice, setStatusNotice] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [stats, setStats] = useState<AudioStreamStatsSnapshot>({
+    underruns: 0,
+    callbacks: 0,
+    maxCallbackDurationUs: 0,
+  });
+
+  const pollStats = async () => {
+    if (!invoke) return;
+    try {
+      const s = await invoke<AudioStreamStatsSnapshot>('audio_get_stats');
+      if (s) setStats(s);
+    } catch {
+      // ignore
+    }
+  };
 
   const activeDevice = devices.find((d) => d.name === selectedDeviceName) || devices.find((d) => d.isDefault) || devices[0];
 
@@ -98,6 +119,11 @@ export default memo(function DesktopAudioSettings({ triggerHost }: Props) {
   useEffect(() => {
     if (invoke) {
       void loadAudioConfig();
+      void pollStats();
+      const interval = setInterval(() => {
+        void pollStats();
+      }, 1500);
+      return () => clearInterval(interval);
     }
   }, []);
 
@@ -119,9 +145,12 @@ export default memo(function DesktopAudioSettings({ triggerHost }: Props) {
         durationMs: 1200,
       });
 
+      void pollStats();
+
       setTimeout(() => {
         setIsPlayingTestTone(false);
         setStatusNotice(`Tono completado en Salida ${selectedChannel + 1}.`);
+        void pollStats();
       }, 1250);
     } catch (err) {
       setIsPlayingTestTone(false);
@@ -149,10 +178,35 @@ export default memo(function DesktopAudioSettings({ triggerHost }: Props) {
     }
   };
 
-  // Determine Case A, B, or C according to PROMPT_MOTOR_NATIVO.md Section 6
-  const isCaseA = activeDevice && activeDevice.channels >= 4;
-  const isCaseC = activeDevice && activeDevice.channels === 2;
-  const isCaseB = !isCaseA && devices.length > 1 && devices.every((d) => d.channels <= 2);
+  // Determine Case A, B, or C according to PROMPT_MOTOR_NATIVO.md Section 6 & refined directives
+  const isCaseA = Boolean(activeDevice && activeDevice.channels >= 4);
+
+  const isCaseB = (() => {
+    if (isCaseA || !activeDevice || devices.length < 2) return false;
+
+    const pairRegex = /(?:(?:\b(?:out|ch|line|salida)\s*)?(?:[1-9]\s*[-/]\s*[1-9]))/i;
+
+    const getBaseHardwareName = (name: string) => {
+      return name
+        .replace(/\((?:[^)]*?(?:1\/2|3\/4|5\/6|7\/8|1-2|3-4|5-6|7-8|out|ch|line)[^)]*?)\)/gi, '')
+        .replace(/(?:out|line|salida|ch|canales)?\s*[1-9]\s*[-/]\s*[1-9]/gi, '')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .toLowerCase();
+    };
+
+    const activeBase = getBaseHardwareName(activeDevice.name);
+    if (!activeBase || activeBase.length < 3) return false;
+
+    const matchingSiblings = devices.filter((d) => {
+      const dBase = getBaseHardwareName(d.name);
+      return dBase === activeBase && (pairRegex.test(d.name) || pairRegex.test(activeDevice.name));
+    });
+
+    return matchingSiblings.length >= 2;
+  })();
+
+  const isCaseC = !isCaseA && !isCaseB && Boolean(activeDevice && activeDevice.channels === 2);
 
   return (
     <>
@@ -269,6 +323,14 @@ export default memo(function DesktopAudioSettings({ triggerHost }: Props) {
                 <span>Formato de muestra:</span>
                 <span className="font-mono text-neutral-400">{activeDevice.sampleFormat}</span>
               </div>
+              {activeDevice.minBufferSize && (
+                <div className="flex justify-between items-center text-neutral-300">
+                  <span>Búfer de Windows (WASAPI):</span>
+                  <span className="font-mono text-neutral-300">
+                    {activeDevice.minBufferSize} muestras (~{((activeDevice.minBufferSize / (activeDevice.defaultSampleRate || 48000)) * 1000).toFixed(1)} ms)
+                  </span>
+                </div>
+              )}
             </div>
           )}
 
@@ -293,7 +355,7 @@ export default memo(function DesktopAudioSettings({ triggerHost }: Props) {
             </div>
           )}
 
-          {isCaseC && !isCaseB && (
+          {isCaseC && (
             <div className="flex items-start gap-2.5 p-3 rounded-xl bg-blue-950/40 border border-blue-800/60 text-blue-200 text-xs">
               <Info size={16} className="text-blue-400 shrink-0 mt-0.5" />
               <div>
@@ -344,6 +406,45 @@ export default memo(function DesktopAudioSettings({ triggerHost }: Props) {
               )}
             </div>
           )}
+
+          {/* Telemetría del Callback en Tiempo Real */}
+          <div className="border border-neutral-800 rounded-xl p-3 bg-studio-ground/50 space-y-2">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-1.5 text-xs font-semibold text-neutral-200">
+                <Activity size={14} className="text-cyan-400" />
+                <span>Rendimiento del Callback (Rust / WASAPI)</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => void pollStats()}
+                className="text-[11px] text-neutral-400 hover:text-white flex items-center gap-1"
+                title="Actualizar métricas"
+              >
+                <RefreshCw size={11} />
+                <span>Refrescar</span>
+              </button>
+            </div>
+            <div className="grid grid-cols-3 gap-2 text-center text-xs pt-1">
+              <div className="p-2 rounded-lg bg-black/30 border border-neutral-800/80">
+                <div className="text-[10px] text-neutral-400 uppercase tracking-wider">Callbacks</div>
+                <div className="font-mono font-semibold text-neutral-200 mt-0.5">
+                  {stats.callbacks.toLocaleString()}
+                </div>
+              </div>
+              <div className="p-2 rounded-lg bg-black/30 border border-neutral-800/80">
+                <div className="text-[10px] text-neutral-400 uppercase tracking-wider">Underruns</div>
+                <div className={`font-mono font-semibold mt-0.5 ${stats.underruns === 0 ? 'text-emerald-400' : 'text-rose-400 animate-pulse'}`}>
+                  {stats.underruns}
+                </div>
+              </div>
+              <div className="p-2 rounded-lg bg-black/30 border border-neutral-800/80">
+                <div className="text-[10px] text-neutral-400 uppercase tracking-wider">Duración Máx.</div>
+                <div className={`font-mono font-semibold mt-0.5 ${stats.maxCallbackDurationUs < 5000 ? 'text-emerald-400' : 'text-amber-400'}`}>
+                  {stats.maxCallbackDurationUs > 0 ? `${stats.maxCallbackDurationUs} µs` : '0 µs'}
+                </div>
+              </div>
+            </div>
+          </div>
 
           {/* Save / Status Actions */}
           <div className="pt-2 flex items-center justify-between border-t border-neutral-800">

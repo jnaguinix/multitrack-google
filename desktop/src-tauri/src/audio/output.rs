@@ -52,10 +52,26 @@ pub struct TestToneResult {
     pub duration_ms: u64,
 }
 
+#[derive(Debug, Default)]
+pub struct AudioStreamStats {
+    pub underruns: AtomicU64,
+    pub callbacks: AtomicU64,
+    pub max_callback_duration_us: AtomicU64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AudioStreamStatsSnapshot {
+    pub underruns: u64,
+    pub callbacks: u64,
+    pub max_callback_duration_us: u64,
+}
+
 pub struct AudioEngineState {
     pub active_test_stream: Arc<Mutex<Option<cpal::Stream>>>,
     pub settings_path: PathBuf,
     pub current_settings: Mutex<AudioSettings>,
+    pub stats: Arc<AudioStreamStats>,
 }
 
 impl AudioEngineState {
@@ -65,6 +81,15 @@ impl AudioEngineState {
             active_test_stream: Arc::new(Mutex::new(None)),
             settings_path,
             current_settings: Mutex::new(initial_settings),
+            stats: Arc::new(AudioStreamStats::default()),
+        }
+    }
+
+    pub fn get_stats(&self) -> AudioStreamStatsSnapshot {
+        AudioStreamStatsSnapshot {
+            underruns: self.stats.underruns.load(Ordering::Relaxed),
+            callbacks: self.stats.callbacks.load(Ordering::Relaxed),
+            max_callback_duration_us: self.stats.max_callback_duration_us.load(Ordering::Relaxed),
         }
     }
 }
@@ -189,6 +214,7 @@ pub fn play_test_tone(
     channel: u16,
     frequency: f32,
     duration_ms: u64,
+    stats: Option<Arc<AudioStreamStats>>,
 ) -> Result<(cpal::Stream, TestToneResult), String> {
     let host = cpal::default_host();
     let device = if let Some(name) = device_name {
@@ -229,6 +255,9 @@ pub fn play_test_tone(
         tracing::error!("CPAL test tone stream error: {}", err);
     };
 
+    let stats_f32 = stats.clone();
+    let stats_i16 = stats.clone();
+
     let stream = match sample_format {
         cpal::SampleFormat::F32 => {
             let mut phase: f32 = 0.0;
@@ -237,6 +266,11 @@ pub fn play_test_tone(
             device.build_output_stream(
                 config,
                 move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
+                    let start_time = std::time::Instant::now();
+                    if let Some(ref st) = stats_f32 {
+                        st.callbacks.fetch_add(1, Ordering::Relaxed);
+                    }
+
                     let mut idx = 0;
                     while idx < data.len() {
                         let current_sample_idx = samples_rendered_clone.fetch_add(1, Ordering::Relaxed);
@@ -269,6 +303,22 @@ pub fn play_test_tone(
                         }
                         idx += num_channels;
                     }
+
+                    if let Some(ref st) = stats_f32 {
+                        let elapsed_us = start_time.elapsed().as_micros() as u64;
+                        let mut current_max = st.max_callback_duration_us.load(Ordering::Relaxed);
+                        while elapsed_us > current_max {
+                            match st.max_callback_duration_us.compare_exchange_weak(
+                                current_max,
+                                elapsed_us,
+                                Ordering::Relaxed,
+                                Ordering::Relaxed,
+                            ) {
+                                Ok(_) => break,
+                                Err(actual) => current_max = actual,
+                            }
+                        }
+                    }
                 },
                 err_fn,
                 None,
@@ -281,6 +331,11 @@ pub fn play_test_tone(
             device.build_output_stream(
                 config,
                 move |data: &mut [i16], _: &cpal::OutputCallbackInfo| {
+                    let start_time = std::time::Instant::now();
+                    if let Some(ref st) = stats_i16 {
+                        st.callbacks.fetch_add(1, Ordering::Relaxed);
+                    }
+
                     let mut idx = 0;
                     while idx < data.len() {
                         let current_sample_idx = samples_rendered_clone.fetch_add(1, Ordering::Relaxed);
@@ -312,6 +367,22 @@ pub fn play_test_tone(
                             }
                         }
                         idx += num_channels;
+                    }
+
+                    if let Some(ref st) = stats_i16 {
+                        let elapsed_us = start_time.elapsed().as_micros() as u64;
+                        let mut current_max = st.max_callback_duration_us.load(Ordering::Relaxed);
+                        while elapsed_us > current_max {
+                            match st.max_callback_duration_us.compare_exchange_weak(
+                                current_max,
+                                elapsed_us,
+                                Ordering::Relaxed,
+                                Ordering::Relaxed,
+                            ) {
+                                Ok(_) => break,
+                                Err(actual) => current_max = actual,
+                            }
+                        }
                     }
                 },
                 err_fn,
@@ -373,5 +444,28 @@ mod tests {
         let hosts = list_hosts();
         assert!(!hosts.is_empty());
         assert!(hosts.iter().any(|h| h.eq_ignore_ascii_case("wasapi")));
+    }
+
+    #[test]
+    fn test_audio_engine_state_and_stats() {
+        let temp_dir = std::env::temp_dir().join(format!("omnitracks_test_stats_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let file_path = temp_dir.join("audio_settings.json");
+        let state = AudioEngineState::new(file_path);
+
+        let initial_stats = state.get_stats();
+        assert_eq!(initial_stats.callbacks, 0);
+        assert_eq!(initial_stats.underruns, 0);
+        assert_eq!(initial_stats.max_callback_duration_us, 0);
+
+        state.stats.callbacks.fetch_add(42, Ordering::Relaxed);
+        state.stats.underruns.fetch_add(1, Ordering::Relaxed);
+        state.stats.max_callback_duration_us.store(150, Ordering::Relaxed);
+
+        let updated_stats = state.get_stats();
+        assert_eq!(updated_stats.callbacks, 42);
+        assert_eq!(updated_stats.underruns, 1);
+        assert_eq!(updated_stats.max_callback_duration_us, 150);
+
+        let _ = std::fs::remove_dir_all(temp_dir);
     }
 }
