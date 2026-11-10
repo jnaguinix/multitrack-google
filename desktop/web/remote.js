@@ -82,14 +82,56 @@
     socket.send(JSON.stringify({ ...command, revision: state.revision }));
   }
 
-  function newRange(index, kind, min, format, commit) {
+  const MIN_DB = -40;
+  const MAX_DB = 10;
+  const MUTE_TRAVEL = 0.04;
+
+  function gainToDb(gain) {
+    if (!Number.isFinite(gain) || gain <= 0) return -Infinity;
+    return Math.round(200 * Math.log10(gain)) / 10;
+  }
+
+  function dbToGain(db) {
+    if (!Number.isFinite(db)) return 0;
+    const clamped = Math.max(MIN_DB, Math.min(MAX_DB, db));
+    return Number((10 ** (clamped / 20)).toFixed(4));
+  }
+
+  function posFromDb(db) {
+    if (!Number.isFinite(db)) return 0;
+    const normalized = Math.max(0, Math.min(1, (db - MIN_DB) / (MAX_DB - MIN_DB)));
+    return MUTE_TRAVEL + normalized * (1 - MUTE_TRAVEL);
+  }
+
+  function dbFromPos(pos) {
+    if (pos < MUTE_TRAVEL) return -Infinity;
+    return MIN_DB + (pos - MUTE_TRAVEL) / (1 - MUTE_TRAVEL) * (MAX_DB - MIN_DB);
+  }
+
+  function gainToPos(gain) {
+    return Number(posFromDb(gainToDb(gain)).toFixed(3));
+  }
+
+  function posToGain(pos) {
+    const db = dbFromPos(Math.max(0, Math.min(1, pos)));
+    return !Number.isFinite(db) ? 0 : dbToGain(Math.round(db * 10) / 10);
+  }
+
+  function gainText(gain) {
+    const db = gainToDb(gain);
+    if (!Number.isFinite(db)) return ['−∞ dB', 'Silencio'];
+    const decibels = (db > 0 ? '+' : '') + db.toFixed(1) + ' dB';
+    return [decibels, decibels];
+  }
+
+  function newRange(index, kind, min, step, format, commit, toSlider = (v) => v, fromSlider = (v) => v) {
     const slider = document.createElement('input');
     slider.id = 'track-' + kind + '-' + index;
     slider.className = 'track-' + kind;
     slider.type = 'range';
     slider.min = String(min);
     slider.max = '1';
-    slider.step = '0.01';
+    slider.step = String(step);
     const value = document.createElement('output');
     value.setAttribute('for', slider.id);
     value.setAttribute('aria-live', 'off');
@@ -102,7 +144,7 @@
       slider, value, dragging: false,
       update(next, label, disabled) {
         if (!control.dragging || disabled) {
-          slider.value = String(next);
+          slider.value = String(toSlider(next));
           updateText(next);
         }
         slider.setAttribute('aria-label', label);
@@ -113,8 +155,8 @@
     for (const event of ['pointerup', 'pointercancel', 'blur']) {
       slider.addEventListener(event, () => { control.dragging = false; });
     }
-    slider.addEventListener('input', () => updateText(Number(slider.value)));
-    slider.addEventListener('change', () => commit(Number(slider.value)));
+    slider.addEventListener('input', () => updateText(fromSlider(Number(slider.value))));
+    slider.addEventListener('change', () => commit(fromSlider(Number(slider.value))));
     return control;
   }
 
@@ -135,7 +177,7 @@
         drag = null;
         gain.dragging = false;
       }
-      lane.style.setProperty('--position', Math.round(Number(slider.value) * 100) + '%');
+      lane.style.setProperty('--position', (Number(slider.value) * 100).toFixed(1) + '%');
     };
     slider.addEventListener('input', sync);
     thumb.addEventListener('pointerdown', (event) => {
@@ -152,7 +194,7 @@
       const distance = event.clientX - drag.x;
       if (!drag.moved && Math.abs(distance) < 5) return;
       drag.moved = true;
-      const next = Math.max(0, Math.min(1, drag.value + distance / drag.width)).toFixed(2);
+      const next = Math.max(0, Math.min(1, drag.value + distance / drag.width)).toFixed(3);
       if (Number(slider.value) === Number(next)) return;
       slider.value = next;
       slider.dispatchEvent(new Event('input'));
@@ -181,13 +223,10 @@
     row.className = 'track';
     const name = document.createElement('div');
     name.className = 'track-name';
-    const gain = newRange(index, 'gain', 0, (value) => {
-      if (value <= 0) return ['−∞ dB', 'Silencio'];
-      const decibels = (20 * Math.log10(value)).toFixed(1) + ' dB';
-      return [decibels, decibels];
-    }, (gain) => send({ type: 'setTrackGain', trackIndex: index, gain }));
+    const gain = newRange(index, 'gain', 0, 0.001, gainText,
+      (gain) => send({ type: 'setTrackGain', trackIndex: index, gain }), gainToPos, posToGain);
     const gainFader = newGainFader(gain);
-    const pan = newRange(index, 'pan', -1, panText,
+    const pan = newRange(index, 'pan', -1, 0.01, panText,
       (pan) => send({ type: 'setTrackPan', trackIndex: index, pan }));
     const panToggle = document.createElement('button');
     panToggle.type = 'button';

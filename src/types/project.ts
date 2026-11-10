@@ -64,10 +64,12 @@ export interface SongProject {
   splitRoutingMode: SplitRoutingMode;
   clickEnabled: boolean;
   clickGain: number;
+  clickPan?: number;
   clickSubdivision: 1 | 2; // 1 = quarter notes, 2 = eighth notes
   guideCuesEnabled: boolean;
   guideVoiceReadout: boolean;
   guideGain: number;
+  guidePan?: number;
   masterGain: number;
   cueMasterGain?: number; // Master output gain for the Click / Cue bus ("Auriculares banda")
   pitchSemitones: number; // -6 to +6 semitones detune for stems

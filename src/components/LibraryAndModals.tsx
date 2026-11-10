@@ -670,17 +670,34 @@ const QUICK_SECTION_PRESETS = [
   { name: 'Final', code: 'FI', color: '#EF4444' },
 ];
 
+function roundSectionSec(sec: number): number {
+  return Math.round(Math.max(0, sec || 0) * 100) / 100;
+}
+
+function formatSectionMmSs(sec: number): string {
+  const safe = roundSectionSec(sec);
+  const totalCentis = Math.round(safe * 100);
+  const mins = Math.floor(totalCentis / 6000);
+  const remCentis = totalCentis - mins * 6000;
+  const wholeSec = Math.floor(remCentis / 100);
+  const centis = remCentis % 100;
+  return `${String(mins).padStart(2, '0')}:${String(wholeSec).padStart(2, '0')}.${String(centis).padStart(2, '0')}`;
+}
+
 function parseMmSsInput(text: string, fallbackSec: number): number {
-  const clean = text.trim();
+  const clean = text.trim().replace(',', '.');
   if (!clean) return fallbackSec;
   if (clean.includes(':')) {
     const [mStr, sStr] = clean.split(':');
-    const mins = Number(mStr) || 0;
-    const secs = Number(sStr) || 0;
-    return Math.max(0, mins * 60 + secs);
+    const mins = Number(mStr);
+    const secs = Number(sStr);
+    if (!Number.isFinite(mins) || !Number.isFinite(secs) || mins < 0 || secs < 0) {
+      return fallbackSec;
+    }
+    return roundSectionSec(mins * 60 + secs);
   }
   const num = Number(clean);
-  return Number.isNaN(num) ? fallbackSec : Math.max(0, num);
+  return !Number.isFinite(num) || num < 0 ? fallbackSec : roundSectionSec(num);
 }
 
 export const SectionEditorModal: React.FC<SectionEditorModalProps> = ({
@@ -691,30 +708,47 @@ export const SectionEditorModal: React.FC<SectionEditorModalProps> = ({
   onClose,
   onSaveSections,
 }) => {
-  const safeDuration = Math.max(10, Math.round(totalDurationSec || project.durationSec || 60));
-  const [sections, setSections] = useState<SongSection[]>(project.sections);
+  const safeDuration = Math.max(10, roundSectionSec(totalDurationSec || project.durationSec || 60));
+  const [sections, setSectionsState] = useState<SongSection[]>(project.sections);
+  const sectionsRef = useRef<SongSection[]>(project.sections);
+
+  const setSections = (
+    nextOrUpdater: SongSection[] | ((prev: SongSection[]) => SongSection[])
+  ) => {
+    setSectionsState((prev) => {
+      const next =
+        typeof nextOrUpdater === 'function' ? nextOrUpdater(prev) : nextOrUpdater;
+      sectionsRef.current = next;
+      return next;
+    });
+  };
 
   if (!isOpen) return null;
 
   /**
-   * Sorts sections by startTimeSec and ensures each section's endTimeSec connects cleanly
-   * if overlapping or beyond totalDurationSec.
+   * Sorts sections by startTimeSec and links each section's endTimeSec directly
+   * to the next section's startTimeSec (and the last section to safeDuration),
+   * so there are never gaps or overlaps between consecutive markers.
    */
   const sortAndRecalculateEndTimes = (list: SongSection[]): SongSection[] => {
-    const sorted = [...list].sort((a, b) => a.startTimeSec - b.startTimeSec);
+    const minLen = 0.05;
+    const sorted = [...list]
+      .map((sec) => ({
+        ...sec,
+        startTimeSec: Math.max(
+          0,
+          Math.min(Math.max(0, safeDuration - minLen), roundSectionSec(sec.startTimeSec))
+        ),
+      }))
+      .sort((a, b) => a.startTimeSec - b.startTimeSec);
+
     return sorted.map((sec, idx) => {
       const nextSec = sorted[idx + 1];
-      const defaultEnd = nextSec ? nextSec.startTimeSec : safeDuration;
-      const validEnd =
-        sec.endTimeSec > sec.startTimeSec && sec.endTimeSec <= safeDuration
-          ? sec.endTimeSec
-          : Math.max(sec.startTimeSec + 1, defaultEnd);
+      const targetEnd = nextSec ? nextSec.startTimeSec : safeDuration;
       return {
         ...sec,
-        startTimeSec: Math.max(0, Math.min(safeDuration - 1, Math.round(sec.startTimeSec))),
-        endTimeSec: Math.max(
-          Math.round(sec.startTimeSec) + 1,
-          Math.min(safeDuration, Math.round(validEnd))
+        endTimeSec: roundSectionSec(
+          Math.max(sec.startTimeSec + minLen, Math.min(safeDuration, targetEnd))
         ),
       };
     });
@@ -724,27 +758,21 @@ export const SectionEditorModal: React.FC<SectionEditorModalProps> = ({
     preset: { name: string; code: string; color: string },
     atTimeSec: number
   ) => {
-    const startSec = Math.max(0, Math.min(safeDuration - 2, Math.round(atTimeSec)));
+    const startSec = Math.max(0, Math.min(safeDuration - 0.1, roundSectionSec(atTimeSec)));
+    const currentList = sectionsRef.current;
+
     const newSec: SongSection = {
       id: `sec-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
       name: preset.name,
       code: preset.code,
       color: preset.color,
       startTimeSec: startSec,
-      endTimeSec: Math.min(safeDuration, startSec + 15),
+      endTimeSec: safeDuration,
       vampByDefault: false,
       cueName: preset.name,
     };
 
-    // Update previous section's endTimeSec if it covered this split point
-    const adjusted = sections.map((s) => {
-      if (s.startTimeSec < startSec && s.endTimeSec > startSec) {
-        return { ...s, endTimeSec: startSec };
-      }
-      return s;
-    });
-
-    setSections(sortAndRecalculateEndTimes([...adjusted, newSec]));
+    setSections(sortAndRecalculateEndTimes([...currentList, newSec]));
   };
 
   const handleUpdateField = (
@@ -752,17 +780,49 @@ export const SectionEditorModal: React.FC<SectionEditorModalProps> = ({
     field: keyof SongSection,
     value: string | number | boolean
   ) => {
-    setSections((prev) =>
-       prev.map((s) => (s.id === id ? { ...s, [field]: value } : s))
-    );
+    setSections((prev) => {
+      if (field === 'startTimeSec' && typeof value === 'number') {
+        const newStart = Math.max(0, Math.min(safeDuration - 0.1, roundSectionSec(value)));
+        const updated = prev.map((s) =>
+          s.id === id ? { ...s, startTimeSec: newStart } : s
+        );
+        return sortAndRecalculateEndTimes(updated);
+      }
+
+      if (field === 'endTimeSec' && typeof value === 'number') {
+        const sorted = sortAndRecalculateEndTimes(prev);
+        const idx = sorted.findIndex((s) => s.id === id);
+        if (idx === -1) return prev;
+        const target = sorted[idx];
+        const newEnd = Math.max(
+          target.startTimeSec + 0.05,
+          Math.min(safeDuration, roundSectionSec(value))
+        );
+        const nextSec = sorted[idx + 1];
+        if (nextSec) {
+          // Moving the end of section `idx` moves the start of section `idx + 1` so no gap is left
+          const updated = sorted.map((s, i) =>
+            i === idx
+              ? { ...s, endTimeSec: newEnd }
+              : i === idx + 1
+              ? { ...s, startTimeSec: newEnd }
+              : s
+          );
+          return sortAndRecalculateEndTimes(updated);
+        }
+        return sorted.map((s, i) => (i === idx ? { ...s, endTimeSec: newEnd } : s));
+      }
+
+      return prev.map((s) => (s.id === id ? { ...s, [field]: value } : s));
+    });
   };
 
   const handleRemoveSection = (id: string) => {
-    setSections((prev) => prev.filter((s) => s.id !== id));
+    setSections((prev) => sortAndRecalculateEndTimes(prev.filter((s) => s.id !== id)));
   };
 
   const handleSave = () => {
-    const clean = sortAndRecalculateEndTimes(sections);
+    const clean = sortAndRecalculateEndTimes(sectionsRef.current);
     onSaveSections(clean);
     onClose();
   };
@@ -796,7 +856,7 @@ export const SectionEditorModal: React.FC<SectionEditorModalProps> = ({
               <span>
                 Insertar sección en la posición actual del cabezal:{' '}
                 <strong className="text-studio-ink">
-                  {formatMmSs(currentTimeSec)}
+                  {formatSectionMmSs(currentTimeSec)}
                 </strong>{' '}
                 <span className="text-neutral-400">
                   (Duración total: {formatMmSs(safeDuration)})
@@ -866,15 +926,18 @@ export const SectionEditorModal: React.FC<SectionEditorModalProps> = ({
                   <span>Inicio:</span>
                   <input
                     type="text"
-                    defaultValue={formatMmSs(sec.startTimeSec)}
+                    defaultValue={formatSectionMmSs(sec.startTimeSec)}
                     key={`start-${sec.id}-${sec.startTimeSec}`}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') e.currentTarget.blur();
+                    }}
                     onBlur={(e) => {
                       const parsed = parseMmSsInput(e.target.value, sec.startTimeSec);
                       handleUpdateField(sec.id, 'startTimeSec', parsed);
                     }}
                     placeholder="00:00"
-                    className="w-15 bg-neutral-900 border border-neutral-800 rounded px-2 py-1 text-xs tabular-nums text-studio-ink text-center"
-                    title="Formato mm:ss (ej. 01:15)"
+                    className="w-20 bg-neutral-900 border border-neutral-800 rounded px-2 py-1 text-xs tabular-nums text-studio-ink text-center"
+                    title="Formato mm:ss o mm:ss.d (ej. 01:14.35)"
                   />
                   <button
                     type="button"
@@ -882,10 +945,10 @@ export const SectionEditorModal: React.FC<SectionEditorModalProps> = ({
                       handleUpdateField(
                         sec.id,
                         'startTimeSec',
-                        Math.round(currentTimeSec)
+                        roundSectionSec(currentTimeSec)
                       )
                     }
-                    title={`Fijar inicio en el cabezal actual (${formatMmSs(currentTimeSec)})`}
+                    title={`Fijar inicio en el cabezal actual (${formatSectionMmSs(currentTimeSec)})`}
                     className="px-1.5 py-1 rounded bg-neutral-800 hover:bg-neutral-700 text-[11px] text-studio-ink flex items-center gap-1 cursor-pointer"
                   >
                     <Clock className="w-3 h-3" />
@@ -898,19 +961,22 @@ export const SectionEditorModal: React.FC<SectionEditorModalProps> = ({
                   <span>Fin:</span>
                   <input
                     type="text"
-                    defaultValue={formatMmSs(sec.endTimeSec)}
+                    defaultValue={formatSectionMmSs(sec.endTimeSec)}
                     key={`end-${sec.id}-${sec.endTimeSec}`}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') e.currentTarget.blur();
+                    }}
                     onBlur={(e) => {
                       const parsed = parseMmSsInput(e.target.value, sec.endTimeSec);
                       handleUpdateField(
                         sec.id,
                         'endTimeSec',
-                        Math.max(sec.startTimeSec + 1, parsed)
+                        Math.max(sec.startTimeSec + 0.1, parsed)
                       );
                     }}
                     placeholder="00:30"
-                    className="w-15 bg-neutral-900 border border-neutral-800 rounded px-2 py-1 text-xs tabular-nums text-neutral-200 text-center"
-                    title="Formato mm:ss (ej. 01:45)"
+                    className="w-20 bg-neutral-900 border border-neutral-800 rounded px-2 py-1 text-xs tabular-nums text-neutral-200 text-center"
+                    title="Formato mm:ss o mm:ss.d (ej. 01:45.5)"
                   />
                 </div>
 
@@ -960,7 +1026,7 @@ export const SectionEditorModal: React.FC<SectionEditorModalProps> = ({
               className="px-3.5 py-2 rounded-lg bg-neutral-900 hover:bg-neutral-800 border border-neutral-800 text-xs font-semibold text-studio-ink flex items-center gap-1.5 cursor-pointer"
             >
               <Plus className="w-4 h-4" />
-              <span>Añadir en {formatMmSs(currentTimeSec)}</span>
+              <span>Añadir en {formatSectionMmSs(currentTimeSec)}</span>
             </button>
 
             {sections.length > 0 && (
@@ -1000,7 +1066,10 @@ export function inferTrackRoleAndColor(
   fileName: string,
   index: number
 ): Pick<TrackChannel, 'role' | 'color' | 'bus'> {
-  const lower = fileName.toLowerCase();
+  const lower = (fileName || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase();
   if (lower.includes('click') || lower.includes('metro')) {
     return { role: 'click', color: '#0891B2', bus: 'cue-click' };
   }

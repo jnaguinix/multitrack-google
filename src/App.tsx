@@ -10,14 +10,18 @@ import { inferSongMetadataFromFiles } from './audio/smartAnalyzer';
 import {
   createEmptyProjectTemplate,
   deleteProjectFromDb,
+  findSavedProjectPreset,
   loadAllProjectsFromDb,
   loadProjectStemsFromDb,
+  mergeSavedProjectMetadata,
+  registerProjectDirHandle,
   relinkProjectSources,
   requestProjectSourceAccess,
   normalizeProjectSectionsToTime,
   saveProjectToDb,
   saveStemsBatchToDb,
   StoredAudioStem,
+  syncProjectSidecarNow,
 } from './storage/projectDb';
 import {
   AudioEngineMode,
@@ -32,7 +36,7 @@ import {
   TransportState,
 } from './types/project';
 import { TopBar, WorkspaceView } from './components/TopBar';
-import { formatMmSs, TransportDeck } from './components/TransportDeck';
+import { formatTimecode, TransportDeck } from './components/TransportDeck';
 import { RepertoireTreeSidebar } from './components/RepertoireTreeSidebar';
 import { SetlistPageView } from './components/SetlistPageView';
 import { LiveSetView } from './components/LiveSetView';
@@ -58,6 +62,7 @@ import {
 import {
   extractAudioFilesFromDataTransfer,
   extractAudioFilesFromFileList,
+  extractSidecarFromFileList,
   parseWavHeaderFast,
 } from './utils/fileImportHelper';
 import {
@@ -481,12 +486,19 @@ export default function App() {
         return;
       }
       try {
-        const dir = await (window as any).showDirectoryPicker({ mode: 'read' });
+        let dir: any;
+        try {
+          dir = await (window as any).showDirectoryPicker({ mode: 'readwrite' });
+        } catch (err) {
+          if ((err as { name?: string })?.name === 'AbortError') throw err;
+          dir = await (window as any).showDirectoryPicker({ mode: 'read' });
+        }
         const { relinked, total } = await relinkProjectSources(proj.id, dir);
         if (relinked === 0) {
           showToast(`No se encontró ningún stem de "${proj.title}" en esa carpeta.`);
           return;
         }
+        syncProjectSidecarNow(proj, true).catch(() => {});
         showToast(`Reubicados ${relinked}/${total} stems de "${proj.title}"`);
         runAutoOptimize(proj.id);
       } catch (err) {
@@ -533,12 +545,13 @@ export default function App() {
       setIsActivatingProject(true);
       try {
         const normalizedProj = normalizeProjectSectionsToTime(projectToLoad);
+        const wasReadyBeforeLoad = audioEngine.getSongRamCacheInfo(normalizedProj).isReady;
         const cachedBuffers =
           predecodedBuffers ??
           (audioEngine.hasFullProjectInCache(normalizedProj)
             ? audioEngine.getCachedProjectBuffers(normalizedProj.id)
             : undefined);
-        const cameFromCache = Boolean(cachedBuffers);
+        const cameFromCache = Boolean(cachedBuffers) || wasReadyBeforeLoad;
 
         // Show project UI immediately while stems mount
         setCurrentProject(normalizedProj);
@@ -563,18 +576,23 @@ export default function App() {
         );
 
         const realDurationSec = audioEngine.getTotalDurationSec();
-        const enrichedTracks = normalizedProj.tracks.map((t) => ({
+        const latestBase =
+          currentProjectRef.current?.id === normalizedProj.id
+            ? currentProjectRef.current
+            : normalizedProj;
+        const enrichedTracks = latestBase.tracks.map((t) => ({
           ...t,
           peaks: peaksMap.get(t.id) || t.peaks || [],
         }));
 
         const updatedProject: SongProject = {
-          ...normalizedProj,
+          ...latestBase,
           durationSec: realDurationSec,
           tracks: enrichedTracks,
         };
 
         setCurrentProject(updatedProject);
+        audioEngine.updateProjectConfig(updatedProject);
         saveProjectToDb(updatedProject).catch(() => {});
         setProjects((prev) => {
           const exists = prev.some((p) => p.id === updatedProject.id);
@@ -583,8 +601,8 @@ export default function App() {
         });
 
         // Never start spontaneous playback after a slow disk load;
-        // only play if explicitly requested AND the song was already 100% ready in RAM
-        if (explicitPlayIfAlreadyInRam && cameFromCache) {
+        // only play if explicitly requested AND the song was already 100% ready in RAM / staged streaming
+        if (explicitPlayIfAlreadyInRam && cameFromCache && audioEngine.hasPlayableAudio()) {
           audioEngine.play();
         }
       } catch (err) {
@@ -868,12 +886,26 @@ export default function App() {
       const { songTitle, detectedBpm, detectedKey, cleanTrackNames } =
         inferSongMetadataFromFiles(validFiles);
 
+      // Check if the imported folder contains an omnitracks.project.json sidecar (or local preset memory)
+      const folderSidecar =
+        effectiveMode === 'new-song' ? await extractSidecarFromFileList(fileList) : null;
+      const savedMetadata =
+        effectiveMode === 'new-song'
+          ? folderSidecar ||
+            findSavedProjectPreset(
+              songTitle,
+              validFiles.map((f) => f.name)
+            )
+          : null;
+
       const bpm =
         effectiveMode === 'new-song'
-          ? detectedBpm || 120
+          ? savedMetadata?.bpm || detectedBpm || 120
           : currentProjectRef.current!.bpm;
       const beatsPerBar =
-        effectiveMode === 'new-song' ? 4 : currentProjectRef.current!.beatsPerBar;
+        effectiveMode === 'new-song'
+          ? savedMetadata?.beatsPerBar || 4
+          : currentProjectRef.current!.beatsPerBar;
       const secPerBar = (60 / bpm) * beatsPerBar;
 
       // Request storage persistence in background without blocking
@@ -920,6 +952,9 @@ export default function App() {
         // Reference-based library: keep a handle to the original file when the browser gives
         // one (Chrome/Edge); otherwise fall back to copying the Blob into IndexedDB.
         const sourceHandle = getRegisteredHandle(file);
+        if (sourceHandle?.dir) {
+          registerProjectDirHandle(targetProjectId, sourceHandle.dir);
+        }
         stemsToSaveBatch.push(
           sourceHandle
             ? {
@@ -947,12 +982,16 @@ export default function App() {
           ? headerMaxDurationSec
           : effectiveMode === 'current-song'
           ? currentProjectRef.current?.durationSec || 180
+          : savedMetadata?.durationSec && savedMetadata.durationSec > 1
+          ? savedMetadata.durationSec
           : 180;
 
       const initialBars = Math.max(4, Math.ceil(initialDurationSec / secPerBar));
+      let effectiveSongTitle = songTitle;
+      let restoredSectionsCount = 0;
 
       if (effectiveMode === 'new-song') {
-        const newSongProject: SongProject = {
+        const baseSongProject: SongProject = {
           id: targetProjectId,
           title: songTitle,
           artist: 'Sesión Importada',
@@ -980,6 +1019,13 @@ export default function App() {
           tracks: initialTracks,
           updatedAt: Date.now(),
         };
+
+        const newSongProject: SongProject = savedMetadata
+          ? mergeSavedProjectMetadata(baseSongProject, savedMetadata)
+          : baseSongProject;
+
+        effectiveSongTitle = newSongProject.title;
+        restoredSectionsCount = newSongProject.sections.length;
 
         // Mount project shell and mixer nodes in < 1 ms
         audioEngine.prepareProjectShell(newSongProject);
@@ -1015,14 +1061,16 @@ export default function App() {
 
       const mountMs = performance.now() - t0;
       console.info(
-        `[AudioEngine][InstantImport] "${songTitle}" (${initialTracks.length} pistas) montada en consola en ${mountMs.toFixed(1)} ms`
+        `[AudioEngine][InstantImport] "${effectiveSongTitle}" (${initialTracks.length} pistas, ${restoredSectionsCount} marcadores) montada en consola en ${mountMs.toFixed(1)} ms`
       );
 
       // Single-pass pipeline: decode each stem ONCE, straight into the OPFS cache (peaks and
       // duration come from the same pass). No RAM decode of the whole song at import time.
       if (effectiveMode === 'new-song' && isOpfsSupported()) {
         showToast(
-          `"${songTitle}" importada (${initialTracks.length} pistas). Preparando el audio en segundo plano…`
+          restoredSectionsCount > 0
+            ? `"${effectiveSongTitle}" importada (${initialTracks.length} pistas · ${restoredSectionsCount} marcadores restaurados). Preparando audio…`
+            : `"${effectiveSongTitle}" importada (${initialTracks.length} pistas). Preparando el audio en segundo plano…`
         );
         await stemsSavePromise;
         runAutoOptimizeRef.current(targetProjectId);
@@ -1031,7 +1079,9 @@ export default function App() {
 
       showToast(
         effectiveMode === 'new-song'
-          ? `Canción "${songTitle}" montada en ${Math.max(1, Math.round(mountMs))} ms (${initialTracks.length} pistas)`
+          ? restoredSectionsCount > 0
+            ? `Canción "${effectiveSongTitle}" montada (${initialTracks.length} pistas · ${restoredSectionsCount} marcadores restaurados)`
+            : `Canción "${effectiveSongTitle}" montada en ${Math.max(1, Math.round(mountMs))} ms (${initialTracks.length} pistas)`
           : `${initialTracks.length} stem(s) montado(s) en ${Math.max(1, Math.round(mountMs))} ms`
       );
 
@@ -1103,7 +1153,9 @@ export default function App() {
                   durationSec: finalDur,
                   totalBars: finalBars,
                   tracks: proj.tracks.map((t) =>
-                    t.id === enrichedTrack.id ? enrichedTrack : t
+                    t.id === enrichedTrack.id
+                      ? { ...t, peaks, durationSec }
+                      : t
                   ),
                 };
               };
@@ -1146,25 +1198,31 @@ export default function App() {
     [projects.length, showToast]
   );
 
-  // Add a Section Marker directly at the current playhead time (mm:ss)
+  // Add a Section Marker directly at the current playhead time (mm:ss.d)
   const handleAddMarkerAtPlayhead = () => {
     if (!currentProject) return;
-    const playheadSec = Math.round(transport.currentTimeSec);
+    const playheadSec = Math.round(transport.currentTimeSec * 100) / 100;
     const totalSec = Math.max(
       10,
-      Math.round(transport.totalDurationSec || currentProject.durationSec || 60)
+      Math.round((transport.totalDurationSec || currentProject.durationSec || 60) * 100) / 100
     );
-    const clampedStart = Math.max(0, Math.min(totalSec - 2, playheadSec));
+    const clampedStart = Math.max(0, Math.min(totalSec - 0.5, playheadSec));
 
     updateCurrentProject((prev) => {
       const nextNum = prev.sections.length + 1;
+      const sortedExisting = [...prev.sections].sort(
+        (a, b) => a.startTimeSec - b.startTimeSec
+      );
+      const nextExisting = sortedExisting.find((s) => s.startTimeSec > clampedStart);
+      const defaultEnd = nextExisting ? nextExisting.startTimeSec : totalSec;
+
       const newSec: SongSection = {
         id: `sec-${Date.now()}`,
         name: `Sección ${nextNum}`,
         code: `S${nextNum}`,
         color: MARKER_PALETTE[prev.sections.length % MARKER_PALETTE.length],
         startTimeSec: clampedStart,
-        endTimeSec: totalSec,
+        endTimeSec: Math.max(clampedStart + 0.1, defaultEnd),
         vampByDefault: false,
         cueName: `Sección ${nextNum}`,
       };
@@ -1174,20 +1232,23 @@ export default function App() {
       );
       const recalculated = combined.map((s, idx) => {
         const nextItem = combined[idx + 1];
-        const endSec = nextItem ? nextItem.startTimeSec : totalSec;
+        const targetEnd = nextItem ? nextItem.startTimeSec : totalSec;
         return {
           ...s,
-          endTimeSec: Math.max(s.startTimeSec + 1, endSec),
+          startTimeSec: Math.round(s.startTimeSec * 100) / 100,
+          endTimeSec: Math.round(Math.max(s.startTimeSec + 0.05, targetEnd) * 100) / 100,
         };
       });
 
-      return {
+      const next: SongProject = {
         ...prev,
         sections: recalculated,
       };
+      syncProjectSidecarNow(next, true).catch(() => {});
+      return next;
     });
 
-    showToast(`Marcador creado en ${formatMmSs(clampedStart)}`);
+    showToast(`Marcador creado en ${formatTimecode(clampedStart)}`);
   };
 
   // Transport & Mixer Handlers
@@ -1273,7 +1334,9 @@ export default function App() {
     updateCurrentProject((p) => ({
       ...p,
       clickGain: 1.0,
+      clickPan: 0,
       guideGain: 1.0,
+      guidePan: 0,
       masterGain: 1.0,
       cueMasterGain: 1.0,
       tracks: p.tracks.map((t) => ({
@@ -1289,11 +1352,15 @@ export default function App() {
 
   // Section Arrangement Save Handler (Time-based mm:ss)
   const handleSaveSections = (sections: SongSection[]) => {
-    updateCurrentProject((prev) => ({
-      ...prev,
-      sections,
-    }));
-    showToast('Marcadores de sección (mm:ss) guardados');
+    updateCurrentProject((prev) => {
+      const next: SongProject = {
+        ...prev,
+        sections,
+      };
+      syncProjectSidecarNow(next, true).catch(() => {});
+      return next;
+    });
+    showToast('Marcadores de sección (mm:ss) guardados en canción y carpeta');
   };
 
   // Load Song Immediately into DAW (Used when confirmed in modal, clicked Play on Setlist card, or dragged onto DAW)
@@ -1651,9 +1718,15 @@ export default function App() {
               onChangeClickGain={(gain) =>
                 updateCurrentProject((p) => ({ ...p, clickGain: gain }))
               }
+              onChangeClickPan={(pan) =>
+                updateCurrentProject((p) => ({ ...p, clickPan: pan }))
+              }
               onToggleClick={handleToggleClick}
               onChangeGuideGain={(gain) =>
                 updateCurrentProject((p) => ({ ...p, guideGain: gain }))
+              }
+              onChangeGuidePan={(pan) =>
+                updateCurrentProject((p) => ({ ...p, guidePan: pan }))
               }
               onToggleGuide={handleToggleGuide}
               onChangeMasterGain={(gain) =>
@@ -1768,9 +1841,15 @@ export default function App() {
                           onChangeClickGain={(gain) =>
                             updateCurrentProject((p) => ({ ...p, clickGain: gain }))
                           }
+                          onChangeClickPan={(pan) =>
+                            updateCurrentProject((p) => ({ ...p, clickPan: pan }))
+                          }
                           onToggleClick={handleToggleClick}
                           onChangeGuideGain={(gain) =>
                             updateCurrentProject((p) => ({ ...p, guideGain: gain }))
+                          }
+                          onChangeGuidePan={(pan) =>
+                            updateCurrentProject((p) => ({ ...p, guidePan: pan }))
                           }
                           onToggleGuide={handleToggleGuide}
                           onChangeMasterGain={(gain) =>
@@ -1822,9 +1901,15 @@ export default function App() {
                 onChangeClickGain={(gain) =>
                   updateCurrentProject((p) => ({ ...p, clickGain: gain }))
                 }
+                onChangeClickPan={(pan) =>
+                  updateCurrentProject((p) => ({ ...p, clickPan: pan }))
+                }
                 onToggleClick={handleToggleClick}
                 onChangeGuideGain={(gain) =>
                   updateCurrentProject((p) => ({ ...p, guideGain: gain }))
+                }
+                onChangeGuidePan={(pan) =>
+                  updateCurrentProject((p) => ({ ...p, guidePan: pan }))
                 }
                 onToggleGuide={handleToggleGuide}
                 onChangeMasterGain={(gain) =>

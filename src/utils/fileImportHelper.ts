@@ -3,6 +3,93 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import { SongProject } from '../types/project';
+
+export const PROJECT_SIDECAR_FILENAME = 'omnitracks.project.json';
+
+const fileSidecarRegistry = new WeakMap<File, SongProject>();
+
+export function registerFileSidecar(file: File, sidecar: SongProject): void {
+  fileSidecarRegistry.set(file, sidecar);
+}
+
+export function getRegisteredSidecar(file: File): SongProject | undefined {
+  return fileSidecarRegistry.get(file);
+}
+
+/**
+ * Checks whether a file name corresponds to an OmniTracks / LibreTracks sidecar metadata file.
+ */
+export function isProjectSidecarFileName(name: string): boolean {
+  if (!name) return false;
+  const trimmed = name.trim();
+  if (trimmed.startsWith('._')) return false;
+  const lower = trimmed.toLowerCase();
+  return (
+    lower === PROJECT_SIDECAR_FILENAME ||
+    lower.endsWith('.omnitracks.json') ||
+    lower.endsWith('.libretracks.json')
+  );
+}
+
+/**
+ * Safely parses a sidecar JSON text into a SongProject if valid.
+ */
+export function parseProjectSidecarText(text: string): SongProject | null {
+  try {
+    const parsed = JSON.parse(text) as SongProject;
+    if (
+      parsed &&
+      typeof parsed === 'object' &&
+      typeof parsed.title === 'string' &&
+      Array.isArray(parsed.tracks) &&
+      Array.isArray(parsed.sections)
+    ) {
+      return parsed;
+    }
+  } catch {
+    // Ignore invalid JSON
+  }
+  return null;
+}
+
+/**
+ * Resolves a sidecar SongProject from a list of imported Files (either registered from a
+ * directory handle / drag-and-drop traversal or present as a .json File in a FileList).
+ */
+export async function extractSidecarFromFileList(
+  fileList: FileList | File[]
+): Promise<SongProject | null> {
+  if (!fileList) return null;
+  const list = Array.isArray(fileList) ? fileList : Array.from(fileList);
+
+  for (const file of list) {
+    const registered = getRegisteredSidecar(file);
+    if (registered) return registered;
+  }
+
+  // Also check if the raw FileList (e.g. from <input webkitdirectory>) contains a sidecar .json file
+  const sidecarCandidates = list.filter((f) => isProjectSidecarFileName(f.name));
+  // Prefer exact PROJECT_SIDECAR_FILENAME first
+  sidecarCandidates.sort((a, b) => {
+    const aExact = a.name.toLowerCase() === PROJECT_SIDECAR_FILENAME ? 0 : 1;
+    const bExact = b.name.toLowerCase() === PROJECT_SIDECAR_FILENAME ? 0 : 1;
+    return aExact - bExact;
+  });
+
+  for (const candidate of sidecarCandidates) {
+    try {
+      const text = await candidate.text();
+      const parsed = parseProjectSidecarText(text);
+      if (parsed) return parsed;
+    } catch {
+      // Ignore unreadable candidate
+    }
+  }
+
+  return null;
+}
+
 export interface FastWavHeaderInfo {
   durationSec: number;
   sampleRate: number;
@@ -137,6 +224,7 @@ export async function extractAudioFilesFromDataTransfer(
   dataTransfer: DataTransfer
 ): Promise<File[]> {
   const extractedFiles: File[] = [];
+  const sidecarFiles: File[] = [];
 
   const items = dataTransfer.items;
   if (items && items.length > 0 && typeof items[0].webkitGetAsEntry === 'function') {
@@ -156,7 +244,9 @@ export async function extractAudioFilesFromDataTransfer(
         await new Promise<void>((resolve) => {
           entry.file(
             (file: File) => {
-              if (isAudioFileCandidate(file)) {
+              if (isProjectSidecarFileName(file.name)) {
+                sidecarFiles.push(file);
+              } else if (isAudioFileCandidate(file)) {
                 const fullRelPath = pathPrefix ? `${pathPrefix}/${file.name}` : file.name;
                 try {
                   Object.defineProperty(file, 'webkitRelativePath', {
@@ -213,8 +303,19 @@ export async function extractAudioFilesFromDataTransfer(
   if (extractedFiles.length === 0 && dataTransfer.files && dataTransfer.files.length > 0) {
     const rawFiles = Array.from(dataTransfer.files);
     for (const file of rawFiles) {
-      if (isAudioFileCandidate(file)) {
+      if (isProjectSidecarFileName(file.name)) {
+        sidecarFiles.push(file);
+      } else if (isAudioFileCandidate(file)) {
         extractedFiles.push(file);
+      }
+    }
+  }
+
+  if (extractedFiles.length > 0 && sidecarFiles.length > 0) {
+    const parsedSidecar = await extractSidecarFromFileList(sidecarFiles);
+    if (parsedSidecar) {
+      for (const file of extractedFiles) {
+        registerFileSidecar(file, parsedSidecar);
       }
     }
   }

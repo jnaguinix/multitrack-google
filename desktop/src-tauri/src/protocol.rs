@@ -165,6 +165,8 @@ pub fn unix_ms() -> u64 {
         .as_millis() as u64
 }
 
+pub const MAX_TRACK_GAIN: f64 = 3.1623;
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(
     tag = "type",
@@ -203,7 +205,7 @@ impl MixCommand {
                 track_index,
                 gain,
             } => {
-                if !gain.is_finite() || !(0.0..=1.0).contains(&gain) {
+                if !gain.is_finite() || !(0.0..=MAX_TRACK_GAIN).contains(&gain) {
                     return None;
                 }
                 (revision, track_index)

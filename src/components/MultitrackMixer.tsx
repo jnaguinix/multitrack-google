@@ -26,13 +26,13 @@ export function dbToGain(db: number): number {
   return Number(Math.pow(10, clamped / 20).toFixed(4));
 }
 
-function posFromDb(db: number): number {
+export function posFromDb(db: number): number {
   if (!Number.isFinite(db)) return 0;
   const normalized = Math.max(0, Math.min(1, (db - MIN_DB) / (MAX_DB - MIN_DB)));
   return MUTE_TRAVEL + normalized * (1 - MUTE_TRAVEL);
 }
 
-function dbFromPos(pos: number): number {
+export function dbFromPos(pos: number): number {
   if (pos < MUTE_TRAVEL) return -Infinity;
   return MIN_DB + (pos - MUTE_TRAVEL) / (1 - MUTE_TRAVEL) * (MAX_DB - MIN_DB);
 }
@@ -42,7 +42,7 @@ function activityFromGain(gain: number): number {
   return Math.max(0, Math.min(1, (gainToDb(gain) + 60) / 66));
 }
 
-function formatDb(db: number): string {
+export function formatDb(db: number): string {
   if (!isFinite(db)) return '-∞ dB';
   return `${db > 0 ? '+' : ''}${db.toFixed(1)} dB`;
 }
@@ -64,8 +64,9 @@ interface PanKnobProps {
 }
 
 const PanKnob: React.FC<PanKnobProps> = ({ name, pan, onChangePan }) => {
-  const dragRef = useRef<{ startY: number; startPanPct: number } | null>(null);
-  const panPct = Math.max(-100, Math.min(100, Math.round(pan * 100)));
+  const dragRef = useRef<{ pointerId: number; startY: number; startPanPct: number } | null>(null);
+  const safePan = Number.isFinite(pan) ? pan : 0;
+  const panPct = Math.max(-100, Math.min(100, Math.round(safePan * 100)));
   const angleDeg = panPct * 1.35;
 
   const setFromPct = (pct: number) => {
@@ -85,19 +86,33 @@ const PanKnob: React.FC<PanKnobProps> = ({ name, pan, onChangePan }) => {
         style={{ '--r': `${angleDeg}deg` } as React.CSSProperties}
         className="lt-knob"
         onPointerDown={(e) => {
-          e.currentTarget.setPointerCapture(e.pointerId);
-          dragRef.current = { startY: e.clientY, startPanPct: panPct };
+          try {
+            e.currentTarget.setPointerCapture(e.pointerId);
+          } catch {
+            // Ignore pointer capture errors on non-standard touch/pen drivers
+          }
+          dragRef.current = { pointerId: e.pointerId, startY: e.clientY, startPanPct: panPct };
         }}
         onPointerMove={(e) => {
-          if (e.currentTarget.hasPointerCapture(e.pointerId) && dragRef.current) {
+          if (dragRef.current && dragRef.current.pointerId === e.pointerId) {
             const deltaY = dragRef.current.startY - e.clientY;
             setFromPct(dragRef.current.startPanPct + deltaY * 1.5);
           }
         }}
         onPointerUp={(e) => {
-          if (e.currentTarget.hasPointerCapture(e.pointerId)) {
-            e.currentTarget.releasePointerCapture(e.pointerId);
+          try {
+            if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+              e.currentTarget.releasePointerCapture(e.pointerId);
+            }
+          } catch {
+            // Ignore
           }
+          dragRef.current = null;
+        }}
+        onPointerCancel={() => {
+          dragRef.current = null;
+        }}
+        onLostPointerCapture={() => {
           dragRef.current = null;
         }}
         onDoubleClick={() => onChangePan(0)}
@@ -147,13 +162,16 @@ const StudioFader: React.FC<StudioFaderProps> = ({
   onChangeGain,
 }) => {
   const faderRef = useRef<HTMLDivElement | null>(null);
-  const db = gainToDb(gain);
+  const activePointerIdRef = useRef<number | null>(null);
+  const safeGain = Number.isFinite(gain) ? gain : 1.0;
+  const db = gainToDb(safeGain);
   const posPct = posFromDb(db) * 100;
 
   const updateFromClientY = (clientY: number) => {
     const el = faderRef.current;
     if (!el) return;
     const rect = el.getBoundingClientRect();
+    if (rect.height <= 0) return;
     const rawPos = 1 - (clientY - rect.top) / rect.height;
     const clampedPos = Math.max(0, Math.min(1, rawPos));
     let nextDb = dbFromPos(clampedPos);
@@ -186,27 +204,46 @@ const StudioFader: React.FC<StudioFaderProps> = ({
           aria-valuetext={formatDb(db)}
           className="lt-fader"
           onPointerDown={(e) => {
-            e.currentTarget.setPointerCapture(e.pointerId);
+            activePointerIdRef.current = e.pointerId;
+            try {
+              e.currentTarget.setPointerCapture(e.pointerId);
+            } catch {
+              // Ignore pointer capture errors
+            }
             updateFromClientY(e.clientY);
           }}
           onPointerMove={(e) => {
-            if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+            if (
+              activePointerIdRef.current === e.pointerId ||
+              e.currentTarget.hasPointerCapture(e.pointerId)
+            ) {
               updateFromClientY(e.clientY);
             }
           }}
           onPointerUp={(e) => {
-            if (e.currentTarget.hasPointerCapture(e.pointerId)) {
-              e.currentTarget.releasePointerCapture(e.pointerId);
+            activePointerIdRef.current = null;
+            try {
+              if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+                e.currentTarget.releasePointerCapture(e.pointerId);
+              }
+            } catch {
+              // Ignore
             }
+          }}
+          onPointerCancel={() => {
+            activePointerIdRef.current = null;
+          }}
+          onLostPointerCapture={() => {
+            activePointerIdRef.current = null;
           }}
           onDoubleClick={() => onChangeGain(1.0)} // 0.0 dB
           onKeyDown={(e) => {
             if (e.key === 'ArrowUp') {
               e.preventDefault();
-              onChangeGain(dbToGain(Math.max(MIN_DB, db + 0.5)));
+              onChangeGain(dbToGain(!Number.isFinite(db) ? MIN_DB : Math.min(MAX_DB, db + 0.5)));
             } else if (e.key === 'ArrowDown') {
               e.preventDefault();
-              onChangeGain(db <= MIN_DB ? 0 : dbToGain(db - 0.5));
+              onChangeGain(!Number.isFinite(db) || db <= MIN_DB ? 0 : dbToGain(db - 0.5));
             }
           }}
           title="Ganancia de −40 a +10 dB · Hasta abajo para silencio · Doble clic para 0 dB"
@@ -255,6 +292,18 @@ const StudioFader: React.FC<StudioFaderProps> = ({
  * REDESIGNED STUDIO MIXER CONSOLE
  * ============================================================================ */
 
+export function formatTrackDisplayName(name: string): string {
+  const trimmed = (name || '').trim();
+  const norm = trimmed
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase();
+  if (norm === 'cues' || norm === 'cue' || norm === 'guide' || norm === 'guia') {
+    return 'Guía';
+  }
+  return trimmed || name;
+}
+
 export interface MultitrackMixerProps {
   project: SongProject;
   transport: TransportState;
@@ -266,8 +315,10 @@ export interface MultitrackMixerProps {
   onChangeTrackPan: (trackId: string, pan: number) => void;
   onChangeTrackBus: (trackId: string, bus: OutputBus) => void;
   onChangeClickGain: (gain: number) => void;
+  onChangeClickPan?: (pan: number) => void;
   onToggleClick: () => void;
   onChangeGuideGain: (gain: number) => void;
+  onChangeGuidePan?: (pan: number) => void;
   onToggleGuide: () => void;
   onChangeMasterGain: (gain: number) => void;
   onChangeCueMasterGain: (gain: number) => void;
@@ -285,8 +336,10 @@ export const MultitrackMixer: React.FC<MultitrackMixerProps> = ({
   onChangeTrackPan,
   onChangeTrackBus,
   onChangeClickGain,
+  onChangeClickPan,
   onToggleClick,
   onChangeGuideGain,
+  onChangeGuidePan,
   onToggleGuide,
   onChangeMasterGain,
   onChangeCueMasterGain,
@@ -361,9 +414,17 @@ export const MultitrackMixer: React.FC<MultitrackMixerProps> = ({
     ? Math.min(1, maxCueBusLevel * activityFromGain(cueMasterGain) * 1.05)
     : 0;
 
-  // Check if user already imported custom tracks named "Click" or "Cues"
-  const hasCustomClickTrack = project.tracks.some((t) => t.role === 'click');
-  const hasCustomGuideTrack = project.tracks.some((t) => t.role === 'guide');
+  // Check if user already imported custom tracks named "Click" or "Guía" / "Cues"
+  const hasCustomClickTrack = project.tracks.some((t) => {
+    if (t.role === 'click') return true;
+    const norm = (t.name || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+    return norm.includes('click') || norm.includes('metro');
+  });
+  const hasCustomGuideTrack = project.tracks.some((t) => {
+    if (t.role === 'guide') return true;
+    const norm = (t.name || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+    return norm.includes('guide') || norm.includes('cue') || norm.includes('guia');
+  });
 
   return (
     <div
@@ -409,6 +470,7 @@ export const MultitrackMixer: React.FC<MultitrackMixerProps> = ({
                 ? meters.tracks[track.id]?.peak ?? 0
                 : 0;
             const isCueRoute = track.bus === 'cue-click';
+            const displayName = formatTrackDisplayName(track.name);
 
             return (
               <div
@@ -417,18 +479,18 @@ export const MultitrackMixer: React.FC<MultitrackMixerProps> = ({
                 className={`lt-strip ${isDimmed ? 'lt-dim' : ''}`}
               >
                 <div className="lt-cap" />
-                <div className="lt-name" title={track.name}>
-                  {track.name}
+                <div className="lt-name" title={displayName}>
+                  {displayName}
                 </div>
 
                 <PanKnob
-                  name={track.name}
+                  name={displayName}
                   pan={track.pan}
                   onChangePan={(nextPan) => onChangeTrackPan(track.id, nextPan)}
                 />
 
                 <StudioFader
-                  name={track.name}
+                  name={displayName}
                   gain={track.gain}
                   peak={peak}
                   onChangeGain={(nextGain) => onChangeTrackGain(track.id, nextGain)}
@@ -439,7 +501,7 @@ export const MultitrackMixer: React.FC<MultitrackMixerProps> = ({
                     type="button"
                     className="lt-m"
                     aria-pressed={track.muted}
-                    aria-label={`Mute ${track.name}`}
+                    aria-label={`Mute ${displayName}`}
                     onClick={() => onToggleTrackMute(track.id)}
                   >
                     M
@@ -448,7 +510,7 @@ export const MultitrackMixer: React.FC<MultitrackMixerProps> = ({
                     type="button"
                     className="lt-s"
                     aria-pressed={track.soloed}
-                    aria-label={`Solo ${track.name}`}
+                    aria-label={`Solo ${displayName}`}
                     onClick={() => onToggleTrackSolo(track.id)}
                   >
                     S
@@ -484,7 +546,11 @@ export const MultitrackMixer: React.FC<MultitrackMixerProps> = ({
                 Click
               </div>
 
-              <PanKnob name="Click" pan={0} onChangePan={() => {}} />
+              <PanKnob
+                name="Click"
+                pan={project.clickPan ?? 0}
+                onChangePan={(nextPan) => onChangeClickPan?.(nextPan)}
+              />
 
               <StudioFader
                 name="Click"
@@ -528,21 +594,25 @@ export const MultitrackMixer: React.FC<MultitrackMixerProps> = ({
             </div>
           )}
 
-          {/* Built-in Voice / Tone Guide Cues Strip (if no custom Guide stem exists) */}
+          {/* Built-in Voice / Tone Guide Strip (if no custom Guide stem exists) */}
           {!hasCustomGuideTrack && (
             <div
               style={{ '--c': '#22d3ee' } as React.CSSProperties}
               className={`lt-strip ${!project.guideCuesEnabled || anySolo ? 'lt-dim' : ''}`}
             >
               <div className="lt-cap" />
-              <div className="lt-name" title="Cues de Guía Vocal">
-                Cues
+              <div className="lt-name" title="Guía Vocal">
+                Guía
               </div>
 
-              <PanKnob name="Cues" pan={0} onChangePan={() => {}} />
+              <PanKnob
+                name="Guía"
+                pan={project.guidePan ?? 0}
+                onChangePan={(nextPan) => onChangeGuidePan?.(nextPan)}
+              />
 
               <StudioFader
-                name="Cues"
+                name="Guía"
                 gain={project.guideGain}
                 levelL={guideStripLevel}
                 levelR={guideStripLevel * 0.95}
@@ -554,7 +624,7 @@ export const MultitrackMixer: React.FC<MultitrackMixerProps> = ({
                   type="button"
                   className="lt-m"
                   aria-pressed={!project.guideCuesEnabled}
-                  aria-label="Mute Cues"
+                  aria-label="Mute Guía"
                   onClick={onToggleGuide}
                 >
                   M
@@ -563,7 +633,7 @@ export const MultitrackMixer: React.FC<MultitrackMixerProps> = ({
                   type="button"
                   className="lt-s"
                   aria-pressed={false}
-                  aria-label="Solo Cues"
+                  aria-label="Solo Guía"
                   onClick={() => {
                     if (!project.guideCuesEnabled) onToggleGuide();
                   }}

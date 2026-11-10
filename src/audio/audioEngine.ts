@@ -2445,7 +2445,20 @@ export class LibreTracksAudioEngine {
     clickEnv.gain.exponentialRampToValueAtTime(0.0001, exactCtxTime + 0.042);
 
     osc.connect(clickEnv);
-    clickEnv.connect(this.cueBusGain);
+    const clickPanVal =
+      this.project.splitRoutingMode === 'split-mono'
+        ? 0
+        : Number.isFinite(this.project.clickPan)
+        ? this.project.clickPan!
+        : 0;
+    if (clickPanVal !== 0) {
+      const clickPanner = this.ctx.createStereoPanner();
+      clickPanner.pan.setValueAtTime(clickPanVal, exactCtxTime);
+      clickEnv.connect(clickPanner);
+      clickPanner.connect(this.cueBusGain);
+    } else {
+      clickEnv.connect(this.cueBusGain);
+    }
 
     osc.start(exactCtxTime);
     osc.stop(exactCtxTime + 0.045);
@@ -2480,7 +2493,20 @@ export class LibreTracksAudioEngine {
 
       osc1.connect(env);
       osc2.connect(env);
-      env.connect(this.cueBusGain);
+      const guidePanVal =
+        this.project.splitRoutingMode === 'split-mono'
+          ? 0
+          : Number.isFinite(this.project.guidePan)
+          ? this.project.guidePan!
+          : 0;
+      if (guidePanVal !== 0) {
+        const guidePanner = this.ctx.createStereoPanner();
+        guidePanner.pan.setValueAtTime(guidePanVal, startAt);
+        env.connect(guidePanner);
+        guidePanner.connect(this.cueBusGain);
+      } else {
+        env.connect(this.cueBusGain);
+      }
 
       osc1.start(startAt);
       osc2.start(startAt);

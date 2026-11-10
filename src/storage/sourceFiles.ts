@@ -12,7 +12,15 @@
  * old behaviour (copy the Blob into IndexedDB).
  */
 
-import { isAudioFileCandidate } from '../utils/fileImportHelper';
+import { SongProject } from '../types/project';
+import {
+  extractSidecarFromFileList,
+  isAudioFileCandidate,
+  isProjectSidecarFileName,
+  parseProjectSidecarText,
+  PROJECT_SIDECAR_FILENAME,
+  registerFileSidecar,
+} from '../utils/fileImportHelper';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -55,6 +63,8 @@ function isAbortError(err: unknown): boolean {
 /**
  * Recursively collects audio files from a directory handle, registering each file's handle.
  * `rootDir` is kept as the "source folder" of every file found beneath it.
+ * Also detects any OmniTracks / LibreTracks sidecar JSON inside the folder and associates it
+ * with the collected audio files so section markers, BPM, and mix settings are restored.
  */
 export async function collectAudioFromDirectory(
   dir: any,
@@ -62,11 +72,16 @@ export async function collectAudioFromDirectory(
   pathPrefix = ''
 ): Promise<File[]> {
   const out: File[] = [];
+  const sidecarFiles: File[] = [];
   const prefix = pathPrefix ? `${pathPrefix}/${dir.name}` : dir.name;
   for await (const entry of dir.values()) {
     if (entry.kind === 'file') {
       try {
         const file: File = await entry.getFile();
+        if (isProjectSidecarFileName(file.name)) {
+          sidecarFiles.push(file);
+          continue;
+        }
         if (!isAudioFileCandidate(file)) continue;
         try {
           Object.defineProperty(file, 'webkitRelativePath', {
@@ -86,6 +101,16 @@ export async function collectAudioFromDirectory(
       out.push(...(await collectAudioFromDirectory(entry, rootDir, prefix)));
     }
   }
+
+  if (sidecarFiles.length > 0 && out.length > 0) {
+    const parsedSidecar = await extractSidecarFromFileList(sidecarFiles);
+    if (parsedSidecar) {
+      for (const file of out) {
+        registerFileSidecar(file, parsedSidecar);
+      }
+    }
+  }
+
   return out;
 }
 
@@ -112,7 +137,13 @@ export async function pickAudioFilesWithHandles(): Promise<File[]> {
 /** Opens the native folder picker and returns the audio files with their handles registered. */
 export async function pickAudioFolderWithHandles(): Promise<File[]> {
   try {
-    const dir = await (window as any).showDirectoryPicker({ mode: 'read' });
+    let dir: any;
+    try {
+      dir = await (window as any).showDirectoryPicker({ mode: 'readwrite' });
+    } catch (err) {
+      if (isAbortError(err)) return [];
+      dir = await (window as any).showDirectoryPicker({ mode: 'read' });
+    }
     return await collectAudioFromDirectory(dir);
   } catch (err) {
     if (isAbortError(err)) return [];
@@ -167,6 +198,7 @@ export async function extractAudioFilesWithHandlesFromDataTransfer(
   }
 
   const files: File[] = [];
+  const sidecarFiles: File[] = [];
   try {
     const handles = await Promise.all(handlePromises);
     for (const h of handles) {
@@ -175,9 +207,19 @@ export async function extractAudioFilesWithHandlesFromDataTransfer(
         files.push(...(await collectAudioFromDirectory(h)));
       } else if (h.kind === 'file') {
         const file: File = await h.getFile();
-        if (isAudioFileCandidate(file)) {
+        if (isProjectSidecarFileName(file.name)) {
+          sidecarFiles.push(file);
+        } else if (isAudioFileCandidate(file)) {
           registerFileHandle(file, { file: h });
           files.push(file);
+        }
+      }
+    }
+    if (sidecarFiles.length > 0 && files.length > 0) {
+      const parsedSidecar = await extractSidecarFromFileList(sidecarFiles);
+      if (parsedSidecar) {
+        for (const file of files) {
+          registerFileSidecar(file, parsedSidecar);
         }
       }
     }
@@ -211,4 +253,103 @@ export async function requestReadPermission(handle: any): Promise<PermissionStat
     // ignore
   }
   return 'denied';
+}
+
+export async function queryWritePermission(handle: any): Promise<PermissionState> {
+  try {
+    if (typeof handle?.queryPermission === 'function') {
+      return (await handle.queryPermission({ mode: 'readwrite' })) as PermissionState;
+    }
+  } catch {
+    // ignore
+  }
+  return 'denied';
+}
+
+export async function requestWritePermission(handle: any): Promise<PermissionState> {
+  try {
+    if (typeof handle?.requestPermission === 'function') {
+      return (await handle.requestPermission({ mode: 'readwrite' })) as PermissionState;
+    }
+  } catch {
+    // ignore
+  }
+  return 'denied';
+}
+
+/**
+ * Reads `omnitracks.project.json` (or any `*.omnitracks.json` / `*.libretracks.json`)
+ * directly from a directory handle if present.
+ */
+export async function readProjectSidecarFromDirectory(
+  dirHandle: any
+): Promise<SongProject | null> {
+  if (!dirHandle || typeof dirHandle.getFileHandle !== 'function') return null;
+  try {
+    const exactHandle = await dirHandle.getFileHandle(PROJECT_SIDECAR_FILENAME);
+    const file: File = await exactHandle.getFile();
+    const parsed = parseProjectSidecarText(await file.text());
+    if (parsed) return parsed;
+  } catch {
+    // Exact sidecar file not present; scan directory entries for *.omnitracks.json / *.libretracks.json
+  }
+
+  if (typeof dirHandle.values === 'function') {
+    try {
+      for await (const entry of dirHandle.values()) {
+        if (entry?.kind === 'file' && isProjectSidecarFileName(entry.name)) {
+          try {
+            const file: File = await entry.getFile();
+            const parsed = parseProjectSidecarText(await file.text());
+            if (parsed) return parsed;
+          } catch {
+            // ignore
+          }
+        }
+      }
+    } catch {
+      // ignore
+    }
+  }
+  return null;
+}
+
+/**
+ * Writes a clean, portable `omnitracks.project.json` sidecar file directly into the song's
+ * source directory on disk so section markers (Estrofa, Coro, Puente), BPM, key, and mix
+ * persist inside the folder even if the song is removed from the app library.
+ */
+export async function writeProjectSidecarToDirectory(
+  dirHandle: any,
+  project: SongProject,
+  requestPermissionIfNeeded = false
+): Promise<boolean> {
+  if (!dirHandle || typeof dirHandle.getFileHandle !== 'function') return false;
+
+  try {
+    let perm = await queryWritePermission(dirHandle);
+    if (perm === 'prompt' && requestPermissionIfNeeded) {
+      perm = await requestWritePermission(dirHandle);
+    }
+    if (perm !== 'granted') return false;
+
+    const portableProject: SongProject = {
+      ...project,
+      updatedAt: Date.now(),
+      tracks: project.tracks.map(({ pcm: _pcm, ...rest }) => rest),
+    };
+
+    const fileHandle = await dirHandle.getFileHandle(PROJECT_SIDECAR_FILENAME, {
+      create: true,
+    });
+    if (typeof fileHandle?.createWritable !== 'function') return false;
+
+    const writable = await fileHandle.createWritable();
+    await writable.write(JSON.stringify(portableProject, null, 2));
+    await writable.close();
+    return true;
+  } catch (err) {
+    console.warn('[SourceFiles] No se pudo escribir omnitracks.project.json en la carpeta:', err);
+    return false;
+  }
 }

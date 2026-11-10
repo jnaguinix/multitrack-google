@@ -285,7 +285,7 @@ async fn validates_roles_origin_and_schema() {
             json!({"type": "setConfig"}),
         ],
         [
-            json!({ "type": "setTrackGain", "revision": 1, "trackIndex": 0, "gain": 1.2 }),
+            json!({ "type": "setTrackGain", "revision": 1, "trackIndex": 0, "gain": 3.5 }),
             json!({ "type": "setTrackMute", "revision": 1, "trackIndex": 8, "muted": true }),
             json!({ "type": "setTrackMute", "revision": 1, "trackIndex": 0, "muted": 1 }),
         ],
@@ -324,7 +324,7 @@ async fn dispatches_only_current_tracks_and_revokes_a_device() {
     assert_eq!(full["state"]["tracks"][0]["pan"], 0.0);
     assert_eq!(full["state"]["tracks"][0]["soloed"], false);
     let requests = [
-        json!({ "type": "setTrackGain", "revision": 1, "trackIndex": 0, "gain": 0.4 }),
+        json!({ "type": "setTrackGain", "revision": 1, "trackIndex": 0, "gain": 3.1623 }),
         json!({ "type": "setTrackPan", "revision": 1, "trackIndex": 0, "pan": -0.65 }),
         json!({ "type": "setTrackSolo", "revision": 1, "trackIndex": 0, "soloed": true }),
     ];
@@ -349,7 +349,7 @@ async fn dispatches_only_current_tracks_and_revokes_a_device() {
         assert_eq!(serde_json::to_value(&command.command).unwrap(), request);
     }
     let mut changed = initial.clone();
-    changed.tracks[0].gain = 0.4;
+    changed.tracks[0].gain = 3.1623;
     changed.tracks[0].pan = -0.65;
     changed.tracks[0].soloed = true;
     server.hub.exchange(
@@ -363,7 +363,7 @@ async fn dispatches_only_current_tracks_and_revokes_a_device() {
             .collect(),
     );
     let delta = state(&mut mixer).await;
-    assert_eq!(delta["state"]["tracks"][0]["gain"], 0.4);
+    assert_eq!(delta["state"]["tracks"][0]["gain"], 3.1623);
     assert_eq!(delta["state"]["tracks"][0]["pan"], -0.65);
     assert_eq!(delta["state"]["tracks"][0]["soloed"], true);
 

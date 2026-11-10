@@ -97,6 +97,13 @@ export function inferSongMetadataFromFiles(files: File[]): {
       .replace(/^[-_\s0-9.]+/, '')
       .replace(/[-_]+/g, ' ')
       .trim();
+    const norm = cleaned
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toLowerCase();
+    if (norm === 'cues' || norm === 'cue' || norm === 'guide' || norm === 'guia') {
+      return 'Guía';
+    }
     return cleaned || name || `Stem ${idx + 1}`;
   });
 

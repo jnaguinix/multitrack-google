@@ -1,16 +1,268 @@
-import { SongProject, SongSection } from '../types/project';
+import { SongProject, SongSection, TrackChannel } from '../types/project';
 import { deleteProjectPcm } from './opfsStorage';
 import {
   collectAudioFromDirectory,
   getRegisteredHandle,
   queryReadPermission,
   requestReadPermission,
+  writeProjectSidecarToDirectory,
 } from './sourceFiles';
 
 const DB_NAME = 'LibreTracksWebDB';
 const DB_VERSION = 1;
 const STORE_PROJECTS = 'projects';
 const STORE_AUDIO = 'audioBuffers';
+const PRESET_MEMORY_STORAGE_KEY = 'omnitracks_folder_presets_v1';
+const MAX_SAVED_PRESETS = 200;
+
+/* eslint-disable @typescript-eslint/no-explicit-any */
+const projectDirHandleCache = new Map<string, any>();
+const sidecarDebounceTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+export function registerProjectDirHandle(projectId: string, dirHandle: any): void {
+  if (projectId && dirHandle) {
+    projectDirHandleCache.set(projectId, dirHandle);
+  }
+}
+
+function normalizePresetToken(text: string): string {
+  return (text || '')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, ' ');
+}
+
+function computePresetKeys(title: string, fileNames: string[]): {
+  titleAndFilesKey: string;
+  filesOnlyKey: string;
+} {
+  const cleanTitle = normalizePresetToken(title);
+  const sortedFiles = fileNames
+    .map((f) => normalizePresetToken(f))
+    .filter(Boolean)
+    .sort();
+  const filesJoined = sortedFiles.join('|');
+  return {
+    titleAndFilesKey: `${cleanTitle}::${filesJoined}`,
+    filesOnlyKey: filesJoined,
+  };
+}
+
+interface StoredPresetEntry {
+  key: string;
+  filesOnlyKey: string;
+  title: string;
+  updatedAt: number;
+  project: SongProject;
+}
+
+function loadPresetMemoryList(): StoredPresetEntry[] {
+  if (typeof window === 'undefined' || !window.localStorage) return [];
+  try {
+    const raw = window.localStorage.getItem(PRESET_MEMORY_STORAGE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? (parsed as StoredPresetEntry[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+function savePresetMemoryList(list: StoredPresetEntry[]): void {
+  if (typeof window === 'undefined' || !window.localStorage) return;
+  try {
+    const trimmed = [...list]
+      .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))
+      .slice(0, MAX_SAVED_PRESETS);
+    window.localStorage.setItem(PRESET_MEMORY_STORAGE_KEY, JSON.stringify(trimmed));
+  } catch {
+    // Ignore storage quota errors
+  }
+}
+
+/**
+ * Saves a lightweight metadata preset of the song (sections, BPM, key, mixer settings)
+ * indexed by its folder/title and stem filenames so it can be recovered even if the
+ * browser could not write a sidecar file directly to disk.
+ */
+export function saveProjectPresetMemory(project: SongProject): void {
+  if (!project || !Array.isArray(project.tracks) || project.tracks.length === 0) return;
+
+  const fileNames = project.tracks.map((t) => t.fileName || t.name);
+  const { titleAndFilesKey, filesOnlyKey } = computePresetKeys(project.title, fileNames);
+  if (!filesOnlyKey) return;
+
+  const compactProject: SongProject = {
+    ...project,
+    updatedAt: Date.now(),
+    tracks: project.tracks.map(({ pcm: _pcm, peaks: _peaks, ...rest }) => ({
+      ...rest,
+      peaks: [],
+    })),
+  };
+
+  const list = loadPresetMemoryList();
+  const existingIdx = list.findIndex((item) => item.key === titleAndFilesKey);
+
+  // Avoid overwriting a preset that already had sections with an empty-section initial import shell
+  if (
+    existingIdx >= 0 &&
+    list[existingIdx].project.sections.length > 0 &&
+    compactProject.sections.length === 0
+  ) {
+    return;
+  }
+
+  const entry: StoredPresetEntry = {
+    key: titleAndFilesKey,
+    filesOnlyKey,
+    title: normalizePresetToken(project.title),
+    updatedAt: Date.now(),
+    project: compactProject,
+  };
+
+  if (existingIdx >= 0) {
+    list[existingIdx] = entry;
+  } else {
+    list.unshift(entry);
+  }
+  savePresetMemoryList(list);
+}
+
+/**
+ * Finds a previously saved metadata preset matching the song title and stem file names.
+ */
+export function findSavedProjectPreset(
+  songTitle: string,
+  fileNames: string[]
+): SongProject | null {
+  if (!fileNames || fileNames.length === 0) return null;
+  const { titleAndFilesKey, filesOnlyKey } = computePresetKeys(songTitle, fileNames);
+  const list = loadPresetMemoryList();
+  if (list.length === 0) return null;
+
+  const exact = list.find((item) => item.key === titleAndFilesKey);
+  if (exact) return exact.project;
+
+  // Fallback: match by exact title + high overlap of stem filenames
+  const cleanTitle = normalizePresetToken(songTitle);
+  const byTitle = list.find((item) => item.title === cleanTitle && item.filesOnlyKey === filesOnlyKey);
+  if (byTitle) return byTitle.project;
+
+  return null;
+}
+
+/**
+ * Merges saved project metadata (sections, BPM, key, routing, and per-track mixer settings)
+ * into a freshly imported SongProject.
+ */
+export function mergeSavedProjectMetadata(
+  baseProject: SongProject,
+  savedRaw: SongProject
+): SongProject {
+  const saved = normalizeProjectSectionsToTime({
+    ...savedRaw,
+    durationSec:
+      baseProject.durationSec && baseProject.durationSec > 1
+        ? baseProject.durationSec
+        : savedRaw.durationSec,
+  });
+
+  const savedByFileName = new Map<string, TrackChannel>();
+  const savedByName = new Map<string, TrackChannel>();
+  for (const st of saved.tracks || []) {
+    if (st.fileName) {
+      savedByFileName.set(st.fileName.trim().toLowerCase(), st);
+    }
+    if (st.name) {
+      savedByName.set(st.name.trim().toLowerCase(), st);
+    }
+  }
+
+  const mergedTracks: TrackChannel[] = baseProject.tracks.map((trk) => {
+    const match =
+      (trk.fileName && savedByFileName.get(trk.fileName.trim().toLowerCase())) ||
+      savedByName.get(trk.name.trim().toLowerCase());
+    if (!match) return trk;
+
+    return {
+      ...trk,
+      name: match.name || trk.name,
+      role: match.role || trk.role,
+      color: match.color || trk.color,
+      gain: Number.isFinite(match.gain) ? match.gain : trk.gain,
+      pan: Number.isFinite(match.pan) ? match.pan : trk.pan,
+      muted: typeof match.muted === 'boolean' ? match.muted : trk.muted,
+      soloed: typeof match.soloed === 'boolean' ? match.soloed : trk.soloed,
+      bus: match.bus || trk.bus,
+      peaks:
+        trk.peaks && trk.peaks.length > 0
+          ? trk.peaks
+          : Array.isArray(match.peaks)
+          ? match.peaks
+          : [],
+    };
+  });
+
+  const effectiveBpm = saved.bpm || baseProject.bpm || 120;
+  const effectiveBeatsPerBar = saved.beatsPerBar || baseProject.beatsPerBar || 4;
+  const effectiveDurationSec =
+    baseProject.durationSec && baseProject.durationSec > 1
+      ? baseProject.durationSec
+      : saved.durationSec || 180;
+  const secPerBar = (60 / effectiveBpm) * effectiveBeatsPerBar;
+  const effectiveTotalBars = Math.max(4, Math.ceil(effectiveDurationSec / secPerBar));
+
+  return normalizeProjectSectionsToTime({
+    ...baseProject,
+    title: saved.title || baseProject.title,
+    artist:
+      saved.artist && saved.artist !== 'Sesión Importada'
+        ? saved.artist
+        : baseProject.artist,
+    bpm: effectiveBpm,
+    beatsPerBar: effectiveBeatsPerBar,
+    beatUnit: saved.beatUnit || baseProject.beatUnit || 4,
+    keySignature: saved.keySignature || baseProject.keySignature,
+    totalBars: effectiveTotalBars,
+    durationSec: effectiveDurationSec,
+    quantizeMode: saved.quantizeMode || baseProject.quantizeMode,
+    splitRoutingMode: saved.splitRoutingMode || baseProject.splitRoutingMode,
+    clickEnabled:
+      typeof saved.clickEnabled === 'boolean'
+        ? saved.clickEnabled
+        : baseProject.clickEnabled,
+    clickGain:
+      Number.isFinite(saved.clickGain) ? saved.clickGain : baseProject.clickGain,
+    clickPan:
+      Number.isFinite(saved.clickPan) ? saved.clickPan : baseProject.clickPan ?? 0,
+    clickSubdivision: saved.clickSubdivision || baseProject.clickSubdivision,
+    guideCuesEnabled:
+      typeof saved.guideCuesEnabled === 'boolean'
+        ? saved.guideCuesEnabled
+        : baseProject.guideCuesEnabled,
+    guideVoiceReadout:
+      typeof saved.guideVoiceReadout === 'boolean'
+        ? saved.guideVoiceReadout
+        : baseProject.guideVoiceReadout,
+    guideGain:
+      Number.isFinite(saved.guideGain) ? saved.guideGain : baseProject.guideGain,
+    guidePan:
+      Number.isFinite(saved.guidePan) ? saved.guidePan : baseProject.guidePan ?? 0,
+    masterGain:
+      Number.isFinite(saved.masterGain) ? saved.masterGain : baseProject.masterGain,
+    cueMasterGain:
+      Number.isFinite(saved.cueMasterGain)
+        ? saved.cueMasterGain
+        : baseProject.cueMasterGain,
+    pitchSemitones:
+      typeof saved.pitchSemitones === 'number'
+        ? saved.pitchSemitones
+        : baseProject.pitchSemitones,
+    sections: Array.isArray(saved.sections) ? saved.sections : [],
+    tracks: mergedTracks,
+  });
+}
 
 export interface StoredAudioStem {
   key: string; // `${projectId}:${trackId}`
@@ -40,15 +292,58 @@ export function normalizeProjectSectionsToTime(project: SongProject): SongProjec
     project.durationSec || (project.totalBars || 24) * secPerBar
   );
 
-  if (!Array.isArray(project.sections) || project.sections.length === 0) {
+  const normalizedTracks: TrackChannel[] = Array.isArray(project.tracks)
+    ? project.tracks.map((trk) => {
+        const trimmedName = (trk.name || '').trim();
+        const normName = trimmedName
+          .normalize('NFD')
+          .replace(/[\u0300-\u036f]/g, '')
+          .toLowerCase();
+        const isGuideName =
+          normName === 'cues' ||
+          normName === 'cue' ||
+          normName === 'guide' ||
+          normName === 'guia' ||
+          normName.includes('guide') ||
+          normName.includes('cue') ||
+          normName.includes('guia');
+        const nextName =
+          normName === 'cues' || normName === 'cue' || normName === 'guide' || normName === 'guia'
+            ? 'Guía'
+            : trimmedName || trk.name;
+        const nextRole =
+          trk.role === 'custom' && isGuideName ? 'guide' : trk.role;
+
+        return {
+          ...trk,
+          name: nextName,
+          role: nextRole,
+          gain: Number.isFinite(trk.gain) ? trk.gain : 1.0,
+          pan: Number.isFinite(trk.pan) ? trk.pan : 0,
+        };
+      })
+    : [];
+
+  const sanitizedProject: SongProject = {
+    ...project,
+    clickGain: Number.isFinite(project.clickGain) ? project.clickGain : 1.0,
+    clickPan: Number.isFinite(project.clickPan) ? project.clickPan : 0,
+    guideGain: Number.isFinite(project.guideGain) ? project.guideGain : 1.0,
+    guidePan: Number.isFinite(project.guidePan) ? project.guidePan : 0,
+    masterGain: Number.isFinite(project.masterGain) ? project.masterGain : 1.0,
+    cueMasterGain: Number.isFinite(project.cueMasterGain) ? project.cueMasterGain : 0.708,
+    tracks: normalizedTracks,
+  };
+
+  if (!Array.isArray(sanitizedProject.sections) || sanitizedProject.sections.length === 0) {
     return {
-      ...project,
+      ...sanitizedProject,
       durationSec: totalSec,
       sections: [],
     };
   }
 
-  const normalized: SongSection[] = project.sections.map((sec, idx) => {
+  const normalized: SongSection[] = sanitizedProject.sections.map((sec, idx) => {
     const hasTime =
       typeof sec.startTimeSec === 'number' &&
       typeof sec.endTimeSec === 'number' &&
@@ -72,10 +367,23 @@ export function normalizeProjectSectionsToTime(project: SongProject): SongProjec
 
   normalized.sort((a, b) => a.startTimeSec - b.startTimeSec);
 
+  const resolved = normalized.map((sec, idx) => {
+    const start = Math.round(Math.max(0, sec.startTimeSec) * 100) / 100;
+    const next = normalized[idx + 1];
+    const targetEnd = next
+      ? Math.max(start + 0.05, Math.round(next.startTimeSec * 100) / 100)
+      : totalSec;
+    return {
+      ...sec,
+      startTimeSec: start,
+      endTimeSec: Math.round(Math.max(start + 0.05, targetEnd) * 100) / 100,
+    };
+  });
+
   return {
-    ...project,
+    ...sanitizedProject,
     durationSec: totalSec,
-    sections: normalized,
+    sections: resolved,
   };
 }
 
@@ -110,12 +418,70 @@ function openDatabase(): Promise<IDBDatabase> {
   return cachedDbPromise;
 }
 
+async function resolveProjectDirHandle(projectId: string): Promise<any | null> {
+  const cached = projectDirHandleCache.get(projectId);
+  if (cached) return cached;
+  try {
+    const raw = await loadRawStemsFromDb(projectId);
+    const found = raw.find((s) => s.dirHandle)?.dirHandle;
+    if (found) {
+      projectDirHandleCache.set(projectId, found);
+      return found;
+    }
+  } catch {
+    // ignore
+  }
+  return null;
+}
+
+/**
+ * Immediately synchronizes the project's metadata to both the local preset memory and
+ * the `omnitracks.project.json` sidecar file inside the song's source folder (if available).
+ * Pass `requestPermissionIfNeeded = true` when invoked directly from a user click gesture.
+ */
+export async function syncProjectSidecarNow(
+  project: SongProject,
+  requestPermissionIfNeeded = false
+): Promise<boolean> {
+  saveProjectPresetMemory(project);
+  const timer = sidecarDebounceTimers.get(project.id);
+  if (timer) {
+    clearTimeout(timer);
+    sidecarDebounceTimers.delete(project.id);
+  }
+  const dirHandle = await resolveProjectDirHandle(project.id);
+  if (!dirHandle) return false;
+  return writeProjectSidecarToDirectory(dirHandle, project, requestPermissionIfNeeded);
+}
+
+function scheduleProjectSidecarSync(project: SongProject): void {
+  saveProjectPresetMemory(project);
+  const prevTimer = sidecarDebounceTimers.get(project.id);
+  if (prevTimer) clearTimeout(prevTimer);
+
+  const timer = setTimeout(() => {
+    sidecarDebounceTimers.delete(project.id);
+    resolveProjectDirHandle(project.id)
+      .then((dirHandle) => {
+        if (dirHandle) {
+          return writeProjectSidecarToDirectory(dirHandle, project, false);
+        }
+        return false;
+      })
+      .catch(() => {});
+  }, 250);
+
+  sidecarDebounceTimers.set(project.id, timer);
+}
+
 export async function saveProjectToDb(project: SongProject): Promise<void> {
+  const updatedProject = { ...project, updatedAt: Date.now() };
+  scheduleProjectSidecarSync(updatedProject);
   const db = await openDatabase();
   return new Promise((resolve, reject) => {
     const tx = db.transaction(STORE_PROJECTS, 'readwrite');
     const store = tx.objectStore(STORE_PROJECTS);
-    store.put({ ...project, updatedAt: Date.now() });
+    store.put(updatedProject);
     tx.oncomplete = () => resolve();
     tx.onerror = () => reject(tx.error);
   });
@@ -147,10 +513,25 @@ export async function loadAllProjectsFromDb(): Promise<SongProject[]> {
 }
 
 export async function deleteProjectFromDb(projectId: string): Promise<void> {
+  const pendingTimer = sidecarDebounceTimers.get(projectId);
+  if (pendingTimer) {
+    clearTimeout(pendingTimer);
+    sidecarDebounceTimers.delete(projectId);
+  }
+  projectDirHandleCache.delete(projectId);
+
   const db = await openDatabase();
   return new Promise((resolve, reject) => {
     const tx = db.transaction([STORE_PROJECTS, STORE_AUDIO], 'readwrite');
-    tx.objectStore(STORE_PROJECTS).delete(projectId);
+    const projectStore = tx.objectStore(STORE_PROJECTS);
+    const getReq = projectStore.get(projectId);
+    getReq.onsuccess = () => {
+      const existing = getReq.result as SongProject | undefined;
+      if (existing) {
+        saveProjectPresetMemory(existing);
+      }
+      projectStore.delete(projectId);
+    };
 
     const audioStore = tx.objectStore(STORE_AUDIO);
     const index = audioStore.index('byProject');
@@ -174,6 +555,9 @@ export async function deleteProjectFromDb(projectId: string): Promise<void> {
 }
 
 export async function saveStemAudioToDb(stem: StoredAudioStem): Promise<void> {
+  if (stem.dirHandle) {
+    registerProjectDirHandle(stem.projectId, stem.dirHandle);
+  }
   const db = await openDatabase();
   return new Promise((resolve, reject) => {
     const tx = db.transaction(STORE_AUDIO, 'readwrite');
@@ -188,6 +572,12 @@ export async function saveStemAudioToDb(stem: StoredAudioStem): Promise<void> {
  */
 export async function saveStemsBatchToDb(stems: StoredAudioStem[]): Promise<void> {
   if (stems.length === 0) return;
+  for (const stem of stems) {
+    if (stem.dirHandle) {
+      registerProjectDirHandle(stem.projectId, stem.dirHandle);
+      break;
+    }
+  }
   const db = await openDatabase();
   return new Promise((resolve, reject) => {
     const tx = db.transaction(STORE_AUDIO, 'readwrite');

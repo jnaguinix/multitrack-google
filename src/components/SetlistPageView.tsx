@@ -68,8 +68,10 @@ interface SetlistPageViewProps {
   onChangeTrackPan: (trackId: string, pan: number) => void;
   onChangeTrackBus: (trackId: string, bus: OutputBus) => void;
   onChangeClickGain: (gain: number) => void;
+  onChangeClickPan?: (pan: number) => void;
   onToggleClick: () => void;
   onChangeGuideGain: (gain: number) => void;
+  onChangeGuidePan?: (pan: number) => void;
   onToggleGuide: () => void;
   onChangeMasterGain: (gain: number) => void;
   onChangeCueMasterGain: (gain: number) => void;
@@ -114,8 +116,10 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
   onChangeTrackPan,
   onChangeTrackBus,
   onChangeClickGain,
+  onChangeClickPan,
   onToggleClick,
   onChangeGuideGain,
+  onChangeGuidePan,
   onToggleGuide,
   onChangeMasterGain,
   onChangeCueMasterGain,
@@ -827,8 +831,10 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
                 onChangeTrackPan={onChangeTrackPan}
                 onChangeTrackBus={onChangeTrackBus}
                 onChangeClickGain={onChangeClickGain}
+                onChangeClickPan={onChangeClickPan}
                 onToggleClick={onToggleClick}
                 onChangeGuideGain={onChangeGuideGain}
+                onChangeGuidePan={onChangeGuidePan}
                 onToggleGuide={onToggleGuide}
                 onChangeMasterGain={onChangeMasterGain}
                 onChangeCueMasterGain={onChangeCueMasterGain}

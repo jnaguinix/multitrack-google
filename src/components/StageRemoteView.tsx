@@ -7,6 +7,16 @@ import {
 } from 'lucide-react';
 import { QuantizeMode, SongProject, TransportState } from '../types/project';
 import { formatMmSs, formatTimecode } from './TransportDeck';
+import { dbFromPos, dbToGain, formatDb, gainToDb, posFromDb } from './MultitrackMixer';
+
+function gainToSliderPos(gain: number): number {
+  return Number(posFromDb(gainToDb(gain)).toFixed(3));
+}
+
+function sliderPosToGain(pos: number): number {
+  const db = dbFromPos(Math.max(0, Math.min(1, pos)));
+  return !Number.isFinite(db) ? 0 : dbToGain(Math.round(db * 10) / 10);
+}
 
 interface StageRemoteViewProps {
   project: SongProject;
@@ -266,17 +276,18 @@ export const StageRemoteView: React.FC<StageRemoteViewProps> = ({
                     <span>Click</span>
                   </button>
                   <span className="tabular-nums text-xs text-neutral-400">
-                    {Math.round(project.clickGain * 100)}%
+                    {formatDb(gainToDb(project.clickGain))}
                   </span>
                 </div>
                 <input
                   type="range"
                   aria-label="Nivel de Click"
                   min={0}
-                  max={1.25}
-                  step={0.02}
-                  value={project.clickGain}
-                  onChange={(e) => onChangeClickGain(Number(e.target.value))}
+                  max={1}
+                  step={0.001}
+                  value={gainToSliderPos(project.clickGain)}
+                  onChange={(e) => onChangeClickGain(sliderPosToGain(Number(e.target.value)))}
+                  onDoubleClick={() => onChangeClickGain(1.0)}
                   className="w-full accent-studio-accent h-2 bg-neutral-800 rounded-lg cursor-pointer"
                 />
               </div>
@@ -294,17 +305,18 @@ export const StageRemoteView: React.FC<StageRemoteViewProps> = ({
                     <span>Guía Vocal</span>
                   </button>
                   <span className="tabular-nums text-xs text-neutral-400">
-                    {Math.round(project.guideGain * 100)}%
+                    {formatDb(gainToDb(project.guideGain))}
                   </span>
                 </div>
                 <input
                   type="range"
                   aria-label="Nivel de Guía"
                   min={0}
-                  max={1.25}
-                  step={0.02}
-                  value={project.guideGain}
-                  onChange={(e) => onChangeGuideGain(Number(e.target.value))}
+                  max={1}
+                  step={0.001}
+                  value={gainToSliderPos(project.guideGain)}
+                  onChange={(e) => onChangeGuideGain(sliderPosToGain(Number(e.target.value)))}
+                  onDoubleClick={() => onChangeGuideGain(1.0)}
                   className="w-full accent-studio-accent h-2 bg-neutral-800 rounded-lg cursor-pointer"
                 />
               </div>
@@ -315,17 +327,18 @@ export const StageRemoteView: React.FC<StageRemoteViewProps> = ({
                     Master L/R
                   </span>
                   <span className="tabular-nums text-xs text-neutral-400">
-                    {Math.round(project.masterGain * 100)}%
+                    {formatDb(gainToDb(project.masterGain))}
                   </span>
                 </div>
                 <input
                   type="range"
                   aria-label="Nivel Master"
                   min={0}
-                  max={1.25}
-                  step={0.02}
-                  value={project.masterGain}
-                  onChange={(e) => onChangeMasterGain(Number(e.target.value))}
+                  max={1}
+                  step={0.001}
+                  value={gainToSliderPos(project.masterGain)}
+                  onChange={(e) => onChangeMasterGain(sliderPosToGain(Number(e.target.value)))}
+                  onDoubleClick={() => onChangeMasterGain(1.0)}
                   className="w-full accent-emerald-400 h-2 bg-neutral-800 rounded-lg cursor-pointer"
                 />
               </div>
