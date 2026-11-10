@@ -17,6 +17,8 @@
     "allow-audio-get-config",
     "allow-audio-set-config",
     "allow-audio-get-stats",
-    "allow-audio-test-tone"
+    "allow-audio-test-tone",
+    "allow-audio-import-tracks",
+    "allow-audio-get-project-cache-status"
   ]
 }

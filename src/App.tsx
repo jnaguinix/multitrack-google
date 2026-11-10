@@ -990,6 +990,46 @@ export default function App() {
         );
       }
 
+      // Desktop Native Audio Import Pipeline (Fase 2: Decodificación y Caché en Rust)
+      if (isDesktopApp && validFiles.some((f) => Boolean((f as any).path))) {
+        try {
+          const filesToImport = validFiles
+            .filter((f) => Boolean((f as any).path))
+            .map((f, idx) => ({
+              filePath: (f as any).path as string,
+              trackId: initialTracks[idx].id,
+            }));
+
+          const invoke = (window as any).__TAURI__?.core?.invoke;
+          if (invoke && filesToImport.length > 0) {
+            const importResult: { tracks: any[]; errors: string[] } = await invoke('audio_import_tracks', {
+              projectId: targetProjectId,
+              files: filesToImport,
+              targetSampleRate: null,
+            });
+
+            for (const meta of importResult.tracks) {
+              const matchedTrack = initialTracks.find((t) => t.id === meta.trackId);
+              if (matchedTrack) {
+                matchedTrack.peaks = meta.peaks;
+                matchedTrack.durationSec = meta.durationSec;
+                matchedTrack.pcm = {
+                  sampleRate: meta.targetSampleRate,
+                  channels: meta.channels,
+                  frames: meta.frameCount,
+                  version: 1,
+                };
+                if (meta.durationSec > headerMaxDurationSec) {
+                  headerMaxDurationSec = meta.durationSec;
+                }
+              }
+            }
+          }
+        } catch (desktopErr) {
+          console.warn('[AudioImport][Desktop] Fallo en decodificación nativa Rust:', desktopErr);
+        }
+      }
+
       const initialDurationSec =
         headerMaxDurationSec > 1
           ? headerMaxDurationSec
@@ -1076,6 +1116,22 @@ export default function App() {
       console.info(
         `[AudioEngine][InstantImport] "${effectiveSongTitle}" (${initialTracks.length} pistas, ${restoredSectionsCount} marcadores) montada en consola en ${mountMs.toFixed(1)} ms`
       );
+
+      // Desktop Native: Si el motor nativo de Rust ya generó el caché PCM y picos,
+      // se omite completamente el pipeline de Web Workers / OPFS en JavaScript.
+      const isNativePcmReady =
+        isDesktopApp &&
+        initialTracks.length > 0 &&
+        initialTracks.every((t) => Boolean(t.pcm) && t.pcm!.frames > 0);
+
+      if (isNativePcmReady) {
+        showToast(
+          restoredSectionsCount > 0
+            ? `"${effectiveSongTitle}" lista con motor nativo (${initialTracks.length} pistas · ${restoredSectionsCount} marcadores restaurados)`
+            : `"${effectiveSongTitle}" lista con motor nativo (${initialTracks.length} pistas)`
+        );
+        return;
+      }
 
       // Single-pass pipeline: decode each stem ONCE, straight into the OPFS cache (peaks and
       // duration come from the same pass). No RAM decode of the whole song at import time.

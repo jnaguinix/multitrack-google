@@ -221,7 +221,9 @@ fn main() {
             omnitracks_desktop::audio::audio_get_config,
             omnitracks_desktop::audio::audio_set_config,
             omnitracks_desktop::audio::audio_get_stats,
-            omnitracks_desktop::audio::audio_test_tone
+            omnitracks_desktop::audio::audio_test_tone,
+            omnitracks_desktop::audio::audio_import_tracks,
+            omnitracks_desktop::audio::audio_get_project_cache_status
         ])
         .run(tauri::generate_context!())
         .expect("OmniTracks");

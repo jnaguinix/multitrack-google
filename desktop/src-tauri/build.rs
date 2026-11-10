@@ -16,6 +16,8 @@ fn main() {
             "audio_set_config",
             "audio_get_stats",
             "audio_test_tone",
+            "audio_import_tracks",
+            "audio_get_project_cache_status",
         ]);
         tauri_build::try_build(tauri_build::Attributes::new().app_manifest(manifest))
             .expect("Tauri build configuration");
