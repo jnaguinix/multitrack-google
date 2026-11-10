@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use tokio::sync::Mutex;
+use crate::audio::playback::PlaybackEngine;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -73,6 +74,7 @@ pub struct AudioEngineState {
     pub current_settings: Mutex<AudioSettings>,
     pub stats: Arc<AudioStreamStats>,
     pub import_cancellation: Mutex<std::collections::HashMap<String, Arc<AtomicBool>>>,
+    pub playback: Arc<PlaybackEngine>,
 }
 
 impl AudioEngineState {
@@ -84,6 +86,7 @@ impl AudioEngineState {
             current_settings: Mutex::new(initial_settings),
             stats: Arc::new(AudioStreamStats::default()),
             import_cancellation: Mutex::new(std::collections::HashMap::new()),
+            playback: Arc::new(PlaybackEngine::new(Arc::new(AudioStreamStats::default()))),
         }
     }
 
@@ -134,7 +137,7 @@ pub fn save_settings_to_disk(path: &Path, settings: &AudioSettings) -> Result<()
     Ok(())
 }
 
-fn get_device_name<D: DeviceTrait>(device: &D) -> String {
+pub fn get_device_name<D: DeviceTrait>(device: &D) -> String {
     device
         .description()
         .map(|desc| desc.name().to_string())

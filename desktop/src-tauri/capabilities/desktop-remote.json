@@ -1,7 +1,9 @@
 {
   "identifier": "desktop-remote",
   "description": "Control local del servidor LAN y motor de audio",
-  "windows": ["main"],
+  "windows": [
+    "main"
+  ],
   "permissions": [
     "allow-remote-status",
     "allow-remote-start",
@@ -20,6 +22,13 @@
     "allow-audio-test-tone",
     "allow-audio-import-tracks",
     "allow-audio-cancel-import",
-    "allow-audio-get-project-cache-status"
+    "allow-audio-get-project-cache-status",
+    "allow-audio-load-project",
+    "allow-audio-play",
+    "allow-audio-pause",
+    "allow-audio-stop",
+    "allow-audio-seek",
+    "allow-audio-get-playback-state",
+    "allow-audio-set-track-controls"
   ]
 }

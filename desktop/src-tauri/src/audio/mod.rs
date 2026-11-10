@@ -1,6 +1,7 @@
 pub mod cache;
 pub mod import;
 pub mod output;
+pub mod playback;
 
 use cache::{read_track_metadata, ImportProgressEvent, ProjectCacheStatus};
 use import::{ImportResult, ImportTrackFile};
@@ -249,4 +250,70 @@ pub async fn audio_get_project_cache_status(
         total_tracks_count,
         tracks: cached_tracks,
     })
+}
+
+#[tauri::command]
+pub async fn audio_load_project(
+    app: tauri::AppHandle,
+    state: State<'_, AudioEngineState>,
+    project_id: String,
+) -> Result<playback::ProjectLoadInfo, String> {
+    let local_data = app
+        .path()
+        .app_local_data_dir()
+        .map_err(|e| format!("Error resolviendo app_local_data_dir: {e}"))?;
+
+    let settings = state.current_settings.lock().await;
+    let sr = settings.sample_rate.unwrap_or(48000);
+
+    state.playback.load_project(&local_data, &project_id, sr).await
+}
+
+#[tauri::command]
+pub async fn audio_play(state: State<'_, AudioEngineState>) -> Result<(), String> {
+    state.playback.play(&state).await
+}
+
+#[tauri::command]
+pub async fn audio_pause(state: State<'_, AudioEngineState>) -> Result<(), String> {
+    state.playback.pause().await;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn audio_stop(state: State<'_, AudioEngineState>) -> Result<(), String> {
+    state.playback.stop().await;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn audio_seek(
+    state: State<'_, AudioEngineState>,
+    position_sec: f64,
+) -> Result<(), String> {
+    state.playback.seek(position_sec).await;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn audio_get_playback_state(
+    state: State<'_, AudioEngineState>,
+) -> Result<playback::PlaybackStateSnapshot, String> {
+    Ok(state.playback.get_playback_state())
+}
+
+#[tauri::command]
+pub async fn audio_set_track_controls(
+    state: State<'_, AudioEngineState>,
+    track_id: String,
+    gain: Option<f32>,
+    pan: Option<i32>,
+    muted: Option<bool>,
+    soloed: Option<bool>,
+) -> Result<(), String> {
+    state
+        .playback
+        .set_track_controls(&track_id, gain, pan, muted, soloed)
+        .await;
+    Ok(())
 }

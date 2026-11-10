@@ -224,7 +224,14 @@ fn main() {
             omnitracks_desktop::audio::audio_test_tone,
             omnitracks_desktop::audio::audio_import_tracks,
             omnitracks_desktop::audio::audio_cancel_import,
-            omnitracks_desktop::audio::audio_get_project_cache_status
+            omnitracks_desktop::audio::audio_get_project_cache_status,
+            omnitracks_desktop::audio::audio_load_project,
+            omnitracks_desktop::audio::audio_play,
+            omnitracks_desktop::audio::audio_pause,
+            omnitracks_desktop::audio::audio_stop,
+            omnitracks_desktop::audio::audio_seek,
+            omnitracks_desktop::audio::audio_get_playback_state,
+            omnitracks_desktop::audio::audio_set_track_controls
         ])
         .run(tauri::generate_context!())
         .expect("OmniTracks");

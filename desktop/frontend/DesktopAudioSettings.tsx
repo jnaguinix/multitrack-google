@@ -1,6 +1,8 @@
 import React, { memo, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Sliders, Volume2, Check, AlertTriangle, Info, RefreshCw, X, Activity } from 'lucide-react';
+import { Sliders, Volume2, Check, AlertTriangle, Info, RefreshCw, X, Activity, Play, Pause, Square, Flame } from 'lucide-react';
+import { loadAllProjectsFromDb } from '../../src/storage/projectDb';
+import { SongProject } from '../../src/types/project';
 import './connection.css';
 
 type Invoke = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
@@ -27,6 +29,18 @@ interface AudioSettings {
 }
 
 interface AudioStreamStatsSnapshot {
+  underruns: number;
+  callbacks: number;
+  maxCallbackDurationUs: number;
+}
+
+
+interface PlaybackStateSnapshot {
+  isPlaying: boolean;
+  positionSec: number;
+  durationSec: number;
+  currentFrame: number;
+  totalFrames: number;
   underruns: number;
   callbacks: number;
   maxCallbackDurationUs: number;
@@ -74,6 +88,25 @@ export default memo(function DesktopAudioSettings({ triggerHost }: Props) {
     }
   };
 
+
+  const [songProjects, setSongProjects] = useState<SongProject[]>([]);
+  const [selectedProjectId, setSelectedProjectId] = useState<string>('');
+  const [playbackState, setPlaybackState] = useState<PlaybackStateSnapshot>({
+    isPlaying: false,
+    positionSec: 0,
+    durationSec: 0,
+    currentFrame: 0,
+    totalFrames: 0,
+    underruns: 0,
+    callbacks: 0,
+    maxCallbackDurationUs: 0,
+  });
+  const [isNativeLoaded, setIsNativeLoaded] = useState(false);
+  const [nativeNotice, setNativeNotice] = useState('');
+  const [isStressTesting, setIsStressTesting] = useState(false);
+  const [stressNotice, setStressNotice] = useState('');
+  const [seekInputSec, setSeekInputSec] = useState(0);
+
   const activeDevice = devices.find((d) => d.name === selectedDeviceName) || devices.find((d) => d.isDefault) || devices[0];
 
   const loadAudioConfig = async () => {
@@ -95,6 +128,17 @@ export default memo(function DesktopAudioSettings({ triggerHost }: Props) {
 
       setHosts(availableHosts);
       setDevices(availableDevices);
+
+      try {
+        const projs = await loadAllProjectsFromDb();
+        setSongProjects(projs);
+        if (projs.length > 0 && !selectedProjectId) {
+          setSelectedProjectId(projs[0].id);
+        }
+      } catch {
+        // ignore
+      }
+
 
       if (savedConfig.deviceName && availableDevices.some((d) => d.name === savedConfig.deviceName)) {
         setSelectedDeviceName(savedConfig.deviceName);
@@ -130,6 +174,105 @@ export default memo(function DesktopAudioSettings({ triggerHost }: Props) {
   const handleDeviceChange = (deviceName: string) => {
     setSelectedDeviceName(deviceName);
     setSelectedChannel(0);
+  };
+
+
+  useEffect(() => {
+    let timer: number | null = null;
+    if (invoke) {
+      timer = window.setInterval(async () => {
+        try {
+          const pb = await invoke<PlaybackStateSnapshot>('audio_get_playback_state');
+          if (pb) {
+            setPlaybackState(pb);
+            if (pb.isPlaying) {
+              setSeekInputSec(Math.round(pb.positionSec * 10) / 10);
+            }
+          }
+        } catch {
+          // ignore
+        }
+      }, 250);
+    }
+    return () => {
+      if (timer) clearInterval(timer);
+    };
+  }, []);
+
+  const handleNativeLoad = async () => {
+    if (!invoke || !selectedProjectId) return;
+    setNativeNotice('Cargando pistas en motor nativo...');
+    try {
+      const res: any = await invoke('audio_load_project', { projectId: selectedProjectId });
+      setIsNativeLoaded(true);
+      setNativeNotice(`Cargadas ${res.trackCount} pistas (${res.durationSec.toFixed(1)}s) a ${res.sampleRate} Hz`);
+      pollStats();
+    } catch (err: any) {
+      setNativeNotice(`Error cargando: ${err}`);
+    }
+  };
+
+  const handleNativePlay = async () => {
+    if (!invoke) return;
+    try {
+      await invoke('audio_play');
+      setNativeNotice('Reproduciendo por motor nativo...');
+    } catch (err: any) {
+      setNativeNotice(`Error al reproducir: ${err}`);
+    }
+  };
+
+  const handleNativePause = async () => {
+    if (!invoke) return;
+    try {
+      await invoke('audio_pause');
+      setNativeNotice('En pausa');
+    } catch (err: any) {
+      setNativeNotice(`Error en pausa: ${err}`);
+    }
+  };
+
+  const handleNativeStop = async () => {
+    if (!invoke) return;
+    try {
+      await invoke('audio_stop');
+      setNativeNotice('Detenido');
+    } catch (err: any) {
+      setNativeNotice(`Error al detener: ${err}`);
+    }
+  };
+
+  const handleNativeSeek = async (sec: number) => {
+    if (!invoke) return;
+    try {
+      await invoke('audio_seek', { positionSec: sec });
+      setNativeNotice(`Saltado a ${sec.toFixed(1)}s`);
+    } catch (err: any) {
+      setNativeNotice(`Error en salto: ${err}`);
+    }
+  };
+
+  const handleStressTest = () => {
+    setIsStressTesting(true);
+    setStressNotice('Bloqueando el hilo de la UI del WebView por 3 segundos para probar aislamiento...');
+    setTimeout(() => {
+      const t0 = performance.now();
+      let operations = 0;
+      while (performance.now() - t0 < 3000) {
+        operations += Math.sqrt(Math.random());
+      }
+      pollStats().then(() => {
+        setIsStressTesting(false);
+        setStressNotice(`Bloqueo finalizado (${Math.round(operations).toLocaleString()} ops). Comprueba que el audio nativo continuó sin cortes ni nuevos underruns.`);
+      });
+    }, 60);
+  };
+
+  const formatTime = (sec: number) => {
+    const m = Math.floor(sec / 60);
+    const s = Math.floor(sec % 60);
+    const ms = Math.floor((sec % 1) * 10);
+    return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}.${ms}`;
   };
 
   const handleTestTone = async () => {
@@ -406,6 +549,129 @@ export default memo(function DesktopAudioSettings({ triggerHost }: Props) {
               )}
             </div>
           )}
+
+
+          {/* Panel Temporal: Prueba del Motor Nativo (Fase 3) */}
+          <div className="border border-emerald-800/80 rounded-xl p-3.5 space-y-3 bg-emerald-950/20">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Activity size={16} className="text-emerald-400" />
+                <h3 className="text-xs font-semibold text-emerald-200">
+                  Prueba del Motor Nativo (Fase 3 · Se retirará en Fase 6)
+                </h3>
+              </div>
+              <span className="text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded-full bg-emerald-900/60 border border-emerald-700/60 text-emerald-300">
+                {playbackState.isPlaying ? 'Reproduciendo' : isNativeLoaded ? 'Listo / Pausa' : 'Sin cargar'}
+              </span>
+            </div>
+
+            {/* Song selection & Load */}
+            <div className="flex items-center gap-2">
+              <select
+                value={selectedProjectId}
+                onChange={(e) => {
+                  setSelectedProjectId(e.target.value);
+                  setIsNativeLoaded(false);
+                }}
+                className="bg-studio-ground border border-neutral-800 rounded-lg px-2.5 py-1.5 text-xs text-neutral-100 focus:outline-none flex-1 truncate"
+              >
+                {songProjects.length === 0 ? (
+                  <option value="">Sin canciones importadas en biblioteca</option>
+                ) : (
+                  songProjects.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.title} ({p.tracks.length} stems)
+                    </option>
+                  ))
+                )}
+              </select>
+              <button
+                type="button"
+                onClick={handleNativeLoad}
+                disabled={!selectedProjectId}
+                className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-emerald-700 hover:bg-emerald-600 text-white cursor-pointer shrink-0"
+              >
+                Cargar
+              </button>
+            </div>
+
+            {/* Transport Controls */}
+            <div className="flex items-center gap-2 pt-1">
+              <button
+                type="button"
+                onClick={handleNativePlay}
+                disabled={!isNativeLoaded || playbackState.isPlaying}
+                className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-white flex items-center gap-1 cursor-pointer"
+              >
+                <Play size={13} />
+                <span>Play</span>
+              </button>
+              <button
+                type="button"
+                onClick={handleNativePause}
+                disabled={!playbackState.isPlaying}
+                className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-neutral-800 hover:bg-neutral-700 disabled:opacity-40 text-neutral-200 flex items-center gap-1 cursor-pointer"
+              >
+                <Pause size={13} />
+                <span>Pausa</span>
+              </button>
+              <button
+                type="button"
+                onClick={handleNativeStop}
+                disabled={!isNativeLoaded && !playbackState.isPlaying}
+                className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-neutral-800 hover:bg-neutral-700 disabled:opacity-40 text-neutral-200 flex items-center gap-1 cursor-pointer"
+              >
+                <Square size={13} />
+                <span>Stop</span>
+              </button>
+
+              <div className="flex-1 flex items-center gap-2 pl-2">
+                <input
+                  type="range"
+                  min={0}
+                  max={Math.max(1, playbackState.durationSec)}
+                  step={0.5}
+                  value={seekInputSec}
+                  onChange={(e) => {
+                    const val = Number(e.target.value);
+                    setSeekInputSec(val);
+                    handleNativeSeek(val);
+                  }}
+                  disabled={!isNativeLoaded}
+                  className="flex-1 cursor-pointer accent-emerald-500"
+                />
+                <span className="font-mono text-[11px] text-neutral-300 shrink-0">
+                  {formatTime(playbackState.positionSec)} / {formatTime(playbackState.durationSec)}
+                </span>
+              </div>
+            </div>
+
+            {/* Stress Test Button */}
+            <div className="pt-1 flex items-center justify-between border-t border-emerald-900/50">
+              <button
+                type="button"
+                onClick={handleStressTest}
+                disabled={isStressTesting}
+                className="px-2.5 py-1 text-[11px] font-semibold rounded-lg bg-amber-900/50 hover:bg-amber-800/60 border border-amber-700/60 text-amber-200 flex items-center gap-1.5 cursor-pointer"
+                title="Congela el hilo de la UI durante 3s mientras el audio nativo suena"
+              >
+                <Flame size={12} className={isStressTesting ? 'animate-bounce text-amber-400' : 'text-amber-400'} />
+                <span>{isStressTesting ? 'Bloqueando UI (3s)...' : 'Probar carga pesada en UI (3s)'}</span>
+              </button>
+
+              {nativeNotice && (
+                <span className="text-[11px] text-emerald-300 truncate max-w-[280px]">
+                  {nativeNotice}
+                </span>
+              )}
+            </div>
+
+            {stressNotice && (
+              <p className="text-[10px] text-amber-200 bg-amber-950/40 p-2 rounded-lg border border-amber-800/60 mt-1">
+                {stressNotice}
+              </p>
+            )}
+          </div>
 
           {/* Telemetría del Callback en Tiempo Real */}
           <div className="border border-neutral-800 rounded-xl p-3 bg-studio-ground/50 space-y-2">
