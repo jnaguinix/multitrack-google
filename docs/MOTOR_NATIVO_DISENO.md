@@ -392,4 +392,16 @@ Para evitar cualquier remuestreo en tiempo real durante la reproducción en vivo
 
 ---
 
+## 9. Bibliotecas de Audio en Rust y Versiones Seleccionadas
+
+| Crate | Versión Seleccionada | Versión Evaluada / Alternativa | Motivo Técnico de la Elección |
+| :--- | :---: | :---: | :--- |
+| **`cpal`** | `0.18.2` | `0.18.2` | Backend oficial de audio multiplataforma para WASAPI. Feature `"realtime"` activada para elevación de prioridad de hilo de audio a tiempo real en Windows (`AvSetMmThreadCharacteristicsW`). |
+| **`symphonia`** | `0.5.5` | `0.6.1` | Aunque `symphonia 0.6.1` está publicada en crates.io como estable, introdujo **cambios mayores e incompatibles en la API** (breaking changes en `Probe::format`, traits de decodificación y estructura de `SampleBuffer`). La versión `0.5.5` es la versión estándar y probada con API estable que decodifica limpiamente WAV (16/24/32 bits), MP3, FLAC, OGG y AAC. |
+| **`rubato`** | `0.16.2` | `5.0.1` | `rubato 5.0.1` reestructuró por completo su API obligando a encapsular los búferes en el crate externo `audioadapter`. La versión `0.16.2` mantiene la API directa basada en slices `&[f32]`, predicción de frames y compensación exacta de retardo (`output_delay()`). |
+| **`rtrb`** | `0.3.1` | `0.3.1` | Búfer circular lock-free SPSC de alto rendimiento para comunicación segura y sin bloqueos entre el hilo feeder y el callback de hardware. |
+
+---
+
 *Fin del documento de diseño actualizado.*
+
