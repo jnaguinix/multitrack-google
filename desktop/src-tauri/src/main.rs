@@ -193,9 +193,18 @@ async fn remote_exchange(
 fn main() {
     tracing_subscriber::fmt().with_target(false).init();
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .manage(RemoteState::default())
         .setup(|app| {
             app.manage(updates::init(app.handle()));
+            let local_data = app
+                .path()
+                .app_local_data_dir()
+                .unwrap_or_else(|_| std::path::PathBuf::from("."));
+            let audio_settings_path = local_data.join("audio_settings.json");
+            app.manage(omnitracks_desktop::audio::output::AudioEngineState::new(
+                audio_settings_path,
+            ));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -206,7 +215,12 @@ fn main() {
             remote_exchange,
             desktop_update_check,
             desktop_update_download,
-            desktop_update_install
+            desktop_update_install,
+            omnitracks_desktop::audio::audio_list_hosts,
+            omnitracks_desktop::audio::audio_list_devices,
+            omnitracks_desktop::audio::audio_get_config,
+            omnitracks_desktop::audio::audio_set_config,
+            omnitracks_desktop::audio::audio_test_tone
         ])
         .run(tauri::generate_context!())
         .expect("OmniTracks");

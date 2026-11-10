@@ -10,6 +10,11 @@ fn main() {
             "desktop_update_check",
             "desktop_update_download",
             "desktop_update_install",
+            "audio_list_hosts",
+            "audio_list_devices",
+            "audio_get_config",
+            "audio_set_config",
+            "audio_test_tone",
         ]);
         tauri_build::try_build(tauri_build::Attributes::new().app_manifest(manifest))
             .expect("Tauri build configuration");

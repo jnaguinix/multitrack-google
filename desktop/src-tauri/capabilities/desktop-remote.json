@@ -1,6 +1,6 @@
 {
   "identifier": "desktop-remote",
-  "description": "Control local del servidor LAN del PoC",
+  "description": "Control local del servidor LAN y motor de audio",
   "windows": ["main"],
   "permissions": [
     "allow-remote-status",
@@ -10,6 +10,12 @@
     "allow-remote-exchange",
     "allow-desktop-update-check",
     "allow-desktop-update-download",
-    "allow-desktop-update-install"
+    "allow-desktop-update-install",
+    "dialog:allow-open",
+    "allow-audio-list-hosts",
+    "allow-audio-list-devices",
+    "allow-audio-get-config",
+    "allow-audio-set-config",
+    "allow-audio-test-tone"
   ]
 }

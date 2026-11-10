@@ -78,6 +78,10 @@ const DesktopRemoteBridge = import.meta.env.VITE_LIBRETRACKS_DESKTOP === '1'
   ? React.lazy(() => import('../desktop/frontend/RemoteConnectionBridge'))
   : null;
 
+const DesktopAudioSettings = import.meta.env.VITE_LIBRETRACKS_DESKTOP === '1'
+  ? React.lazy(() => import('../desktop/frontend/DesktopAudioSettings'))
+  : null;
+
 const INITIAL_TRANSPORT: TransportState = {
   isPlaying: false,
   currentTimeSec: 0,
@@ -141,6 +145,7 @@ export default function App() {
   const [projects, setProjects] = useState<SongProject[]>([]);
   const [currentProject, setCurrentProject] = useState<SongProject | null>(null);
   const [remoteTriggerHost, setRemoteTriggerHost] = useState<HTMLSpanElement | null>(null);
+  const [audioTriggerHost, setAudioTriggerHost] = useState<HTMLSpanElement | null>(null);
   const [transport, setTransport] = useState<TransportState>(INITIAL_TRANSPORT);
   const [ramCacheVersion, setRamCacheVersion] = useState<number>(0);
   const [engineMode, setEngineModeState] = useState<AudioEngineMode>(() =>
@@ -865,6 +870,14 @@ export default function App() {
       importMode: 'new-song' | 'current-song' = 'new-song'
     ) => {
       const t0 = performance.now();
+      // Conditional branch: Desktop native audio import vs Web Audio import
+      const isDesktopApp = typeof window !== 'undefined' && Boolean((window as any).__TAURI__);
+      if (isDesktopApp) {
+        // En escritorio (Fase 1 preparada / Fase 2 ejecución), el motor nativo
+        // asume el procesamiento en Rust. La ruta web inferior se mantiene 100% intacta.
+        console.info('[AudioImport][Desktop] Importación de audio en entorno nativo Tauri');
+      }
+
       const validFiles = extractAudioFilesFromFileList(fileList);
 
       if (validFiles.length === 0) {
@@ -1573,6 +1586,8 @@ export default function App() {
   const transportProject = activeView === 'live' ? null : currentProject;
   const remoteTriggerRef = DesktopRemoteBridge && window.location.origin === 'https://tauri.localhost'
     ? setRemoteTriggerHost : undefined;
+  const audioTriggerRef = DesktopAudioSettings && window.location.origin === 'https://tauri.localhost'
+    ? setAudioTriggerHost : undefined;
 
   return (
     <div className="min-h-screen h-dvh flex flex-col bg-studio-ground text-neutral-100 overflow-hidden relative">
@@ -1584,6 +1599,7 @@ export default function App() {
         ramBudgetMB={ramBudgetMB}
         cachedRamMB={audioEngine.getTotalCachedMB()}
         remoteTriggerRef={transportProject ? undefined : remoteTriggerRef}
+        audioTriggerRef={audioTriggerRef}
         onChangeEngineMode={handleChangeEngineMode}
         onChangeRamBudgetMB={handleChangeRamBudgetMB}
         onSelectView={handleSelectView}
@@ -2058,6 +2074,12 @@ export default function App() {
             updateProject={updateCurrentProject}
             triggerHost={remoteTriggerHost}
           />
+        </React.Suspense>
+      )}
+
+      {DesktopAudioSettings && audioTriggerRef && (
+        <React.Suspense fallback={null}>
+          <DesktopAudioSettings triggerHost={audioTriggerHost} />
         </React.Suspense>
       )}
 
