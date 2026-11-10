@@ -1439,8 +1439,10 @@ export default function App() {
       return;
     }
     // Songs already cached in OPFS don't need the original files; others do
-    if (!audioEngine.isProjectPcmReady(found)) {
+    const isOpfsReady = await isProjectPcmComplete(found);
+    if (!isOpfsReady) {
       await ensureSourceAccess(projectId);
+      runAutoOptimize(projectId);
     }
     await activateProject(found, undefined, autoPlay);
     if (activeView === 'library') {
@@ -1452,12 +1454,13 @@ export default function App() {
   // Setlist Management Handlers
   const handleAddToSetlist = (projectId: string) => {
     // Adding to the setlist = copy the audio into the OPFS cache once (in the background)
-    const alreadyCached = (() => {
-      const p = projectsRef.current.find((x) => x.id === projectId);
-      return !p || (p.tracks.length > 0 && p.tracks.every((t) => t.pcm && t.pcm.frames > 0));
-    })();
-    if (!alreadyCached) {
-      ensureSourceAccess(projectId).then(() => runAutoOptimize(projectId));
+    const p = projectsRef.current.find((x) => x.id === projectId);
+    if (p) {
+      isProjectPcmComplete(p).then((complete) => {
+        if (!complete) {
+          ensureSourceAccess(projectId).then(() => runAutoOptimize(projectId));
+        }
+      });
     }
     setProjects((prev) => {
       const maxOrder = prev.reduce(
