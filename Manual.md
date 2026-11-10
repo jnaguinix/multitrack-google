@@ -1,4 +1,4 @@
-# Manual Técnico y de Arquitectura — LibreTracks (DAW & Setlist Multitrack Player)
+# Manual Técnico y de Arquitectura — OmniTracks (DAW & Setlist Multitrack Player)
 
 Este documento está diseñado como **guía de transferencia técnica (Handoff Manual)** para que cualquier IA o desarrollador pueda retomar el proyecto inmediatamente, comprender su arquitectura interna al 100%, diagnosticar los problemas actuales de memoria/almacenamiento y ejecutar el plan de mejora propuesto.
 
@@ -6,7 +6,7 @@ Este documento está diseñado como **guía de transferencia técnica (Handoff M
 
 ## 1. Visión General del Proyecto
 
-**LibreTracks** es una aplicación web tipo DAW / reproductor multipista en vivo (estilo *Ableton Live / Playback / Reaper* para músicos y directores de alabanza/escenario). Permite importar canciones por carpetas o stems sueltos (`.wav`, `.mp3`, `.flac`, `.ogg`, `.m4a`), armar un **Setlist**, controlar secciones en tiempo real (saltos cuantizados, loops tipo *Vamp*, metrónomo/click dinámico, guía hablada/cues), mezclar niveles/paneos/buses (`MAIN` y `CUE/CLICK`), y controlar el escenario desde una vista remota vía `BroadcastChannel`.
+**OmniTracks** es una aplicación web tipo DAW / reproductor multipista en vivo (estilo *Ableton Live / Playback / Reaper* para músicos y directores de alabanza/escenario). Permite importar canciones por carpetas o stems sueltos (`.wav`, `.mp3`, `.flac`, `.ogg`, `.m4a`), armar un **Setlist**, controlar secciones en tiempo real (saltos cuantizados, loops tipo *Vamp*, metrónomo/click dinámico, guía hablada/cues), mezclar niveles/paneos/buses (`MAIN` y `CUE/CLICK`), y controlar el escenario desde una vista remota vía `BroadcastChannel`.
 
 ---
 

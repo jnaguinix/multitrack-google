@@ -1,9 +1,10 @@
 {
-  "name": "libretracks-desktop",
+  "name": "omnitracks-desktop",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.2.2",
   "scripts": {
-    "build": "tauri build --no-bundle --target x86_64-pc-windows-msvc"
+    "build": "tauri build --target x86_64-pc-windows-msvc",
+    "build:portable": "tauri build --no-bundle --target x86_64-pc-windows-msvc"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.0.0"

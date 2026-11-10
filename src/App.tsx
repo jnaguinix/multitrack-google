@@ -1433,10 +1433,10 @@ export default function App() {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `${proj.title.toLowerCase().replace(/\s+/g, '-')}.libretracks.json`;
+    a.download = `${proj.title.toLowerCase().replace(/\s+/g, '-')}.omnitracks.json`;
     a.click();
     URL.revokeObjectURL(url);
-    showToast('Archivo .libretracks.json exportado');
+    showToast('Archivo .omnitracks.json exportado');
   };
 
   const handleImportJsonFile = async (file: File) => {
@@ -1444,7 +1444,7 @@ export default function App() {
       const text = await file.text();
       const parsed = JSON.parse(text) as SongProject;
       if (!parsed.title || !Array.isArray(parsed.tracks)) {
-        showToast('El archivo JSON no tiene un formato LibreTracks válido');
+        showToast('El archivo JSON no tiene un formato de OmniTracks válido');
         return;
       }
       const importedProj: SongProject = normalizeProjectSectionsToTime({

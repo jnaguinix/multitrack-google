@@ -1,13 +1,15 @@
 use base64::{engine::general_purpose::STANDARD, Engine};
-use libretracks_desktop::{
+use omnitracks_desktop::{
     lan::{Device, Server},
     protocol::{Dispatch, Receipt, Role, Snapshot},
 };
 use qrcode::{render::svg, QrCode};
 use serde::Serialize;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-use tauri::State;
+use tauri::{Manager, State};
 use tokio::sync::Mutex;
+mod updates;
+use updates::{desktop_update_check, desktop_update_download, desktop_update_install};
 
 const PORT: u16 = 8765;
 
@@ -78,16 +80,22 @@ fn connection_info(server: &Server) -> Result<ConnectionInfo, String> {
 }
 
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct Status {
     interfaces: Vec<Interface>,
     connection: Option<ConnectionInfo>,
+    updates_enabled: bool,
 }
 
 #[tauri::command]
-async fn remote_status(state: State<'_, RemoteState>) -> Result<Status, String> {
+async fn remote_status(
+    state: State<'_, RemoteState>,
+    updater: State<'_, updates::PendingUpdate>,
+) -> Result<Status, String> {
     let running = state.0.lock().await;
     Ok(Status {
         interfaces: interfaces()?,
+        updates_enabled: updater.enabled,
         connection: running
             .as_ref()
             .filter(|server| server.is_running())
@@ -186,13 +194,20 @@ fn main() {
     tracing_subscriber::fmt().with_target(false).init();
     tauri::Builder::default()
         .manage(RemoteState::default())
+        .setup(|app| {
+            app.manage(updates::init(app.handle()));
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             remote_status,
             remote_start,
             remote_stop,
             remote_kick,
-            remote_exchange
+            remote_exchange,
+            desktop_update_check,
+            desktop_update_download,
+            desktop_update_install
         ])
         .run(tauri::generate_context!())
-        .expect("LibreTracks Desktop");
+        .expect("OmniTracks");
 }

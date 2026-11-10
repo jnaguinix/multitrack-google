@@ -1,5 +1,5 @@
 
-# Informe del PoC LibreTracks Desktop
+# Informe del PoC de OmniTracks
 
 Banco local en Windows x64, Tauri 2.12.5 y WebView2 157. La prueba de reproducción usó cuatro WAV sintéticos de 45 s y dos clientes Chrome en el mismo equipo. «No medido» indica que no hay evidencia de ejecución para ese caso.
 
@@ -8,7 +8,7 @@ Banco local en Windows x64, Tauri 2.12.5 y WebView2 157. La prueba de reproducci
 | Pregunta | Respuesta | Evidencia |
 |---|---|---|
 | 1. ¿Igual estabilidad con 20 pistas en Chrome y Tauri? | No medido | Falta la comparación de 15 min en el equipo del baterista. La prueba corta de WebView2 registró ocho underruns. |
-| 2. ¿Funcionan OPFS en Worker, IndexedDB, AudioContext y scheduler? | Sí, en la prueba local | WebView2 escribió y leyó OPFS con `createSyncAccessHandle` en un Worker y escribió y leyó IndexedDB. LibreTracks reprodujo cuatro pistas con modo efectivo streaming, handles síncronos activos, 64 lecturas y cero errores de lectura. Se observó el salto cuantizado durante la reproducción. |
+| 2. ¿Funcionan OPFS en Worker, IndexedDB, AudioContext y scheduler? | Sí, en la prueba local | WebView2 escribió y leyó OPFS con `createSyncAccessHandle` en un Worker y escribió y leyó IndexedDB. OmniTracks reprodujo cuatro pistas con modo efectivo streaming, handles síncronos activos, 64 lecturas y cero errores de lectura. Se observó el salto cuantizado durante la reproducción. |
 | 3. ¿Se puede seleccionar salida y separar música/click? | Parcial | El código usa la salida predeterminada de Windows y ofrece Split-Mono en un único dispositivo estéreo. Verificación física no medida. |
 | 4. ¿Qué pasa con la biblioteca de Netlify? | Parcial | Un perfil nuevo de WebView2 abrió la biblioteca vacía. El JSON sintético restauró cuatro pistas descritas, 113 BPM, una sección y ganancia 0,33. El nuevo proyecto quedó con cero registros de audio. Migración desde una biblioteca real de Netlify no medida. |
 | 5. ¿Funciona el flujo completo sin Internet y con QR? | Parcial | El ejecutable abrió el contenido local y dos navegadores del mismo equipo se emparejaron mediante las URL de los QR. El transporte siguió al detener el servidor y durante la desconexión emulada en WebView2. Arranque con WAN desconectada y escaneo desde teléfonos físicos no medidos. |

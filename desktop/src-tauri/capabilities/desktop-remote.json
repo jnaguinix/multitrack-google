@@ -7,6 +7,9 @@
     "allow-remote-start",
     "allow-remote-stop",
     "allow-remote-kick",
-    "allow-remote-exchange"
+    "allow-remote-exchange",
+    "allow-desktop-update-check",
+    "allow-desktop-update-download",
+    "allow-desktop-update-install"
   ]
 }

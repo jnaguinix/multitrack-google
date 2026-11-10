@@ -1,14 +1,13 @@
-# LibreTracks
+# OmniTracks
 
-Guía para retomar el proyecto desde otro agente o IDE. LibreTracks reproduce multitracks en directo. El objetivo principal es que el audio siga estable en un portátil modesto, también sin Internet y con teléfonos conectados por LAN.
+Guía para retomar el proyecto desde otro agente o IDE. OmniTracks reproduce multitracks en directo. El objetivo principal es que el audio siga estable en un portátil modesto, también sin Internet y con teléfonos conectados por LAN.
 
 ## Estado del repositorio
 
 - Repositorio [jnaguinix/multitrack-google](https://github.com/jnaguinix/multitrack-google).
-- `main` es la rama web. Se confirmó el push de `fcd3233` con los rediseños de Setlist y En vivo, y de `7ba4a67` con el encabezado compacto de Setlist. El estado del despliegue de Netlify quedó por verificar.
-- `poc/tauri-desktop` es la rama local de escritorio y parte del commit `9ab6908`. El directorio de trabajo contiene cambios pendientes en escritorio y en el frontend compartido, incluido el archivo nuevo `src/utils/songWaveform.ts`. Empieza por `git status --short --branch` y revisa el diff antes de editar, cambiar de rama o preparar un commit.
-- Al verificar GitHub, solo estaba publicada `main`. Para retomar escritorio con Antigravity en el mismo equipo, abre el repositorio local. Para clonarlo desde otro equipo, hace falta publicar la rama de escritorio con sus cambios pendientes. Mantén separado el PoC de `main`. Los cambios web que ya están en `main` se llevaron en commits independientes.
-- Los ejecutables son artefactos locales ignorados. El último de esta iteración se generó como `desktop/src-tauri/target/x86_64-pc-windows-msvc/release/libretracks-desktop-setlist-compacto.exe`.
+- El merge local `fded5ef` integró `poc/tauri-desktop` en `main` conservando los cambios web. `main` puede compilar ambos destinos. Netlify sigue usando el build web.
+- Para retomar en otro equipo, usa `main` del repositorio en GitHub. Empieza por `git status --short --branch` y revisa los cambios locales antes de cambiar de rama o preparar un commit.
+- Los ejecutables son artefactos locales ignorados. Consulta la [guía de escritorio](desktop/README.md) para generar el instalador NSIS x64 o el ejecutable portátil de diagnóstico.
 
 ## Qué hace cada vista
 
@@ -36,7 +35,7 @@ Guía para retomar el proyecto desde otro agente o IDE. LibreTracks reproduce mu
 - **Músicos** usa `/monitor` en solo lectura, con cuenta regresiva, setlist, secciones y saltos. **Sonidista** usa `/mezclador` con volumen, paneo, mute y solo por pista. Los únicos comandos admitidos por ese rol son `setTrackGain`, `setTrackPan`, `setTrackMute` y `setTrackSolo`. La ganancia remota admite valores de 0 a 1 y el paneo de −1 a +1. Split-Mono centra el paneo de pista para separar música y click.
 - Mantén la validación del rol, la revisión de pistas, los rangos, el límite de frecuencia y las colas acotadas en el servidor. Los comandos se aplican fuera del scheduler de audio. El puente intercambia como máximo un lote cada 100 ms y toma la lectura de señal solo mientras hay reproducción y un mezclador conectado. El fader táctil envía el ajuste al soltar la bolita.
 - Se confirmó en un Android que el navegador necesitaba el permiso **Dispositivos cercanos** o **Red local**. El panel muestra el aviso junto a los QR. Si se rechazó el permiso, revisar los ajustes del navegador en Android y volver a abrir el QR.
-- El PoC distribuye un `.exe` sin instalador y requiere WebView2 Evergreen. El actualizador firmado queda fuera del alcance actual. Para distribuir futuras actualizaciones automáticas habría que añadir el actualizador a una primera versión instalable.
+- El instalador NSIS incluye WebView2 para la instalación sin Internet. La compilación de publicación incluye la clave pública del actualizador. El operador busca, descarga e instala versiones firmadas desde la app con el transporte y el servidor LAN detenidos. Falta validar el audio en el portátil real antes de publicar.
 
 ## Compilar y validar
 

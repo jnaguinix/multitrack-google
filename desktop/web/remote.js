@@ -373,6 +373,10 @@
           body: JSON.stringify({ token }),
           cache: 'no-store',
         });
+        if (response.status === 503) {
+          connection.textContent = 'El portátil no admite más dispositivos en este momento. Libera un cupo y vuelve a abrir el QR.';
+          return;
+        }
         if (!response.ok) throw new Error('pairing failed');
       }
       await connect();

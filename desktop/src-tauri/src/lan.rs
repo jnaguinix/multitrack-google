@@ -42,6 +42,7 @@ struct Session {
     id: u32,
     role: Role,
     connection: Option<Connection>,
+    disconnected_at: Instant,
     recent_commands: VecDeque<Instant>,
 }
 
@@ -332,6 +333,7 @@ impl Hub {
                 .is_some_and(|connection| connection.id == connection_id)
             {
                 session.connection = None;
+                session.disconnected_at = Instant::now();
                 let id = session.id;
                 inner.queue.retain(|entry| entry.device_id != id);
             }
@@ -473,9 +475,23 @@ async fn pair(
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     };
     let mut inner = hub.inner.lock().expect("LAN state");
-    if hub.cancel.is_cancelled() || inner.sessions.len() >= SESSION_LIMIT {
-        tracing::warn!(?role, "session limit reached or listener stopped");
+    if hub.cancel.is_cancelled() {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    }
+    if inner.sessions.len() >= SESSION_LIMIT {
+        let oldest = inner
+            .sessions
+            .iter()
+            .filter(|(_, session)| session.connection.is_none())
+            .min_by_key(|(_, session)| (session.disconnected_at, session.id))
+            .map(|(key, _)| key.clone());
+        let Some(oldest) = oldest else {
+            tracing::warn!(?role, "all LAN session slots are in use");
+            return StatusCode::SERVICE_UNAVAILABLE.into_response();
+        };
+        if let Some(session) = inner.sessions.remove(&oldest) {
+            tracing::info!(device_id = session.id, "reclaimed disconnected LAN session");
+        }
     }
     let id = inner.id();
     let cookie = format!("{}={key}; Path=/; HttpOnly; SameSite=Strict", role.cookie());
@@ -485,6 +501,7 @@ async fn pair(
             id,
             role,
             connection: None,
+            disconnected_at: Instant::now(),
             recent_commands: VecDeque::new(),
         },
     );
@@ -689,6 +706,7 @@ mod tests {
                         id,
                         role: Role::Mixer,
                         connection: None,
+                        disconnected_at: Instant::now(),
                         recent_commands: VecDeque::new(),
                     },
                 );

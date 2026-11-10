@@ -1,5 +1,5 @@
 use futures_util::{SinkExt, StreamExt};
-use libretracks_desktop::{
+use omnitracks_desktop::{
     lan::Server,
     protocol::{Clock, Outcome, Receipt, Role, Snapshot, Song, Track},
 };
@@ -132,6 +132,47 @@ fn status(error: Error) -> http::StatusCode {
         Error::Http(response) => response.status(),
         other => panic!("unexpected handshake error: {other}"),
     }
+}
+
+#[tokio::test]
+async fn reclaims_disconnected_sessions_without_evicting_connected_devices() {
+    let server = start().await;
+    let role = Role::Monitor;
+    let (addr, token) = pairing(&server, role);
+    let origin = format!("http://{addr}");
+    let mut active = Vec::new();
+    for _ in 0..16 {
+        let (_, cookie) = session(&server, role).await;
+        let mut client = websocket(addr, role, &cookie, &origin).await.unwrap();
+        assert_eq!(state(&mut client).await["type"], "snapshot");
+        active.push((cookie, client));
+    }
+    assert!(post_pair(addr, role, &token)
+        .await
+        .starts_with("HTTP/1.1 503"));
+
+    let (old_cookie, mut disconnected) = active.pop().unwrap();
+    disconnected.close(None).await.unwrap();
+    time::timeout(Duration::from_secs(2), async {
+        while server.hub.devices().len() == 16 {
+            time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .unwrap();
+
+    let (_, new_cookie) = session(&server, role).await;
+    let rejected = websocket(addr, role, &old_cookie, &origin)
+        .await
+        .unwrap_err();
+    assert_eq!(status(rejected), http::StatusCode::UNAUTHORIZED);
+    let mut replacement = websocket(addr, role, &new_cookie, &origin).await.unwrap();
+    assert_eq!(state(&mut replacement).await["type"], "snapshot");
+    assert_eq!(server.hub.devices().len(), 16);
+    assert!(post_pair(addr, role, &token)
+        .await
+        .starts_with("HTTP/1.1 503"));
+    server.stop().await;
 }
 
 #[tokio::test]

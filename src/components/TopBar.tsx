@@ -50,7 +50,7 @@ export const TopBar: React.FC<TopBarProps> = ({
         onSelectView('setlist');
       }}>
         <AudioLines size={22} aria-hidden="true" />
-        LibreTracks
+        OmniTracks
       </a>
 
       <nav className="lt-nav" aria-label="Navegación principal">

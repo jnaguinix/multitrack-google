@@ -6,6 +6,7 @@ import type { SongProject } from '../../src/types/project';
 import { audioEngine } from '../../src/audio/audioEngine';
 import { applyMix, matches, snapshot, targets, trackIdentity } from './remoteState';
 import type { Clock, Dispatch, Receipt, Source } from './remoteState';
+import DesktopUpdates from './DesktopUpdates';
 import './connection.css';
 
 type Invoke = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
@@ -13,7 +14,7 @@ type Role = 'monitor' | 'mixer';
 type Device = { id: number; role: Role; address: string };
 type Pairing = { role: Role; url: string; qr: string };
 type Connection = { epoch: string; devices: Device[]; pairings: Pairing[] };
-type Status = { interfaces: { name: string; address: string }[]; connection: Connection | null };
+type Status = { interfaces: { name: string; address: string }[]; connection: Connection | null; updatesEnabled: boolean };
 type Exchange = { commands: Dispatch[]; devices: Device[] };
 type Props = Pick<Source, 'project' | 'setlist'> & {
   triggerHost: HTMLElement | null;
@@ -47,6 +48,7 @@ export default memo(function RemoteConnectionBridge({ project, setlist, activati
   const [address, setAddress] = useState('');
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState('');
+  const [updatesEnabled, setUpdatesEnabled] = useState(false);
 
   useLayoutEffect(() => {
     source.current = { project, setlist };
@@ -73,6 +75,7 @@ export default memo(function RemoteConnectionBridge({ project, setlist, activati
     try {
       const status = await invoke<Status>('remote_status');
       setInterfaces(status.interfaces);
+      setUpdatesEnabled(status.updatesEnabled);
       setAddress((previous) => status.interfaces.some((entry) => entry.address === previous)
         ? previous : status.interfaces[0]?.address ?? '');
       setRemoteConnection(status.connection);
@@ -167,7 +170,7 @@ export default memo(function RemoteConnectionBridge({ project, setlist, activati
             trackLevels = state.tracks.map(({ id }) => Math.round((tracks[id]?.rms ?? 0) * 100));
           } catch (error) {
             meterFailed = true;
-            console.warn('[LibreTracks LAN] Medidores remotos suspendidos', error);
+            console.warn('[OmniTracks LAN] Medidores remotos suspendidos', error);
           }
         }
 
@@ -206,10 +209,10 @@ export default memo(function RemoteConnectionBridge({ project, setlist, activati
         timer = setTimeout(exchange, EXCHANGE_MS);
       } catch (error) {
         if (!active()) return;
-        console.error('[LibreTracks LAN] Falló el puente', error);
+        console.error('[OmniTracks LAN] Falló el puente', error);
         setRemoteConnection(null);
         setNotice('Se interrumpió la conexión remota: ' + errorMessage(error));
-        void call('remote_stop', { epoch: activeEpoch }).catch((stopError: unknown) => console.error('[LibreTracks LAN]', stopError));
+        void call('remote_stop', { epoch: activeEpoch }).catch((stopError: unknown) => console.error('[OmniTracks LAN]', stopError));
       }
     }
 
@@ -243,7 +246,8 @@ export default memo(function RemoteConnectionBridge({ project, setlist, activati
         </button>,
         triggerHost,
       )}
-      <dialog ref={dialog} id="desktop-remote-dialog" className="lt-remote-dialog" aria-labelledby="desktop-remote-title">
+      <dialog ref={dialog} id="desktop-remote-dialog" className="lt-remote-dialog" aria-labelledby="desktop-remote-title"
+        onKeyDown={(event) => event.stopPropagation()}>
         <header>
           <h2 id="desktop-remote-title">Conexión remota</h2>
           <button type="button" className="lt-control" onClick={() => dialog.current?.close()}>Cerrar</button>
@@ -302,6 +306,12 @@ export default memo(function RemoteConnectionBridge({ project, setlist, activati
               </ul>
             )}
           </>
+        )}
+        {updatesEnabled && (
+          <DesktopUpdates invoke={invoke} canUpdate={() => {
+            const transport = audioEngine.getTransportState();
+            return !busy && !epoch.current && activationCount.current === 0 && !transport.isPlaying && !transport.isMountingSong;
+          }} />
         )}
       </dialog>
     </>

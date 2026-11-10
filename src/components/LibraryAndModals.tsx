@@ -86,7 +86,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
           <div className="flex items-center gap-3">
             <label className="px-4 py-2 rounded-lg bg-neutral-900 hover:bg-neutral-800 border border-neutral-800 text-xs font-semibold text-neutral-200 flex items-center gap-2 cursor-pointer transition-colors">
               <Upload className="w-4 h-4 text-studio-ink" />
-              <span>Importar .libretracks.json</span>
+              <span>Importar proyecto JSON</span>
               <input
                 type="file"
                 accept=".json,application/json"

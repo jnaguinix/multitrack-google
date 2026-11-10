@@ -314,7 +314,7 @@ export const RepertoireTreeSidebar: React.FC<RepertoireTreeSidebarProps> = ({
                         e.currentTarget.closest<HTMLElement>('[popover]')?.hidePopover();
                         onExportJson(song);
                       }}
-                      title="Exportar configuración .libretracks.json"
+                      title="Exportar configuración .omnitracks.json"
                       className="lt-control"
                     >
                       <Download className="w-3.5 h-3.5" /> Exportar JSON

@@ -1,6 +1,8 @@
-# LibreTracks Desktop PoC
+# OmniTracks
 
-Windows x64, Tauri v2 y WebView2 Evergreen. El ejecutable incrusta el build de escritorio y mantiene su perfil en el origen https://tauri.localhost. El modo web conserva su build habitual. La instalación de herramientas y la primera compilación requieren Internet. Para usar el ejecutable hacen falta WebView2 ya instalado y los archivos locales del repertorio.
+Windows x64, Tauri v2 y WebView2 Evergreen. El instalador único contiene OmniTracks y el redistribuible autónomo de WebView2. Si el equipo ya tiene el runtime, el instalador lo reutiliza.
+
+Si venías de LibreTracks Desktop, cierra esa versión antes de abrir OmniTracks. Windows registra OmniTracks como una instalación con nombre propio. Ambas versiones apuntan al mismo perfil de escritorio del usuario porque mantienen el identificador de Tauri y el origen `https://tauri.localhost`. Comprueba tu repertorio en OmniTracks antes de quitar la versión anterior. Si la desinstalas, deja desmarcada la opción de eliminar los datos de la aplicación.
 
 ## Compilar en Windows
 
@@ -12,16 +14,9 @@ winget install --id Microsoft.VisualStudio.2022.BuildTools -e --source winget --
 
 Instalar Rust con el instalador oficial y abrir una terminal nueva. [Rustup](https://rust-lang.org/tools/install/)
 
-Si Windows no tiene WebView2, descargar el **Evergreen Standalone Installer x64** en un equipo con Internet y copiarlo al portátil. Instalarlo antes de abrir el PoC, incluso si el portátil ya está sin Internet. [WebView2](https://developer.microsoft.com/microsoft-edge/webview2/#download-section)
+Ejecutar estos comandos desde la raíz del repositorio en una revisión que incluya `desktop/`. La primera compilación requiere Internet para descargar las dependencias, NSIS y WebView2.
 
 ~~~powershell
-.\MicrosoftEdgeWebView2RuntimeInstallerX64.exe /silent /install
-~~~
-
-Ejecutar estos comandos desde la raíz del repositorio.
-
-~~~powershell
-git switch poc/tauri-desktop
 rustup toolchain install stable-x86_64-pc-windows-msvc --profile minimal
 rustup override set stable-x86_64-pc-windows-msvc
 npm.cmd install --legacy-peer-deps --no-package-lock
@@ -29,24 +24,55 @@ npm.cmd ci --prefix desktop
 npm.cmd run lint
 npm.cmd run build
 npm.cmd --prefix desktop run build
-.\desktop\src-tauri\target\x86_64-pc-windows-msvc\release\libretracks-desktop.exe
+Get-ChildItem .\desktop\src-tauri\target\x86_64-pc-windows-msvc\release\bundle\nsis -Filter '*-setup.exe'
 ~~~
 
-El primer build produce dist/. El comando de escritorio usa el hook build-frontend.ps1 para producir desktop/dist/ y la CLI ejecuta tauri build --no-bundle. Los lockfiles de desktop fijan la CLI y las dependencias de Cargo. En esta rama se verifican las capacidades de Tauri y el esquema local con la [referencia de configuración](https://v2.tauri.app/reference/config/), [capabilities](https://v2.tauri.app/security/capabilities/) e [IPC](https://v2.tauri.app/develop/calling-rust/). La app usa el runtime instalado y no incluye el instalador, la firma ni el [updater](https://v2.tauri.app/plugin/updater/).
+Distribuye únicamente el `*-setup.exe` de la versión que vas a instalar. Cierra el ejecutable anterior antes de abrirlo. El instalador NSIS instala para el usuario actual y puede usarse sin Internet, también cuando falta WebView2. Windows puede mostrar una advertencia de editor desconocido mientras no se firme el ejecutable con Authenticode. La firma del actualizador de Tauri es independiente. [Instalador de Windows](https://v2.tauri.app/distribute/windows-installer/) · [Firma en Windows](https://v2.tauri.app/distribute/sign/windows/)
 
-Para guardar el log, ejecutar el mismo .exe desde PowerShell.
+Antes de compartir el paquete, ejecuta ese mismo instalador y abre OmniTracks desde el menú Inicio. Comprueba la versión en las propiedades del ejecutable instalado. Una compilación de prueba sin canal debe abrir con el servidor LAN apagado y sin el botón de actualización.
+
+El build web genera `dist/`. El build de escritorio usa `build-frontend.ps1` para generar `desktop/dist/`. Para crear el ejecutable portátil de diagnóstico, que sí requiere WebView2 instalado, y guardar su log desde PowerShell, ejecuta lo siguiente.
 
 ~~~powershell
-.\desktop\src-tauri\target\x86_64-pc-windows-msvc\release\libretracks-desktop.exe 2>&1 | Tee-Object -FilePath .\desktop-lan.log
+npm.cmd --prefix desktop run build:portable
+.\desktop\src-tauri\target\x86_64-pc-windows-msvc\release\omnitracks-desktop.exe 2>&1 | Tee-Object -FilePath .\desktop-lan.log
 ~~~
+
+## Publicar la primera versión con actualizaciones
+
+El instalador de prueba generado con `npm.cmd --prefix desktop run build` funciona por sí solo. Para que la instalación que entregues pueda actualizarse en el futuro, genera el **primer instalador distribuido** con la clave pública del canal. La versión portátil anterior y los instaladores de prueba se reemplazan manualmente una vez.
+
+Genera una clave de firma una sola vez, fuera del repositorio, y protégela con contraseña. Guarda la clave privada y su contraseña en una ubicación de respaldo bajo tu control. Usa la misma pareja para cada versión.
+
+~~~powershell
+$signingKey = Join-Path $env:LOCALAPPDATA 'OmniTracks-signing.key'
+npm.cmd --prefix desktop exec -- tauri signer generate -w $signingKey
+~~~
+
+Desde PowerShell, define la ruta y proporciona la contraseña sin escribirla en el historial. El script incrusta la clave pública y genera un solo `*-setup.exe` más el manifiesto que consume la app.
+
+~~~powershell
+$env:TAURI_SIGNING_PRIVATE_KEY = $signingKey
+$signingPassword = Read-Host 'Contraseña de firma' -AsSecureString
+$env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD = [System.Net.NetworkCredential]::new('', $signingPassword).Password
+try {
+    powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\desktop\build-release.ps1 -PublicKeyFile "$signingKey.pub"
+} finally {
+    Remove-Item Env:TAURI_SIGNING_PRIVATE_KEY, Env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD
+}
+~~~
+
+Después de validar en el portátil real, publica en GitHub Releases con el tag `desktop-v<versión>` apuntando al commit exacto del build. Sube el instalador y `latest.json` desde la carpeta que indica el script. La release de escritorio debe quedar marcada como **Latest** para que el enlace del manifiesto la resuelva. El manifiesto incluye la firma, así que el usuario solo descarga el instalador en la primera instalación. Mantén las versiones de escritorio en orden ascendente y sincroniza `tauri.conf.json`, `Cargo.toml` y `package.json` con sus lockfiles. [Actualizador de Tauri](https://v2.tauri.app/plugin/updater/)
+
+En una app instalada con ese canal, abre **Conexión remota → Buscar actualizaciones** cuando el transporte y el servidor LAN estén detenidos. La app consulta GitHub, descarga y comprueba la firma antes de que el operador elija **Cerrar e instalar**. Se puede seguir usando OmniTracks sin Internet. Antes de distribuir, prueba una actualización entre dos versiones firmadas en una instalación de ensayo y confirma que conserva el Setlist y el audio local.
 
 ## Conectar los teléfonos
 
-1. Importar y preparar las pistas locales en LibreTracks. Abrir **Conexión remota**, elegir la IPv4 privada del Wi-Fi o Ethernet del portátil y activar el servidor. Usa el puerto TCP 8765 en esa interfaz. Si cambia la IP, apagar el servidor y volver a elegir la interfaz.
+1. Importar y preparar las pistas locales en OmniTracks. Abrir **Conexión remota**, elegir la IPv4 privada del Wi-Fi o Ethernet del portátil y activar el servidor. Usa el puerto TCP 8765 en esa interfaz. Si cambia la IP, apagar el servidor y volver a elegir la interfaz.
 2. Escanear **Músicos** para el monitor o **Sonidista** para volumen, paneo, mute (M) y solo (S) por pista. Los móviles usan el navegador de la misma LAN. Si la red tiene aislamiento entre clientes Wi-Fi o el firewall bloquea la entrada, el QR no será accesible desde otro dispositivo.
 3. **Expulsar** revoca la sesión del dispositivo y descarta los comandos que sigan en la cola. Un ajuste que ya llegó al reproductor puede terminar de aplicarse. Quien conserve un QR vigente puede volver a emparejarse al escanearlo. Apagar y encender regenera ambos QR y termina todas las sesiones. Los enlaces y cookies funcionan por HTTP en la LAN. Compartir el QR de sonidista solo con su operador.
 
-El servidor admite 16 sesiones por activación. El control remoto acepta únicamente pistas del proyecto actual, ganancias 0–1 y paneo de −1 a +1. Los ajustes locales de ganancia pueden superar 1.0. En Split-Mono, el motor centra el paneo de pista para conservar la separación de las salidas. El teléfono envía la ganancia y el paneo al soltar el control y muestra el estado confirmado por el portátil. El log de Rust incluye resultado y milisegundos hasta el acuse del estado aplicado, incluyendo el siguiente intercambio IPC. Esa cifra no mide la latencia hasta el altavoz.
+El servidor admite hasta 16 sesiones simultáneas. Si se llena, un emparejamiento nuevo reutiliza el cupo de la sesión desconectada más antigua. Un dispositivo cuya sesión se reutilizó debe escanear el QR otra vez. El control remoto acepta únicamente pistas del proyecto actual, ganancias 0–1 y paneo de −1 a +1. Los ajustes locales de ganancia pueden superar 1.0. En Split-Mono, el motor centra el paneo de pista para conservar la separación de las salidas. El teléfono envía la ganancia y el paneo al soltar el control y muestra el estado confirmado por el portátil. El log de Rust incluye resultado y milisegundos hasta el acuse del estado aplicado, incluyendo el siguiente intercambio IPC. Esa cifra no mide la latencia hasta el altavoz.
 
 ## Pruebas reproducibles
 
@@ -65,6 +91,6 @@ npm.cmd run preview -- --host 127.0.0.1 --strictPort
 3. Usar el mismo material de 20 pistas, 15 min y seis canciones en Chrome, Tauri apagado y Tauri con 3–5 teléfonos. Mantener el modo y el ruteo iguales. Registrar CPU y RAM del árbol de procesos por intervalos de 5 s, RAM inicial y final, glitches audibles o grabados, y tiempo desde la transición hasta el primer sonido de la siguiente canción ya preparada. Para el tiempo al sonido, grabar la salida de la interfaz y anotar el disparo en la misma captura.
 4. Elegir en Windows la interfaz que usará el reproductor. En **Ajustes de reproducción**, activar **Split-Mono** y comprobar ambos canales con la interfaz real. El ruteo previsto es click/guía por L y música por R. El dispositivo se elige en Windows porque el reproductor actual usa la salida por defecto.
 5. Repetir el arranque con WAN desconectada y LAN activa. Abrir la app, recuperar el Setlist y reproducir con QR. Durante la canción desconectar WAN, Wi‑Fi y un teléfono en pruebas separadas, y luego reiniciar el router. Anotar si el audio continúa, qué ve cada cliente y si la sesión se recupera. Probar el acceso entrante con la red en perfil Público y Privado según la política del equipo. No desactivar el firewall. Si se necesita una regla temporal, usar solo el ejecutable, el puerto 8765, la subred local y el perfil Privado, con autorización del administrador. [Reglas de Firewall de Windows](https://learn.microsoft.com/en-us/windows/security/operating-system-security/network-security/windows-firewall/rules)
-6. Con un perfil Tauri nuevo, abrir Biblioteca y compararla con el navegador de Netlify. Probar la importación de un .libretracks.json conocido. El JSON contiene metadatos, pistas descritas, mezcla y secciones. Los blobs, handles y archivos PCM viven aparte y no viajan en ese JSON. Registrar cuánto trabajo hace falta para recuperar la canción y el Setlist.
+6. Con un perfil Tauri nuevo, abrir Biblioteca y compararla con el navegador de Netlify. Probar la importación de un `.omnitracks.json` y un `.libretracks.json` anterior. El JSON contiene metadatos, pistas descritas, mezcla y secciones. Los blobs, handles y archivos PCM viven aparte y no viajan en ese JSON. Registrar cuánto trabajo hace falta para recuperar la canción y el Setlist.
 
 Para el diagnóstico se conserva DevTools en el ejecutable de PoC. No hay un puerto de depuración activado por la aplicación. La decisión de plataforma se toma con la matriz de INFORME_POC.md y las mediciones del equipo real.
