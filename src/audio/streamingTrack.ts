@@ -407,9 +407,21 @@ export class StreamingTrack {
     source.buffer = buffer;
     source.detune.value = this.pitchSemitones * 100;
 
-    // 8 ms micro-fade-in to prevent digital edge clicks
-    fadeGain.gain.setValueAtTime(0.0001, startWhen);
-    fadeGain.gain.linearRampToValueAtTime(1.0, startWhen + FADE_DURATION_SEC);
+    // A chunk is contiguous if it starts at offset 0 and aligns with the previous chunk's end time
+    const prevSource = this.scheduledSources.get(chunkIndex - 1);
+    const isContiguous =
+      offsetInChunkSec === 0 &&
+      Boolean(prevSource) &&
+      Math.abs(prevSource!.endCtxTime - startWhen) < 0.005;
+
+    if (isContiguous) {
+      // Seamless contiguous playback: maintain 1.0 gain without dip/fade-in
+      fadeGain.gain.setValueAtTime(1.0, startWhen);
+    } else {
+      // Starting mid-playback, play, seek, or jump: 8 ms micro-fade-in to prevent digital edge clicks
+      fadeGain.gain.setValueAtTime(0.0001, startWhen);
+      fadeGain.gain.linearRampToValueAtTime(1.0, startWhen + FADE_DURATION_SEC);
+    }
 
     source.connect(fadeGain);
     fadeGain.connect(this.destinationNode);
