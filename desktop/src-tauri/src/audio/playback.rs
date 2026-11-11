@@ -474,8 +474,8 @@ impl PlaybackEngine {
             .default_output_config()
             .map_err(|e| format!("Error en configuración de salida: {e}"))?;
 
-        let sample_rate = default_config.sample_rate();
-        self.sample_rate.store(sample_rate, Ordering::SeqCst);
+        let sample_rate_u32 = default_config.sample_rate();
+        self.sample_rate.store(sample_rate_u32, Ordering::SeqCst);
 
         let channels = default_config.channels() as usize;
 
@@ -522,6 +522,7 @@ impl PlaybackEngine {
 
                     let mut mixed_l = vec![0.0f32; frames];
                     let mut mixed_r = vec![0.0f32; frames];
+                    let mut callback_min_track_frames = u64::MAX;
 
                     for (consumer_arc, gain_bits, pan_val, muted, soloed) in &tracks_arc {
                         let is_muted = muted.load(Ordering::Relaxed);
@@ -530,6 +531,10 @@ impl PlaybackEngine {
                         if is_muted || (any_solo && !is_solo) {
                             // Still drain consumer so it stays in sync
                             if let Ok(mut c) = consumer_arc.lock() {
+                                let unread_frames = (c.slots() / 2) as u64;
+                                if unread_frames < callback_min_track_frames {
+                                    callback_min_track_frames = unread_frames;
+                                }
                                 for _ in 0..frames * 2 {
                                     let _ = c.pop();
                                 }
@@ -545,6 +550,11 @@ impl PlaybackEngine {
                         let pan_r = angle.sin() * g;
 
                         if let Ok(mut c) = consumer_arc.lock() {
+                            let unread_frames = (c.slots() / 2) as u64;
+                            if unread_frames < callback_min_track_frames {
+                                callback_min_track_frames = unread_frames;
+                            }
+
                             let mut had_underrun = false;
                             for f in 0..frames {
                                 let l = match c.pop() {
@@ -566,6 +576,23 @@ impl PlaybackEngine {
                             }
                             if had_underrun {
                                 stats.underruns.fetch_add(1, Ordering::Relaxed);
+                            }
+                        }
+                    }
+
+                    if callback_min_track_frames != u64::MAX {
+                        let sr = (sample_rate_u32.max(1)) as u64;
+                        let track_level_ms = (callback_min_track_frames * 1000) / sr;
+                        let mut current_min = stats.min_ring_buffer_level_ms.load(Ordering::Relaxed);
+                        while track_level_ms < current_min {
+                            match stats.min_ring_buffer_level_ms.compare_exchange_weak(
+                                current_min,
+                                track_level_ms,
+                                Ordering::Relaxed,
+                                Ordering::Relaxed,
+                            ) {
+                                Ok(_) => break,
+                                Err(actual) => current_min = actual,
                             }
                         }
                     }
@@ -801,5 +828,101 @@ pub mod tests {
                 assert_eq!(master_r[i], 0.0, "Muestra espuria en canal derecho en frame {i}");
             }
         }
+    }
+
+    #[test]
+    fn test_playback_renders_n_blocks_and_increments_callbacks() {
+        let stats = Arc::new(AudioStreamStats::default());
+
+        // Create a ring buffer with 48000 samples (1 sec of stereo audio = 24000 frames)
+        let (mut prod, cons) = rtrb::RingBuffer::<f32>::new(48000);
+        for _ in 0..24000 {
+            let _ = prod.push(0.5);
+            let _ = prod.push(0.5);
+        }
+
+        let tracks = vec![
+            (
+                Arc::new(std::sync::Mutex::new(cons)),
+                Arc::new(AtomicU32::new(1.0f32.to_bits())),
+                Arc::new(AtomicI32::new(0)),
+                Arc::new(AtomicBool::new(false)),
+                Arc::new(AtomicBool::new(false)),
+            )
+        ];
+
+        let n = 25;
+        let frames_per_block = 256;
+        let sr = 48000u64;
+
+        // Simulate N callback invocations
+        for _ in 0..n {
+            let t0 = Instant::now();
+            stats.callbacks.fetch_add(1, Ordering::Relaxed);
+
+            // Audio callback processing
+            let mut callback_min_track_frames = u64::MAX;
+            let mut mixed_l = vec![0.0f32; frames_per_block];
+            let mut mixed_r = vec![0.0f32; frames_per_block];
+
+            for (consumer_arc, gain_bits, _pan_val, _, _) in &tracks {
+                if let Ok(mut c) = consumer_arc.lock() {
+                    let unread_frames = (c.slots() / 2) as u64;
+                    if unread_frames < callback_min_track_frames {
+                        callback_min_track_frames = unread_frames;
+                    }
+                    let g = f32::from_bits(gain_bits.load(Ordering::Relaxed));
+                    for f in 0..frames_per_block {
+                        let l = c.pop().unwrap_or(0.0);
+                        let r = c.pop().unwrap_or(0.0);
+                        mixed_l[f] += l * g;
+                        mixed_r[f] += r * g;
+                    }
+                }
+            }
+
+            if callback_min_track_frames != u64::MAX {
+                let track_level_ms = (callback_min_track_frames * 1000) / sr;
+                let mut current_min = stats.min_ring_buffer_level_ms.load(Ordering::Relaxed);
+                while track_level_ms < current_min {
+                    match stats.min_ring_buffer_level_ms.compare_exchange_weak(
+                        current_min,
+                        track_level_ms,
+                        Ordering::Relaxed,
+                        Ordering::Relaxed,
+                    ) {
+                        Ok(_) => break,
+                        Err(actual) => current_min = actual,
+                    }
+                }
+            }
+
+            let dur_us = t0.elapsed().as_micros() as u64;
+            let mut max_us = stats.max_callback_duration_us.load(Ordering::Relaxed);
+            while dur_us > max_us {
+                match stats.max_callback_duration_us.compare_exchange_weak(
+                    max_us,
+                    dur_us,
+                    Ordering::Relaxed,
+                    Ordering::Relaxed,
+                ) {
+                    Ok(_) => break,
+                    Err(actual) => max_us = actual,
+                }
+            }
+        }
+
+        assert_eq!(stats.callbacks.load(Ordering::Relaxed), n as u64);
+        assert_eq!(stats.underruns.load(Ordering::Relaxed), 0);
+        let min_buf = stats.min_ring_buffer_level_ms.load(Ordering::Relaxed);
+        assert!(min_buf <= 500 && min_buf > 0, "Buffer min was {}", min_buf);
+        let _max_dur = stats.max_callback_duration_us.load(Ordering::Relaxed);
+
+        // Test stats reset
+        stats.reset();
+        assert_eq!(stats.callbacks.load(Ordering::Relaxed), 0);
+        assert_eq!(stats.underruns.load(Ordering::Relaxed), 0);
+        assert_eq!(stats.max_callback_duration_us.load(Ordering::Relaxed), 0);
+        assert_eq!(stats.min_ring_buffer_level_ms.load(Ordering::Relaxed), u64::MAX);
     }
 }

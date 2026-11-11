@@ -19,6 +19,7 @@
     "allow-audio-get-config",
     "allow-audio-set-config",
     "allow-audio-get-stats",
+    "allow-audio-reset-stats",
     "allow-audio-test-tone",
     "allow-audio-import-tracks",
     "allow-audio-import-track-bytes",

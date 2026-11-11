@@ -49,6 +49,14 @@ pub async fn audio_get_stats(
 }
 
 #[tauri::command]
+pub async fn audio_reset_stats(
+    state: State<'_, AudioEngineState>,
+) -> Result<(), String> {
+    state.reset_stats();
+    Ok(())
+}
+
+#[tauri::command]
 pub async fn audio_test_tone(
     state: State<'_, AudioEngineState>,
     device_name: Option<String>,

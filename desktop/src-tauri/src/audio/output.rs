@@ -53,11 +53,32 @@ pub struct TestToneResult {
     pub duration_ms: u64,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct AudioStreamStats {
     pub underruns: AtomicU64,
     pub callbacks: AtomicU64,
     pub max_callback_duration_us: AtomicU64,
+    pub min_ring_buffer_level_ms: AtomicU64,
+}
+
+impl Default for AudioStreamStats {
+    fn default() -> Self {
+        Self {
+            underruns: AtomicU64::new(0),
+            callbacks: AtomicU64::new(0),
+            max_callback_duration_us: AtomicU64::new(0),
+            min_ring_buffer_level_ms: AtomicU64::new(u64::MAX),
+        }
+    }
+}
+
+impl AudioStreamStats {
+    pub fn reset(&self) {
+        self.underruns.store(0, Ordering::Relaxed);
+        self.callbacks.store(0, Ordering::Relaxed);
+        self.max_callback_duration_us.store(0, Ordering::Relaxed);
+        self.min_ring_buffer_level_ms.store(u64::MAX, Ordering::Relaxed);
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -66,6 +87,7 @@ pub struct AudioStreamStatsSnapshot {
     pub underruns: u64,
     pub callbacks: u64,
     pub max_callback_duration_us: u64,
+    pub min_ring_buffer_level_ms: Option<u64>,
 }
 
 pub struct AudioEngineState {
@@ -80,13 +102,14 @@ pub struct AudioEngineState {
 impl AudioEngineState {
     pub fn new(settings_path: PathBuf) -> Self {
         let initial_settings = load_settings_from_disk(&settings_path).unwrap_or_default();
+        let stats = Arc::new(AudioStreamStats::default());
         Self {
             active_test_stream: Arc::new(Mutex::new(None)),
             settings_path,
             current_settings: Mutex::new(initial_settings),
-            stats: Arc::new(AudioStreamStats::default()),
+            stats: Arc::clone(&stats),
             import_cancellation: Mutex::new(std::collections::HashMap::new()),
-            playback: Arc::new(PlaybackEngine::new(Arc::new(AudioStreamStats::default()))),
+            playback: Arc::new(PlaybackEngine::new(Arc::clone(&stats))),
         }
     }
 
@@ -110,11 +133,23 @@ impl AudioEngineState {
     }
 
     pub fn get_stats(&self) -> AudioStreamStatsSnapshot {
+        let min_buf = self.stats.min_ring_buffer_level_ms.load(Ordering::Relaxed);
+        let min_ring_buffer_level_ms = if min_buf == u64::MAX {
+            None
+        } else {
+            Some(min_buf)
+        };
+
         AudioStreamStatsSnapshot {
             underruns: self.stats.underruns.load(Ordering::Relaxed),
             callbacks: self.stats.callbacks.load(Ordering::Relaxed),
             max_callback_duration_us: self.stats.max_callback_duration_us.load(Ordering::Relaxed),
+            min_ring_buffer_level_ms,
         }
+    }
+
+    pub fn reset_stats(&self) {
+        self.stats.reset();
     }
 }
 
@@ -480,15 +515,25 @@ mod tests {
         assert_eq!(initial_stats.callbacks, 0);
         assert_eq!(initial_stats.underruns, 0);
         assert_eq!(initial_stats.max_callback_duration_us, 0);
+        assert_eq!(initial_stats.min_ring_buffer_level_ms, None);
 
         state.stats.callbacks.fetch_add(42, Ordering::Relaxed);
         state.stats.underruns.fetch_add(1, Ordering::Relaxed);
         state.stats.max_callback_duration_us.store(150, Ordering::Relaxed);
+        state.stats.min_ring_buffer_level_ms.store(320, Ordering::Relaxed);
 
         let updated_stats = state.get_stats();
         assert_eq!(updated_stats.callbacks, 42);
         assert_eq!(updated_stats.underruns, 1);
         assert_eq!(updated_stats.max_callback_duration_us, 150);
+        assert_eq!(updated_stats.min_ring_buffer_level_ms, Some(320));
+
+        state.reset_stats();
+        let reset_stats = state.get_stats();
+        assert_eq!(reset_stats.callbacks, 0);
+        assert_eq!(reset_stats.underruns, 0);
+        assert_eq!(reset_stats.max_callback_duration_us, 0);
+        assert_eq!(reset_stats.min_ring_buffer_level_ms, None);
 
         let _ = std::fs::remove_dir_all(temp_dir);
     }

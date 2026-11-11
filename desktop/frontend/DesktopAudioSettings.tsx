@@ -32,6 +32,7 @@ interface AudioStreamStatsSnapshot {
   underruns: number;
   callbacks: number;
   maxCallbackDurationUs: number;
+  minRingBufferLevelMs?: number | null;
 }
 
 
@@ -76,11 +77,23 @@ export default memo(function DesktopAudioSettings({ triggerHost }: Props) {
     underruns: 0,
     callbacks: 0,
     maxCallbackDurationUs: 0,
+    minRingBufferLevelMs: null,
   });
 
   const pollStats = async () => {
     if (!invoke) return;
     try {
+      const s = await invoke<AudioStreamStatsSnapshot>('audio_get_stats');
+      if (s) setStats(s);
+    } catch {
+      // ignore
+    }
+  };
+
+  const handleResetStats = async () => {
+    if (!invoke) return;
+    try {
+      await invoke('audio_reset_stats');
       const s = await invoke<AudioStreamStatsSnapshot>('audio_get_stats');
       if (s) setStats(s);
     } catch {
@@ -194,6 +207,8 @@ export default memo(function DesktopAudioSettings({ triggerHost }: Props) {
               setSeekInputSec(Math.round(pb.positionSec * 10) / 10);
             }
           }
+          const s = await invoke<AudioStreamStatsSnapshot>('audio_get_stats');
+          if (s) setStats(s);
         } catch {
           // ignore
         }
@@ -840,15 +855,15 @@ export default memo(function DesktopAudioSettings({ triggerHost }: Props) {
               </div>
               <button
                 type="button"
-                onClick={() => void pollStats()}
+                onClick={() => void handleResetStats()}
                 className="text-[11px] text-neutral-400 hover:text-white flex items-center gap-1"
-                title="Actualizar métricas"
+                title="Reiniciar contadores a cero"
               >
                 <RefreshCw size={11} />
-                <span>Refrescar</span>
+                <span>Reiniciar contadores</span>
               </button>
             </div>
-            <div className="grid grid-cols-3 gap-2 text-center text-xs pt-1">
+            <div className="grid grid-cols-4 gap-2 text-center text-xs pt-1">
               <div className="p-2 rounded-lg bg-black/30 border border-neutral-800/80">
                 <div className="text-[10px] text-neutral-400 uppercase tracking-wider">Callbacks</div>
                 <div className="font-mono font-semibold text-neutral-200 mt-0.5">
@@ -857,7 +872,7 @@ export default memo(function DesktopAudioSettings({ triggerHost }: Props) {
               </div>
               <div className="p-2 rounded-lg bg-black/30 border border-neutral-800/80">
                 <div className="text-[10px] text-neutral-400 uppercase tracking-wider">Underruns</div>
-                <div className={`font-mono font-semibold mt-0.5 ${stats.underruns === 0 ? 'text-emerald-400' : 'text-rose-400 animate-pulse'}`}>
+                <div className={`font-mono font-semibold mt-0.5 ${stats.underruns === 0 ? 'text-emerald-400' : 'text-rose-400 animate-pulse font-bold'}`}>
                   {stats.underruns}
                 </div>
               </div>
@@ -865,6 +880,12 @@ export default memo(function DesktopAudioSettings({ triggerHost }: Props) {
                 <div className="text-[10px] text-neutral-400 uppercase tracking-wider">Duración Máx.</div>
                 <div className={`font-mono font-semibold mt-0.5 ${stats.maxCallbackDurationUs < 5000 ? 'text-emerald-400' : 'text-amber-400'}`}>
                   {stats.maxCallbackDurationUs > 0 ? `${stats.maxCallbackDurationUs} µs` : '0 µs'}
+                </div>
+              </div>
+              <div className="p-2 rounded-lg bg-black/30 border border-neutral-800/80">
+                <div className="text-[10px] text-neutral-400 uppercase tracking-wider">Búfer Mínimo</div>
+                <div className="font-mono font-semibold text-emerald-400 mt-0.5">
+                  {stats.minRingBufferLevelMs != null ? `${stats.minRingBufferLevelMs} ms` : '—'}
                 </div>
               </div>
             </div>

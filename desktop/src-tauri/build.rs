@@ -15,6 +15,7 @@ fn main() {
             "audio_get_config",
             "audio_set_config",
             "audio_get_stats",
+            "audio_reset_stats",
             "audio_test_tone",
             "audio_import_tracks",
             "audio_import_track_bytes",
