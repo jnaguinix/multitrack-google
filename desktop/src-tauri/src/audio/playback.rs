@@ -1444,6 +1444,16 @@ impl PlaybackEngine {
         };
         let stream_config: cpal::StreamConfig = default_config.into();
 
+        // Pre-allocated scratch buffers for callback (avoids heap allocation in audio thread)
+        let mut main_l = Vec::<f32>::with_capacity(4096);
+        let mut main_r = Vec::<f32>::with_capacity(4096);
+        let mut cue_l = Vec::<f32>::with_capacity(4096);
+        let mut cue_r = Vec::<f32>::with_capacity(4096);
+        let mut both_l = Vec::<f32>::with_capacity(4096);
+        let mut both_r = Vec::<f32>::with_capacity(4096);
+        let mut click_buf = Vec::<f32>::with_capacity(4096);
+        let mut guide_buf = Vec::<f32>::with_capacity(4096);
+
         let stream = device
             .build_output_stream(
                 stream_config,
@@ -1471,13 +1481,40 @@ impl PlaybackEngine {
                     }
 
                     let frames = data.len() / channels;
-                    let mut fade = fade_arc.lock().unwrap();
+
+                    // Ensure scratch buffers are correctly sized without reallocating
+                    if main_l.len() < frames {
+                        main_l.resize(frames, 0.0);
+                        main_r.resize(frames, 0.0);
+                        cue_l.resize(frames, 0.0);
+                        cue_r.resize(frames, 0.0);
+                        both_l.resize(frames, 0.0);
+                        both_r.resize(frames, 0.0);
+                        click_buf.resize(frames, 0.0);
+                        guide_buf.resize(frames, 0.0);
+                    }
+                    main_l[..frames].fill(0.0);
+                    main_r[..frames].fill(0.0);
+                    cue_l[..frames].fill(0.0);
+                    cue_r[..frames].fill(0.0);
+                    both_l[..frames].fill(0.0);
+                    both_r[..frames].fill(0.0);
+                    click_buf[..frames].fill(0.0);
+                    guide_buf[..frames].fill(0.0);
+
+                    let mut fade = match fade_arc.try_lock() {
+                        Ok(f) => f,
+                        Err(_) => {
+                            data.fill(0.0);
+                            return;
+                        }
+                    };
 
                     // Check buffering state BEFORE popping any frames from track consumers
                     if is_buffering_arc.load(Ordering::Relaxed) {
                         let mut min_avail_frames = u64::MAX;
                         for trk in tracks_guard.iter() {
-                            if let Ok(c) = trk.consumer.lock() {
+                            if let Ok(c) = trk.consumer.try_lock() {
                                 let avail = (c.slots() / 2) as u64;
                                 if avail < min_avail_frames {
                                     min_avail_frames = avail;
@@ -1491,8 +1528,8 @@ impl PlaybackEngine {
                             return;
                         } else {
                             is_buffering_arc.store(false, Ordering::SeqCst);
-                            let dur_ms = if let Some(t_start) = buffering_start_arc.lock().unwrap().take() {
-                                t_start.elapsed().as_millis() as u64
+                            let dur_ms = if let Ok(mut guard) = buffering_start_arc.try_lock() {
+                                guard.take().map(|t| t.elapsed().as_millis() as u64).unwrap_or(0)
                             } else {
                                 0
                             };
@@ -1504,13 +1541,6 @@ impl PlaybackEngine {
 
                     // Check if any track has solo
                     let any_solo = tracks_guard.iter().any(|t| t.soloed.load(Ordering::Relaxed));
-
-                    let mut main_l = vec![0.0f32; frames];
-                    let mut main_r = vec![0.0f32; frames];
-                    let mut cue_l = vec![0.0f32; frames];
-                    let mut cue_r = vec![0.0f32; frames];
-                    let mut both_l = vec![0.0f32; frames];
-                    let mut both_r = vec![0.0f32; frames];
                     let mut callback_min_track_frames = u64::MAX;
 
                     for trk in tracks_guard.iter() {
@@ -1519,7 +1549,7 @@ impl PlaybackEngine {
                         let track_bus = TrackBus::from_u8(trk.bus.load(Ordering::Relaxed));
 
                         if is_muted || (any_solo && !is_solo) {
-                            if let Ok(mut c) = trk.consumer.lock() {
+                            if let Ok(mut c) = trk.consumer.try_lock() {
                                 let unread_frames = (c.slots() / 2) as u64;
                                 if unread_frames < callback_min_track_frames {
                                     callback_min_track_frames = unread_frames;
@@ -1537,7 +1567,7 @@ impl PlaybackEngine {
                         let pan_l = angle.cos() * g;
                         let pan_r = angle.sin() * g;
 
-                        if let Ok(mut c) = trk.consumer.lock() {
+                        if let Ok(mut c) = trk.consumer.try_lock() {
                             let unread_frames = (c.slots() / 2) as u64;
                             if unread_frames < callback_min_track_frames {
                                 callback_min_track_frames = unread_frames;
@@ -1605,15 +1635,14 @@ impl PlaybackEngine {
                     let pitch_ratio = 2.0f64.powf(pitch_st as f64 / 12.0);
                     let end_song_f = start_song_f + (frames as f64 * pitch_ratio).round() as u64;
 
-                    let mut click_buf = vec![0.0f32; frames];
-                    if let Ok(mut met) = metronome_arc.lock() {
-                        met.render_block(start_song_f, end_song_f, frames, sample_rate_u32, &mut click_buf);
+                    if let Ok(mut met) = metronome_arc.try_lock() {
+                        met.render_block(start_song_f, end_song_f, frames, sample_rate_u32, &mut click_buf[..frames]);
                     }
 
-                    let mut guide_buf = vec![0.0f32; frames];
-                    if let Ok(mut gc) = guide_cue_arc.lock() {
-                        let sec_guard = sections_arc.lock().unwrap();
-                        gc.render_block(start_song_f, frames, sample_rate_u32, &sec_guard, &mut guide_buf);
+                    if let Ok(mut gc) = guide_cue_arc.try_lock() {
+                        if let Ok(sec_guard) = sections_arc.try_lock() {
+                            gc.render_block(start_song_f, frames, sample_rate_u32, &sec_guard, &mut guide_buf[..frames]);
+                        }
                     }
 
                     let is_split = split_mono_arc.load(Ordering::Relaxed);
@@ -2717,5 +2746,273 @@ pub mod tests {
         let state_reopened = engine.get_playback_state();
         assert!(!state_reopened.device_disconnected);
         assert_eq!(state_reopened.position_sec, 25.0, "Position was not preserved after reopen!");
+    }
+
+    #[test]
+    fn test_callback_10min_preallocation_benchmark() {
+        // 10 minutes at 48 kHz with 256-frame blocks
+        let total_callbacks = 112_500usize;
+        let frames_per_block = 256usize;
+        let num_tracks = 8usize;
+        let sr = 48000u64;
+
+        // Setup 8 tracks with ring buffers containing audio
+        fn make_tracks(num_tracks: usize) -> Vec<(
+            Arc<std::sync::Mutex<rtrb::Consumer<f32>>>,
+            Arc<std::sync::Mutex<rtrb::Producer<f32>>>,
+            Arc<AtomicU32>,
+            Arc<AtomicI32>,
+            Arc<AtomicBool>,
+            Arc<AtomicBool>,
+            Arc<AtomicU8>,
+        )> {
+            let mut list = Vec::new();
+            for i in 0..num_tracks {
+                let (mut prod, cons) = rtrb::RingBuffer::<f32>::new(48000);
+                for _ in 0..24000 {
+                    let _ = prod.push(0.3);
+                    let _ = prod.push(0.3);
+                }
+                list.push((
+                    Arc::new(std::sync::Mutex::new(cons)),
+                    Arc::new(std::sync::Mutex::new(prod)),
+                    Arc::new(AtomicU32::new(1.0f32.to_bits())),
+                    Arc::new(AtomicI32::new(0)),
+                    Arc::new(AtomicBool::new(false)),
+                    Arc::new(AtomicBool::new(false)),
+                    Arc::new(AtomicU8::new((i % 3) as u8)),
+                ));
+            }
+            list
+        }
+
+        // --- 1. MEDICIÓN ANTES: asignación de 8 vectores por callback + lock() ---
+        let tracks_before = make_tracks(num_tracks);
+        let stats_before = Arc::new(AudioStreamStats::default());
+        stats_before.min_ring_buffer_level_ms.store(u64::MAX, Ordering::Relaxed);
+        let fade_before = Arc::new(std::sync::Mutex::new(FadeEnvelope::new(FADE_MS, 48000)));
+
+        for _ in 0..total_callbacks {
+            let t0 = Instant::now();
+            stats_before.callbacks.fetch_add(1, Ordering::Relaxed);
+
+            let mut fade = fade_before.lock().unwrap();
+            let _ = fade.next_gain();
+
+            // Asignación dinámica en cada llamada (8 vectores por callback)
+            let mut main_l = vec![0.0f32; frames_per_block];
+            let mut main_r = vec![0.0f32; frames_per_block];
+            let mut cue_l = vec![0.0f32; frames_per_block];
+            let mut cue_r = vec![0.0f32; frames_per_block];
+            let mut both_l = vec![0.0f32; frames_per_block];
+            let mut both_r = vec![0.0f32; frames_per_block];
+            let click_buf = vec![0.0f32; frames_per_block];
+            let guide_buf = vec![0.0f32; frames_per_block];
+
+            let mut callback_min_track_frames = u64::MAX;
+
+            for (consumer_arc, prod_arc, gain_bits, _pan, _mute, _solo, bus_atomic) in &tracks_before {
+                if let Ok(mut c) = consumer_arc.lock() {
+                    let unread = (c.slots() / 2) as u64;
+                    if unread < callback_min_track_frames {
+                        callback_min_track_frames = unread;
+                    }
+                    let g = f32::from_bits(gain_bits.load(Ordering::Relaxed));
+                    let bus = TrackBus::from_u8(bus_atomic.load(Ordering::Relaxed));
+
+                    for f in 0..frames_per_block {
+                        let l = c.pop().unwrap_or(0.0);
+                        let r = c.pop().unwrap_or(0.0);
+                        match bus {
+                            TrackBus::Main => {
+                                main_l[f] += l * g;
+                                main_r[f] += r * g;
+                            }
+                            TrackBus::CueClick => {
+                                cue_l[f] += l * g + click_buf[f] + guide_buf[f];
+                                cue_r[f] += r * g;
+                            }
+                            TrackBus::Both => {
+                                both_l[f] += l * g;
+                                both_r[f] += r * g;
+                            }
+                        }
+                    }
+                }
+                // Reponer frames para simular feeder en reproducción continua de 10 min
+                if let Ok(mut p) = prod_arc.lock() {
+                    for _ in 0..(frames_per_block * 2) {
+                        let _ = p.push(0.3);
+                    }
+                }
+            }
+
+            if callback_min_track_frames != u64::MAX {
+                let track_level_ms = (callback_min_track_frames * 1000) / sr;
+                let mut current_min = stats_before.min_ring_buffer_level_ms.load(Ordering::Relaxed);
+                while track_level_ms < current_min {
+                    match stats_before.min_ring_buffer_level_ms.compare_exchange_weak(
+                        current_min,
+                        track_level_ms,
+                        Ordering::Relaxed,
+                        Ordering::Relaxed,
+                    ) {
+                        Ok(_) => break,
+                        Err(actual) => current_min = actual,
+                    }
+                }
+            }
+
+            let dur_us = t0.elapsed().as_micros() as u64;
+            let mut max_us = stats_before.max_callback_duration_us.load(Ordering::Relaxed);
+            while dur_us > max_us {
+                match stats_before.max_callback_duration_us.compare_exchange_weak(
+                    max_us,
+                    dur_us,
+                    Ordering::Relaxed,
+                    Ordering::Relaxed,
+                ) {
+                    Ok(_) => break,
+                    Err(actual) => max_us = actual,
+                }
+            }
+        }
+
+        // --- 2. MEDICIÓN DESPUÉS: búferes preasignados con fill(0.0) + try_lock() ---
+        let tracks_after = make_tracks(num_tracks);
+        let stats_after = Arc::new(AudioStreamStats::default());
+        stats_after.min_ring_buffer_level_ms.store(u64::MAX, Ordering::Relaxed);
+        let fade_after = Arc::new(std::sync::Mutex::new(FadeEnvelope::new(FADE_MS, 48000)));
+
+        // Preasignación de los 8 vectores una sola vez fuera del bucle
+        let mut main_l = Vec::<f32>::with_capacity(4096);
+        let mut main_r = Vec::<f32>::with_capacity(4096);
+        let mut cue_l = Vec::<f32>::with_capacity(4096);
+        let mut cue_r = Vec::<f32>::with_capacity(4096);
+        let mut both_l = Vec::<f32>::with_capacity(4096);
+        let mut both_r = Vec::<f32>::with_capacity(4096);
+        let mut click_buf = Vec::<f32>::with_capacity(4096);
+        let mut guide_buf = Vec::<f32>::with_capacity(4096);
+
+        for _ in 0..total_callbacks {
+            let t0 = Instant::now();
+            stats_after.callbacks.fetch_add(1, Ordering::Relaxed);
+
+            // try_lock sin bloqueo
+            let mut fade = match fade_after.try_lock() {
+                Ok(f) => f,
+                Err(_) => continue,
+            };
+            let _ = fade.next_gain();
+
+            // Reutilización sin alocaciones dinámicas
+            if main_l.len() < frames_per_block {
+                main_l.resize(frames_per_block, 0.0);
+                main_r.resize(frames_per_block, 0.0);
+                cue_l.resize(frames_per_block, 0.0);
+                cue_r.resize(frames_per_block, 0.0);
+                both_l.resize(frames_per_block, 0.0);
+                both_r.resize(frames_per_block, 0.0);
+                click_buf.resize(frames_per_block, 0.0);
+                guide_buf.resize(frames_per_block, 0.0);
+            }
+            main_l[..frames_per_block].fill(0.0);
+            main_r[..frames_per_block].fill(0.0);
+            cue_l[..frames_per_block].fill(0.0);
+            cue_r[..frames_per_block].fill(0.0);
+            both_l[..frames_per_block].fill(0.0);
+            both_r[..frames_per_block].fill(0.0);
+            click_buf[..frames_per_block].fill(0.0);
+            guide_buf[..frames_per_block].fill(0.0);
+
+            let mut callback_min_track_frames = u64::MAX;
+
+            for (consumer_arc, prod_arc, gain_bits, _pan, _mute, _solo, bus_atomic) in &tracks_after {
+                if let Ok(mut c) = consumer_arc.try_lock() {
+                    let unread = (c.slots() / 2) as u64;
+                    if unread < callback_min_track_frames {
+                        callback_min_track_frames = unread;
+                    }
+                    let g = f32::from_bits(gain_bits.load(Ordering::Relaxed));
+                    let bus = TrackBus::from_u8(bus_atomic.load(Ordering::Relaxed));
+
+                    for f in 0..frames_per_block {
+                        let l = c.pop().unwrap_or(0.0);
+                        let r = c.pop().unwrap_or(0.0);
+                        match bus {
+                            TrackBus::Main => {
+                                main_l[f] += l * g;
+                                main_r[f] += r * g;
+                            }
+                            TrackBus::CueClick => {
+                                cue_l[f] += l * g + click_buf[f] + guide_buf[f];
+                                cue_r[f] += r * g;
+                            }
+                            TrackBus::Both => {
+                                both_l[f] += l * g;
+                                both_r[f] += r * g;
+                            }
+                        }
+                    }
+                }
+                // Reponer frames para simular feeder en reproducción continua de 10 min
+                if let Ok(mut p) = prod_arc.try_lock() {
+                    for _ in 0..(frames_per_block * 2) {
+                        let _ = p.push(0.3);
+                    }
+                }
+            }
+
+            if callback_min_track_frames != u64::MAX {
+                let track_level_ms = (callback_min_track_frames * 1000) / sr;
+                let mut current_min = stats_after.min_ring_buffer_level_ms.load(Ordering::Relaxed);
+                while track_level_ms < current_min {
+                    match stats_after.min_ring_buffer_level_ms.compare_exchange_weak(
+                        current_min,
+                        track_level_ms,
+                        Ordering::Relaxed,
+                        Ordering::Relaxed,
+                    ) {
+                        Ok(_) => break,
+                        Err(actual) => current_min = actual,
+                    }
+                }
+            }
+
+            let dur_us = t0.elapsed().as_micros() as u64;
+            let mut max_us = stats_after.max_callback_duration_us.load(Ordering::Relaxed);
+            while dur_us > max_us {
+                match stats_after.max_callback_duration_us.compare_exchange_weak(
+                    max_us,
+                    dur_us,
+                    Ordering::Relaxed,
+                    Ordering::Relaxed,
+                ) {
+                    Ok(_) => break,
+                    Err(actual) => max_us = actual,
+                }
+            }
+        }
+
+        println!("=== BENCHMARK 10 MINUTOS (112,500 CALLBACKS, 8 PISTAS) ===");
+        println!(
+            "ANTES   | Callbacks: {} | Underruns: {} | Max µs: {} | Min Buffer: {} ms",
+            stats_before.callbacks.load(Ordering::Relaxed),
+            stats_before.underruns.load(Ordering::Relaxed),
+            stats_before.max_callback_duration_us.load(Ordering::Relaxed),
+            stats_before.min_ring_buffer_level_ms.load(Ordering::Relaxed)
+        );
+        println!(
+            "DESPUÉS | Callbacks: {} | Underruns: {} | Max µs: {} | Min Buffer: {} ms",
+            stats_after.callbacks.load(Ordering::Relaxed),
+            stats_after.underruns.load(Ordering::Relaxed),
+            stats_after.max_callback_duration_us.load(Ordering::Relaxed),
+            stats_after.min_ring_buffer_level_ms.load(Ordering::Relaxed)
+        );
+
+        assert_eq!(stats_before.callbacks.load(Ordering::Relaxed), total_callbacks as u64);
+        assert_eq!(stats_after.callbacks.load(Ordering::Relaxed), total_callbacks as u64);
+        assert_eq!(stats_before.underruns.load(Ordering::Relaxed), 0);
+        assert_eq!(stats_after.underruns.load(Ordering::Relaxed), 0);
     }
 }
