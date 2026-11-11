@@ -75,6 +75,9 @@ export interface SongProject {
   masterGain: number;
   cueMasterGain?: number; // Master output gain for the Click / Cue bus ("Auriculares banda")
   pitchSemitones: number; // -6 to +6 semitones detune for stems
+  isTitleCustom?: boolean;
+  createdAt?: number;
+  lastUsedAt?: number;
   sections: SongSection[];
   tracks: TrackChannel[];
   updatedAt: number;

@@ -1458,7 +1458,7 @@ export default function App() {
       const baseTimestamp = Date.now();
       const effectiveMode =
         importMode === 'current-song' && !currentProjectRef.current ? 'new-song' : importMode;
-      const targetProjectId =
+      let targetProjectId =
         effectiveMode === 'new-song'
           ? `song-${baseTimestamp}`
           : currentProjectRef.current!.id;
@@ -1476,6 +1476,19 @@ export default function App() {
         if (scanned.files.length === 0) {
           showToast('No se encontraron pistas de audio compatibles en la selección.');
           return;
+        }
+
+        const existingCandidate = scanned.folderPath
+          ? projectsRef.current.find(
+              (p) =>
+                p.folderPath &&
+                scanned.folderPath &&
+                p.folderPath.toLowerCase() === scanned.folderPath.toLowerCase()
+            )
+          : null;
+
+        if (effectiveMode === 'new-song' && existingCandidate) {
+          targetProjectId = existingCandidate.id;
         }
 
         const bpm = scanned.bpm || (effectiveMode === 'current-song' ? currentProjectRef.current?.bpm || 120 : 120);
@@ -1525,42 +1538,93 @@ export default function App() {
 
         let newSongProject: SongProject;
         if (effectiveMode === 'new-song') {
-          newSongProject = {
-            id: targetProjectId,
-            title: scanned.title || 'Nueva Sesión',
-            artist: scanned.artist || 'Sesión Importada',
-            folderPath: scanned.folderPath,
-            folder: 'imported',
-            inSetlist: true,
-            setlistOrder: projects.length,
-            bpm,
-            beatsPerBar,
-            beatUnit: 4,
-            keySignature: scanned.key || 'C Major',
-            totalBars: initialBars,
-            durationSec: initialDurationSec,
-            quantizeMode: 'immediate',
-            splitRoutingMode: 'stereo',
-            clickEnabled: false,
-            clickGain: 1.0,
-            clickSubdivision: 1,
-            guideCuesEnabled: true,
-            guideVoiceReadout: true,
-            guideGain: 1.0,
-            masterGain: 1.0,
-            cueMasterGain: 1.0,
-            pitchSemitones: 0,
-            sections: initialSections,
-            tracks: initialTracks,
-            updatedAt: Date.now(),
-          };
+          if (existingCandidate) {
+            // Re-importing existing song: keep user edits, sections and mix settings!
+            const mergedTracks: TrackChannel[] = initialTracks.map((it) => {
+              const prev = existingCandidate.tracks.find(
+                (pt) =>
+                  pt.id === it.id ||
+                  pt.name.toLowerCase() === it.name.toLowerCase() ||
+                  (pt.fileName && it.fileName && pt.fileName.toLowerCase() === it.fileName.toLowerCase())
+              );
+              if (prev) {
+                return {
+                  ...it,
+                  id: prev.id,
+                  gain: prev.gain,
+                  pan: prev.pan,
+                  muted: prev.muted,
+                  soloed: prev.soloed,
+                  bus: prev.bus,
+                  role: prev.role,
+                  color: prev.color,
+                };
+              }
+              return it;
+            });
 
-          nativeAudioEngine.markImportStarted(targetProjectId, `Decodificando ${scanned.files.length} pistas...`);
-          audioEngine.prepareProjectShell(newSongProject);
-          setMissingNativeCache(false);
-          setCurrentProject(newSongProject);
-          setProjects((prev) => [newSongProject, ...prev]);
-          saveProjectToDb(newSongProject).catch(() => {});
+            newSongProject = {
+              ...existingCandidate,
+              title: existingCandidate.isTitleCustom ? existingCandidate.title : (scanned.title || existingCandidate.title),
+              artist: existingCandidate.isTitleCustom ? existingCandidate.artist : (scanned.artist || existingCandidate.artist),
+              keySignature: existingCandidate.isTitleCustom ? existingCandidate.keySignature : (scanned.key || existingCandidate.keySignature),
+              bpm: existingCandidate.isTitleCustom ? existingCandidate.bpm : bpm,
+              totalBars: initialBars,
+              durationSec: initialDurationSec,
+              tracks: mergedTracks,
+              sections: existingCandidate.sections.length > 0 ? existingCandidate.sections : initialSections,
+              inSetlist: true,
+              setlistOrder: existingCandidate.inSetlist ? existingCandidate.setlistOrder : projects.length,
+              folderPath: scanned.folderPath || existingCandidate.folderPath,
+              updatedAt: Date.now(),
+            };
+
+            nativeAudioEngine.markImportStarted(targetProjectId, `Actualizando ${scanned.files.length} pistas...`);
+            audioEngine.prepareProjectShell(newSongProject);
+            setMissingNativeCache(false);
+            setCurrentProject(newSongProject);
+            setProjects((prev) =>
+              prev.map((p) => (p.id === newSongProject.id ? newSongProject : p))
+            );
+            saveProjectToDb(newSongProject).catch(() => {});
+          } else {
+            newSongProject = {
+              id: targetProjectId,
+              title: scanned.title || 'Nueva Sesión',
+              artist: scanned.artist || 'Sesión Importada',
+              folderPath: scanned.folderPath,
+              folder: 'imported',
+              inSetlist: true,
+              setlistOrder: projects.length,
+              bpm,
+              beatsPerBar,
+              beatUnit: 4,
+              keySignature: scanned.key || 'C Major',
+              totalBars: initialBars,
+              durationSec: initialDurationSec,
+              quantizeMode: 'immediate',
+              splitRoutingMode: 'stereo',
+              clickEnabled: false,
+              clickGain: 1.0,
+              clickSubdivision: 1,
+              guideCuesEnabled: true,
+              guideVoiceReadout: true,
+              guideGain: 1.0,
+              masterGain: 1.0,
+              cueMasterGain: 1.0,
+              pitchSemitones: 0,
+              sections: initialSections,
+              tracks: initialTracks,
+              updatedAt: Date.now(),
+            };
+
+            nativeAudioEngine.markImportStarted(targetProjectId, `Decodificando ${scanned.files.length} pistas...`);
+            audioEngine.prepareProjectShell(newSongProject);
+            setMissingNativeCache(false);
+            setCurrentProject(newSongProject);
+            setProjects((prev) => [newSongProject, ...prev]);
+            saveProjectToDb(newSongProject).catch(() => {});
+          }
         } else {
           const current = currentProjectRef.current!;
           const combinedTracks = [...current.tracks, ...initialTracks];
@@ -2047,6 +2111,21 @@ export default function App() {
     await activateProject(newProj);
     handleSelectView('setlist');
     showToast(`Nueva canción creada: ${title}`);
+  };
+
+  const handleUpdateSongMetadata = (updated: SongProject) => {
+    const next: SongProject = {
+      ...updated,
+      isTitleCustom: true,
+      updatedAt: Date.now(),
+    };
+    setProjects((prev) => prev.map((p) => (p.id === next.id ? next : p)));
+    if (currentProjectRef.current?.id === next.id) {
+      setCurrentProject(next);
+      audioEngine.updateProjectConfig(next);
+    }
+    saveProjectToDb(next).catch(() => {});
+    showToast(`Metadatos actualizados: "${next.title}"`);
   };
 
   const handleDeleteProject = (projectId: string) => {
@@ -2670,6 +2749,7 @@ export default function App() {
               onOpenStemImporter={() => setIsImportModalOpen(true)}
               onOptimizeProject={handleStartOptimizeProject}
               onRelinkProject={handleRelinkProject}
+              onUpdateSongMetadata={handleUpdateSongMetadata}
             />
           )}
         </div>

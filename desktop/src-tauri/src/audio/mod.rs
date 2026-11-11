@@ -713,18 +713,16 @@ pub async fn audio_scan_folder(
             }
         }
     } else {
-        let raw = folder_name.clone();
-        if let Some(bpm_idx) = raw.to_lowercase().find("bpm") {
-            let prefix = &raw[..bpm_idx];
-            let num_str: String = prefix.chars().rev().take_while(|c| c.is_ascii_digit()).collect();
-            if let Ok(parsed_bpm) = num_str.chars().rev().collect::<String>().parse::<f64>() {
-                bpm = Some(parsed_bpm);
-            }
+        let cleaned = crate::library::clean_song_title_and_metadata(&folder_name);
+        title = cleaned.title;
+        if let Some(art) = cleaned.artist {
+            artist = art;
         }
-        if raw.contains(" - ") {
-            let parts: Vec<&str> = raw.split(" - ").collect();
-            title = parts[0].trim().to_string();
-            artist = parts[1].trim().to_string();
+        if bpm.is_none() {
+            bpm = cleaned.bpm;
+        }
+        if key.is_none() {
+            key = cleaned.key;
         }
     }
 

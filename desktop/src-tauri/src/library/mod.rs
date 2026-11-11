@@ -434,6 +434,228 @@ pub async fn library_read_sidecar(
     read_sidecar(p)
 }
 
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct CleanMetadata {
+    pub title: String,
+    pub artist: Option<String>,
+    pub key: Option<String>,
+    pub bpm: Option<f64>,
+}
+
+pub fn clean_song_title_and_metadata(raw: &str) -> CleanMetadata {
+    if raw.is_empty() {
+        return CleanMetadata {
+            title: "Nueva Sesión".to_string(),
+            artist: None,
+            key: None,
+            bpm: None,
+        };
+    }
+
+    let mut text = raw.trim();
+    if let Some(dot_idx) = text.rfind('.') {
+        if dot_idx > 0 && text.len() - dot_idx <= 5 {
+            text = &text[..dot_idx];
+        }
+    }
+    let mut s = text.to_string();
+
+    // 1. Tuning 440hz
+    let lower_s = s.to_lowercase();
+    if let Some(idx) = lower_s.find("440hz") {
+        let start = idx.saturating_sub(1);
+        let end = (idx + 5).min(s.len());
+        s.replace_range(start..end, " ");
+    } else if let Some(idx) = lower_s.find("440 hz") {
+        let start = idx.saturating_sub(1);
+        let end = (idx + 6).min(s.len());
+        s.replace_range(start..end, " ");
+    }
+
+    // 2. BPM detection
+    let mut detected_bpm = None;
+    let words: Vec<&str> = s
+        .split(|c: char| c == '-' || c == '_' || c.is_whitespace())
+        .filter(|w| !w.is_empty())
+        .collect();
+    for w in &words {
+        let lw = w.to_lowercase();
+        if lw.ends_with("bpm") {
+            let num_part = &lw[..lw.len() - 3];
+            if let Ok(b) = num_part.parse::<f64>() {
+                if (40.0..=260.0).contains(&b) {
+                    detected_bpm = Some(b);
+                }
+            }
+        }
+    }
+
+    // 3. Key detection
+    let mut detected_key = None;
+    let s_lower = s.to_lowercase();
+    for root in &[
+        "c#", "eb", "f#", "ab", "bb", "db", "gb", "c", "d", "e", "f", "g", "a", "b",
+    ] {
+        let maj_pat = format!("{root} major");
+        let min_pat = format!("{root} minor");
+        let m_pat = format!("{root}m");
+        if s_lower.contains(&maj_pat) {
+            let r_cap = root.to_uppercase();
+            detected_key = Some(format!("{r_cap} Major"));
+            break;
+        } else if s_lower.contains(&min_pat) || s_lower.contains(&m_pat) {
+            let r_cap = root.to_uppercase();
+            detected_key = Some(format!("{r_cap} Minor"));
+            break;
+        }
+    }
+
+    // Attached key+bpm like Bb124
+    if detected_bpm.is_none() || detected_key.is_none() {
+        for w in &words {
+            for root in &[
+                "Bb", "C#", "Eb", "F#", "Ab", "Db", "Gb", "C", "D", "E", "F", "G", "A", "B",
+            ] {
+                if w.to_lowercase().starts_with(&root.to_lowercase()) {
+                    let remainder = &w[root.len()..];
+                    if let Ok(b) = remainder.parse::<f64>() {
+                        if (40.0..=260.0).contains(&b) {
+                            if detected_bpm.is_none() {
+                                detected_bpm = Some(b);
+                            }
+                            if detected_key.is_none() {
+                                detected_key = Some(root.to_string());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Extract title if enclosed in underscores like _ERES BENDITO_
+    let mut enclosed_title = None;
+    if let (Some(first_u), Some(last_u)) = (s.find('_'), s.rfind('_')) {
+        if first_u < last_u && last_u - first_u > 2 {
+            let candidate = s[first_u + 1..last_u].trim();
+            if !candidate.is_empty() {
+                enclosed_title = Some(candidate.to_string());
+                s.replace_range(first_u..=last_u, " ");
+            }
+        }
+    }
+
+    // Remove filler words
+    for filler in &[
+        "multitrack",
+        "original",
+        "mt",
+        "stems",
+        "stem",
+        "secuencias",
+        "secuencia",
+        "sequence",
+    ] {
+        let mut cur = s.to_lowercase();
+        while let Some(idx) = cur.find(filler) {
+            s.replace_range(idx..idx + filler.len(), " ");
+            cur = s.to_lowercase();
+        }
+    }
+
+    // Clean remaining key & bpm from s
+    if let Some(ref k) = detected_key {
+        let k_low = k.to_lowercase();
+        if let Some(idx) = s.to_lowercase().find(&k_low) {
+            s.replace_range(idx..idx + k_low.len(), " ");
+        }
+        for root in &[
+            "bb", "c#", "eb", "f#", "ab", "c", "d", "e", "f", "g", "a", "b",
+        ] {
+            let maj_str = format!("{root} major");
+            if let Some(idx) = s.to_lowercase().find(&maj_str) {
+                s.replace_range(idx..idx + maj_str.len(), " ");
+            }
+        }
+    }
+
+    if let Some(b) = detected_bpm {
+        let b_str = format!("{}bpm", b as u32);
+        if let Some(idx) = s.to_lowercase().find(&b_str) {
+            s.replace_range(idx..idx + b_str.len(), " ");
+        }
+        let b_plain = format!("{}", b as u32);
+        if let Some(idx) = s.find(&b_plain) {
+            s.replace_range(idx..idx + b_plain.len(), " ");
+        }
+    }
+
+    let mut title = String::new();
+    let mut artist = None;
+
+    if let Some(enc) = enclosed_title {
+        title = enc;
+        let art = s
+            .trim_matches(|c: char| c == '-' || c == '_' || c.is_whitespace())
+            .trim();
+        if !art.is_empty() {
+            artist = Some(art.to_string());
+        }
+    } else if s.contains(" - ") {
+        let parts: Vec<&str> = s
+            .split(" - ")
+            .map(|p| p.trim_matches(|c: char| c == '-' || c == '_' || c.is_whitespace()).trim())
+            .filter(|p| !p.is_empty())
+            .collect();
+        if !parts.is_empty() {
+            title = parts[0].to_string();
+        }
+        if parts.len() > 1 {
+            artist = Some(parts[1].to_string());
+        }
+    } else if s.contains('-') {
+        let parts: Vec<&str> = s
+            .split('-')
+            .map(|p| p.trim_matches(|c: char| c == '-' || c == '_' || c.is_whitespace()).trim())
+            .filter(|p| !p.is_empty())
+            .collect();
+        if !parts.is_empty() {
+            title = parts[0].to_string();
+        }
+        if parts.len() > 1 {
+            artist = Some(parts[1].to_string());
+        }
+    } else {
+        title = s
+            .trim_matches(|c: char| c == '-' || c == '_' || c.is_whitespace())
+            .to_string();
+    }
+
+    // Title case if ALL UPPERCASE
+    if !title.is_empty() && title == title.to_uppercase() && title.len() > 2 {
+        title = title
+            .split_whitespace()
+            .map(|word| {
+                let mut chars = word.chars();
+                match chars.next() {
+                    None => String::new(),
+                    Some(first) => {
+                        first.to_uppercase().collect::<String>() + &chars.as_str().to_lowercase()
+                    }
+                }
+            })
+            .collect::<Vec<String>>()
+            .join(" ");
+    }
+
+    CleanMetadata {
+        title: title.trim().to_string(),
+        artist,
+        key: detected_key,
+        bpm: detected_bpm,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -519,5 +741,27 @@ mod tests {
         assert_eq!(find_sidecar_path(&tmp_dir), Some(canonical_file));
 
         let _ = fs::remove_dir_all(&tmp_dir);
+    }
+
+    #[test]
+    fn test_clean_song_title_and_metadata() {
+        // Caso 1: Multitrack _ERES BENDITO_ ORIGINAL Jaime Murrel-G major-108bpm-440hz
+        let c1 = clean_song_title_and_metadata("Multitrack _ERES BENDITO_ ORIGINAL Jaime Murrel-G major-108bpm-440hz");
+        assert_eq!(c1.title, "Eres Bendito");
+        assert_eq!(c1.artist.as_deref(), Some("Jaime Murrel"));
+        assert_eq!(c1.key.as_deref(), Some("G Major"));
+        assert_eq!(c1.bpm, Some(108.0));
+
+        // Caso 2: Dios el mas grande - Juan Carlos A - MT
+        let c2 = clean_song_title_and_metadata("Dios el mas grande - Juan Carlos A - MT");
+        assert_eq!(c2.title, "Dios el mas grande");
+        assert_eq!(c2.artist.as_deref(), Some("Juan Carlos A"));
+
+        // Caso 3: Dios el mas grande - Juan Carlos A -Bb124
+        let c3 = clean_song_title_and_metadata("Dios el mas grande - Juan Carlos A -Bb124");
+        assert_eq!(c3.title, "Dios el mas grande");
+        assert_eq!(c3.artist.as_deref(), Some("Juan Carlos A"));
+        assert_eq!(c3.key.as_deref(), Some("Bb"));
+        assert_eq!(c3.bpm, Some(124.0));
     }
 }
