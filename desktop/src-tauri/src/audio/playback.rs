@@ -179,35 +179,101 @@ fn read_frames_to_slices<R: Read>(
     }
 }
 
-fn read_and_push_frames<R: Read>(
+fn read_into_staging<R: Read>(
     reader: &mut R,
     is_mono: bool,
     frames: usize,
-    producer: &mut rtrb::Producer<f32>,
-    resampler: &mut Option<TrackResampler>,
+    staging: &mut [Vec<f32>],
 ) {
     if frames == 0 {
         return;
     }
-    let mut l = vec![0.0f32; frames];
-    let mut r = vec![0.0f32; frames];
-    read_frames_to_slices(reader, is_mono, frames, &mut l, &mut r);
+    let bytes_per_frame = if is_mono { 2 } else { 4 };
+    let mut buf = vec![0u8; frames * bytes_per_frame];
+    if let Ok(()) = reader.read_exact(&mut buf) {
+        if is_mono {
+            let ch0 = &mut staging[0];
+            ch0.reserve(frames);
+            for i in 0..frames {
+                let s = i16::from_le_bytes([buf[i * 2], buf[i * 2 + 1]]) as f32 / 32768.0;
+                ch0.push(s);
+            }
+        } else {
+            let (ch0, rest) = staging.split_at_mut(1);
+            let ch1 = &mut rest[0];
+            ch0[0].reserve(frames);
+            ch1.reserve(frames);
+            for i in 0..frames {
+                let l = i16::from_le_bytes([buf[i * 4], buf[i * 4 + 1]]) as f32 / 32768.0;
+                let r = i16::from_le_bytes([buf[i * 4 + 2], buf[i * 4 + 3]]) as f32 / 32768.0;
+                ch0[0].push(l);
+                ch1.push(r);
+            }
+        }
+    }
+}
 
-    if let Some(res) = resampler {
-        if let Ok(processed) = res.process(&[l, r]) {
-            if processed.len() >= 2 {
-                let n = processed[0].len();
-                for i in 0..n {
-                    let _ = producer.push(processed[0][i]);
-                    let _ = producer.push(processed[1][i]);
+fn drain_staging_through_resampler(
+    resampler: &mut TrackResampler,
+    is_mono: bool,
+    input_staging: &mut [Vec<f32>],
+    output_staging: &mut Vec<f32>,
+    delay_compensated: &mut bool,
+    allow_partial: bool,
+) {
+    let chunk_size = resampler.chunk_size;
+
+    while input_staging[0].len() >= chunk_size {
+        let mut in_chunk: Vec<Vec<f32>> = Vec::with_capacity(input_staging.len());
+        for ch in input_staging.iter_mut() {
+            let chunk: Vec<f32> = ch.drain(..chunk_size).collect();
+            in_chunk.push(chunk);
+        }
+
+        if let Ok(processed) = resampler.process(&in_chunk) {
+            let out_frames = processed[0].len();
+            let start_frame = if !*delay_compensated {
+                *delay_compensated = true;
+                resampler.output_delay().min(out_frames)
+            } else {
+                0
+            };
+
+            for i in start_frame..out_frames {
+                if is_mono {
+                    let s = processed[0][i];
+                    output_staging.push(s);
+                    output_staging.push(s);
+                } else {
+                    output_staging.push(processed[0][i]);
+                    output_staging.push(processed[1][i]);
                 }
             }
         }
-    } else {
-        // Zero-resampling bypass
-        for i in 0..frames {
-            let _ = producer.push(l[i]);
-            let _ = producer.push(r[i]);
+    }
+
+    if allow_partial && !input_staging[0].is_empty() {
+        let partial_in: Vec<Vec<f32>> = input_staging.iter_mut().map(|ch| ch.drain(..).collect()).collect();
+        if let Ok(processed) = resampler.process_partial(Some(&partial_in)) {
+            if !processed.is_empty() {
+                let out_frames = processed[0].len();
+                let start_frame = if !*delay_compensated {
+                    *delay_compensated = true;
+                    resampler.output_delay().min(out_frames)
+                } else {
+                    0
+                };
+                for i in start_frame..out_frames {
+                    if is_mono {
+                        let s = processed[0][i];
+                        output_staging.push(s);
+                        output_staging.push(s);
+                    } else {
+                        output_staging.push(processed[0][i]);
+                        output_staging.push(processed[1][i]);
+                    }
+                }
+            }
         }
     }
 }
@@ -359,14 +425,21 @@ impl PlaybackEngine {
 
                     let bytes_per_frame = if is_mono { 2 } else { 4 };
                     let chunk_frames = 1024usize;
+                    let channels_count = if is_mono { 1 } else { 2 };
                     let mut current_frame = 0u64;
 
                     let mut last_pitch = thread_pitch.load(Ordering::Relaxed);
-                    let mut resampler: Option<TrackResampler> = if last_pitch != 0 {
-                        TrackResampler::new(device_sample_rate, device_sample_rate, last_pitch, chunk_frames, 2).ok()
-                    } else {
-                        None
-                    };
+                    let mut resampler = TrackResampler::new(
+                        device_sample_rate,
+                        device_sample_rate,
+                        last_pitch,
+                        chunk_frames,
+                        channels_count,
+                    ).expect("Failed to initialize track resampler");
+
+                    let mut input_staging: Vec<Vec<f32>> = vec![Vec::with_capacity(chunk_frames * 4); channels_count];
+                    let mut output_staging: Vec<f32> = Vec::with_capacity(chunk_frames * 8);
+                    let mut delay_compensated = false;
 
                     while !thread_stop.load(Ordering::Relaxed) {
                         // 1. Check seek requests
@@ -375,23 +448,34 @@ impl PlaybackEngine {
                             current_frame = target_seek as u64;
                             let file_offset = current_frame * bytes_per_frame as u64;
                             let _ = file.seek(SeekFrom::Start(file_offset));
-                            if let Some(ref mut r) = resampler {
-                                r.reset();
+                            for ch in input_staging.iter_mut() {
+                                ch.clear();
                             }
+                            output_staging.clear();
+                            resampler.reset();
+                            let cur_pitch = thread_pitch.load(Ordering::Relaxed);
+                            let _ = resampler.set_pitch(cur_pitch, false);
+                            delay_compensated = false;
+                            continue;
                         }
 
                         // 2. Check pitch change
                         let cur_pitch = thread_pitch.load(Ordering::Relaxed);
                         if cur_pitch != last_pitch {
                             last_pitch = cur_pitch;
-                            if cur_pitch == 0 {
-                                resampler = None; // Zero-resampling bypass
-                            } else {
-                                resampler = TrackResampler::new(device_sample_rate, device_sample_rate, cur_pitch, chunk_frames, 2).ok();
-                            }
+                            let _ = resampler.set_pitch(cur_pitch, true);
                         }
 
-                        // 3. Check queued jump requests
+                        // 3. Drain pending output_staging samples into ring buffer
+                        while !output_staging.is_empty() && producer.slots() > 0 {
+                            let n_to_push = output_staging.len().min(producer.slots());
+                            for &s in &output_staging[..n_to_push] {
+                                let _ = producer.push(s);
+                            }
+                            output_staging.drain(..n_to_push);
+                        }
+
+                        // 4. Check queued jump requests
                         let queued_jump_opt = {
                             let g = thread_jump.lock().unwrap();
                             g.clone()
@@ -400,8 +484,16 @@ impl PlaybackEngine {
                             if current_frame < jump.transition_frame && (current_frame + chunk_frames as u64) >= jump.transition_frame {
                                 let pre_frames = (jump.transition_frame - current_frame) as usize;
                                 if pre_frames > 0 {
-                                    read_and_push_frames(&mut file, is_mono, pre_frames, &mut producer, &mut resampler);
+                                    read_into_staging(&mut file, is_mono, pre_frames, &mut input_staging);
                                 }
+                                drain_staging_through_resampler(
+                                    &mut resampler,
+                                    is_mono,
+                                    &mut input_staging,
+                                    &mut output_staging,
+                                    &mut delay_compensated,
+                                    true,
+                                );
 
                                 let m = crossfade_frames;
                                 let mut out_l = vec![0.0f32; m];
@@ -418,8 +510,8 @@ impl PlaybackEngine {
                                     let alpha = i as f32 / m as f32;
                                     let sl = out_l[i] * (1.0 - alpha) + in_l[i] * alpha;
                                     let sr = out_r[i] * (1.0 - alpha) + in_r[i] * alpha;
-                                    let _ = producer.push(sl);
-                                    let _ = producer.push(sr);
+                                    output_staging.push(sl);
+                                    output_staging.push(sr);
                                 }
 
                                 current_frame = jump.target_frame + m as u64;
@@ -430,7 +522,7 @@ impl PlaybackEngine {
                             }
                         }
 
-                        // 4. Check vamp loop
+                        // 5. Check vamp loop
                         if thread_vamp.load(Ordering::Relaxed) {
                             let loop_opt = {
                                 let g = thread_active_loop.lock().unwrap();
@@ -440,8 +532,16 @@ impl PlaybackEngine {
                                 if current_frame < loop_end && (current_frame + chunk_frames as u64) >= loop_end {
                                     let pre_frames = (loop_end - current_frame) as usize;
                                     if pre_frames > 0 {
-                                        read_and_push_frames(&mut file, is_mono, pre_frames, &mut producer, &mut resampler);
+                                        read_into_staging(&mut file, is_mono, pre_frames, &mut input_staging);
                                     }
+                                    drain_staging_through_resampler(
+                                        &mut resampler,
+                                        is_mono,
+                                        &mut input_staging,
+                                        &mut output_staging,
+                                        &mut delay_compensated,
+                                        true,
+                                    );
 
                                     let m = crossfade_frames;
                                     let mut out_l = vec![0.0f32; m];
@@ -458,8 +558,8 @@ impl PlaybackEngine {
                                         let alpha = i as f32 / m as f32;
                                         let sl = out_l[i] * (1.0 - alpha) + in_l[i] * alpha;
                                         let sr = out_r[i] * (1.0 - alpha) + in_r[i] * alpha;
-                                        let _ = producer.push(sl);
-                                        let _ = producer.push(sr);
+                                        output_staging.push(sl);
+                                        output_staging.push(sr);
                                     }
 
                                     current_frame = loop_start + m as u64;
@@ -470,16 +570,51 @@ impl PlaybackEngine {
                             }
                         }
 
-                        // 5. Standard linear buffer fill (keep it >= 350 ms full)
-                        let free_slots = producer.slots();
-                        let slots_needed_for_chunk = chunk_frames * 2;
+                        // 6. Standard linear buffer fill (keep it >= 350 ms full)
+                        let total_buffered = (ring_buffer_capacity - producer.slots()) + output_staging.len();
+                        let min_target = (device_sample_rate as f32 * 0.35) as usize * 2;
 
-                        if free_slots >= slots_needed_for_chunk && current_frame < total_trk_frames {
+                        if total_buffered < min_target && current_frame < total_trk_frames {
                             let frames_to_read = chunk_frames.min((total_trk_frames - current_frame) as usize);
-                            read_and_push_frames(&mut file, is_mono, frames_to_read, &mut producer, &mut resampler);
-                            current_frame += frames_to_read as u64;
-                        } else {
+                            if frames_to_read > 0 {
+                                read_into_staging(&mut file, is_mono, frames_to_read, &mut input_staging);
+                                current_frame += frames_to_read as u64;
+                            }
+                            drain_staging_through_resampler(
+                                &mut resampler,
+                                is_mono,
+                                &mut input_staging,
+                                &mut output_staging,
+                                &mut delay_compensated,
+                                false,
+                            );
+
+                            while !output_staging.is_empty() && producer.slots() > 0 {
+                                let n_to_push = output_staging.len().min(producer.slots());
+                                for &s in &output_staging[..n_to_push] {
+                                    let _ = producer.push(s);
+                                }
+                                output_staging.drain(..n_to_push);
+                            }
+                        } else if current_frame >= total_trk_frames && !input_staging[0].is_empty() {
+                            drain_staging_through_resampler(
+                                &mut resampler,
+                                is_mono,
+                                &mut input_staging,
+                                &mut output_staging,
+                                &mut delay_compensated,
+                                true,
+                            );
+                            while !output_staging.is_empty() && producer.slots() > 0 {
+                                let n_to_push = output_staging.len().min(producer.slots());
+                                for &s in &output_staging[..n_to_push] {
+                                    let _ = producer.push(s);
+                                }
+                                output_staging.drain(..n_to_push);
+                            }
                             std::thread::sleep(std::time::Duration::from_millis(10));
+                        } else {
+                            std::thread::sleep(std::time::Duration::from_millis(5));
                         }
                     }
                 })
@@ -1275,7 +1410,7 @@ pub mod tests {
         // Phase 4 Test 2: Pitch != 0 with varispeed resampler & delay compensation
         let sample_rate = 48000u32;
         let pitch_semitones = 2i32; // +2 semitones
-        let ratio = 2.0f64.powf(pitch_semitones as f64 / 12.0); // ~1.122462
+        let ratio = 2.0f64.powf(-(pitch_semitones as f64) / 12.0); // ~0.890898
 
         let mut res = TrackResampler::new(sample_rate, sample_rate, pitch_semitones, 512, 1).unwrap();
 
@@ -1528,5 +1663,224 @@ pub mod tests {
         assert_eq!(stats.underruns.load(Ordering::Relaxed), 0);
         assert_eq!(stats.max_callback_duration_us.load(Ordering::Relaxed), 0);
         assert_eq!(stats.min_ring_buffer_level_ms.load(Ordering::Relaxed), u64::MAX);
+    }
+
+    #[test]
+    fn test_feeder_varispeed_continuity_and_frequency_mono_stereo() {
+        let sample_rate = 48000u32;
+        let base_freq = 440.0f32;
+        let duration_sec = 10.0f64;
+        let total_frames = (duration_sec * sample_rate as f64).round() as usize; // 480,000 frames
+        let amplitude = 0.8f32;
+
+        let make_sine = |channels: usize| -> Vec<Vec<f32>> {
+            let mut chs = vec![Vec::with_capacity(total_frames); channels];
+            for i in 0..total_frames {
+                let t = i as f32 / sample_rate as f32;
+                let s = (2.0 * std::f32::consts::PI * base_freq * t).sin() * amplitude;
+                for ch in chs.iter_mut() {
+                    ch.push(s);
+                }
+            }
+            chs
+        };
+
+        let measure_frequency = |samples: &[f32]| -> f32 {
+            let mut crossings = Vec::new();
+            let start = 5000;
+            let end = samples.len().saturating_sub(5000);
+            for i in start..end {
+                if samples[i] <= 0.0 && samples[i + 1] > 0.0 {
+                    let fraction = -samples[i] / (samples[i + 1] - samples[i]);
+                    crossings.push(i as f64 + fraction as f64);
+                }
+            }
+            assert!(crossings.len() > 100, "Not enough zero crossings found");
+            let total_cycles = (crossings.len() - 1) as f64;
+            let total_samples = crossings.last().unwrap() - crossings.first().unwrap();
+            let freq = (total_cycles / total_samples) * sample_rate as f64;
+            freq as f32
+        };
+
+        let block_sizes = [128, 256, 1024, 512, 768, 384, 1500, 2048, 100];
+
+        // 1. Test Mono with Pitch +1 semitone
+        {
+            let mono_input = make_sine(1);
+            let mut resampler = TrackResampler::new(sample_rate, sample_rate, 1, 1024, 1).unwrap();
+            let mut input_staging: Vec<Vec<f32>> = vec![Vec::new(); 1];
+            let mut output_staging = Vec::new();
+            let mut delay_compensated = false;
+
+            let mut out_samples = Vec::new();
+            let mut in_pos = 0;
+            let mut b_idx = 0;
+
+            while in_pos < total_frames || !input_staging[0].is_empty() {
+                if in_pos < total_frames {
+                    let b_size = block_sizes[b_idx % block_sizes.len()].min(total_frames - in_pos);
+                    b_idx += 1;
+                    input_staging[0].extend_from_slice(&mono_input[0][in_pos..in_pos + b_size]);
+                    in_pos += b_size;
+                }
+
+                let allow_partial = in_pos >= total_frames;
+                drain_staging_through_resampler(
+                    &mut resampler,
+                    true,
+                    &mut input_staging,
+                    &mut output_staging,
+                    &mut delay_compensated,
+                    allow_partial,
+                );
+
+                for chunk in output_staging.chunks_exact(2) {
+                    out_samples.push(chunk[0]);
+                }
+                output_staging.clear();
+            }
+
+            let expected_freq = base_freq * 2.0f32.powf(1.0 / 12.0); // ~466.164 Hz
+            let max_step_theory = 2.0 * amplitude * (std::f32::consts::PI * expected_freq / sample_rate as f32).sin();
+            let threshold = max_step_theory * 1.35;
+
+            for i in 100..out_samples.len().saturating_sub(100) {
+                let diff = (out_samples[i + 1] - out_samples[i]).abs();
+                assert!(
+                    diff <= threshold,
+                    "Discontinuity detected in Mono +1 st at sample {i}: diff={diff} > threshold={threshold}"
+                );
+            }
+
+            let measured = measure_frequency(&out_samples);
+            assert!(
+                (measured - expected_freq).abs() < 0.5,
+                "Measured frequency {measured} does not match expected {expected_freq}"
+            );
+        }
+
+        // 2. Test Stereo with Pitch +6 semitones
+        {
+            let stereo_input = make_sine(2);
+            let mut resampler = TrackResampler::new(sample_rate, sample_rate, 6, 1024, 2).unwrap();
+            let mut input_staging: Vec<Vec<f32>> = vec![Vec::new(); 2];
+            let mut output_staging = Vec::new();
+            let mut delay_compensated = false;
+
+            let mut out_l = Vec::new();
+            let mut out_r = Vec::new();
+            let mut in_pos = 0;
+            let mut b_idx = 0;
+
+            while in_pos < total_frames || !input_staging[0].is_empty() {
+                if in_pos < total_frames {
+                    let b_size = block_sizes[b_idx % block_sizes.len()].min(total_frames - in_pos);
+                    b_idx += 1;
+                    input_staging[0].extend_from_slice(&stereo_input[0][in_pos..in_pos + b_size]);
+                    input_staging[1].extend_from_slice(&stereo_input[1][in_pos..in_pos + b_size]);
+                    in_pos += b_size;
+                }
+
+                let allow_partial = in_pos >= total_frames;
+                drain_staging_through_resampler(
+                    &mut resampler,
+                    false,
+                    &mut input_staging,
+                    &mut output_staging,
+                    &mut delay_compensated,
+                    allow_partial,
+                );
+
+                for chunk in output_staging.chunks_exact(2) {
+                    out_l.push(chunk[0]);
+                    out_r.push(chunk[1]);
+                }
+                output_staging.clear();
+            }
+
+            let expected_freq = base_freq * 2.0f32.powf(6.0 / 12.0); // ~622.254 Hz
+            let max_step_theory = 2.0 * amplitude * (std::f32::consts::PI * expected_freq / sample_rate as f32).sin();
+            let threshold = max_step_theory * 1.35;
+
+            for i in 100..out_l.len().saturating_sub(100) {
+                let diff_l = (out_l[i + 1] - out_l[i]).abs();
+                let diff_r = (out_r[i + 1] - out_r[i]).abs();
+                assert!(diff_l <= threshold, "Discontinuity in Stereo L +6 st at sample {i}: diff={diff_l} > {threshold}");
+                assert!(diff_r <= threshold, "Discontinuity in Stereo R +6 st at sample {i}: diff={diff_r} > {threshold}");
+            }
+
+            let measured_l = measure_frequency(&out_l);
+            let measured_r = measure_frequency(&out_r);
+            assert!((measured_l - expected_freq).abs() < 0.5, "Stereo L freq mismatch: {measured_l} vs {expected_freq}");
+            assert!((measured_r - expected_freq).abs() < 0.5, "Stereo R freq mismatch: {measured_r} vs {expected_freq}");
+        }
+
+        // 3. Test Dynamic Pitch Change (0 st -> +1 st -> +6 st -> 0 st) without recreating resampler
+        {
+            let stereo_input = make_sine(2);
+            let mut resampler = TrackResampler::new(sample_rate, sample_rate, 0, 1024, 2).unwrap();
+            let mut input_staging: Vec<Vec<f32>> = vec![Vec::new(); 2];
+            let mut output_staging = Vec::new();
+            let mut delay_compensated = false;
+
+            let mut out_l = Vec::new();
+            let mut in_pos = 0;
+            let mut b_idx = 0;
+
+            let mut last_applied_pitch = 0;
+
+            while in_pos < total_frames || !input_staging[0].is_empty() {
+                let current_sec = in_pos as f64 / sample_rate as f64;
+                let target_pitch = if current_sec < 2.5 {
+                    0
+                } else if current_sec < 5.0 {
+                    1
+                } else if current_sec < 7.5 {
+                    6
+                } else {
+                    0
+                };
+
+                if target_pitch != last_applied_pitch {
+                    last_applied_pitch = target_pitch;
+                    resampler.set_pitch(target_pitch, true).unwrap();
+                }
+
+                if in_pos < total_frames {
+                    let b_size = block_sizes[b_idx % block_sizes.len()].min(total_frames - in_pos);
+                    b_idx += 1;
+                    input_staging[0].extend_from_slice(&stereo_input[0][in_pos..in_pos + b_size]);
+                    input_staging[1].extend_from_slice(&stereo_input[1][in_pos..in_pos + b_size]);
+                    in_pos += b_size;
+                }
+
+                let allow_partial = in_pos >= total_frames;
+                drain_staging_through_resampler(
+                    &mut resampler,
+                    false,
+                    &mut input_staging,
+                    &mut output_staging,
+                    &mut delay_compensated,
+                    allow_partial,
+                );
+
+                for chunk in output_staging.chunks_exact(2) {
+                    out_l.push(chunk[0]);
+                }
+                output_staging.clear();
+            }
+
+            let max_freq_6st = base_freq * 2.0f32.powf(6.0 / 12.0);
+            let max_step_theory = 2.0 * amplitude * (std::f32::consts::PI * max_freq_6st / sample_rate as f32).sin();
+            let threshold = max_step_theory * 1.35;
+
+            for i in 100..out_l.len().saturating_sub(100) {
+                let diff = (out_l[i + 1] - out_l[i]).abs();
+                assert!(
+                    diff <= threshold,
+                    "Discontinuity during dynamic pitch shift at sample {i}: diff={diff} > {threshold}"
+                );
+            }
+        }
     }
 }
