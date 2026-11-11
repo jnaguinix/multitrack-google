@@ -345,6 +345,16 @@ pub async fn library_save_song(app: AppHandle, song: LibrarySong) -> Result<(), 
         lib.songs.push(song.clone());
     }
 
+    if let Some(in_set) = song.in_setlist {
+        if in_set {
+            if !lib.active_setlist.contains(&song.id) {
+                lib.active_setlist.push(song.id.clone());
+            }
+        } else {
+            lib.active_setlist.retain(|id| id != &song.id);
+        }
+    }
+
     lib.updated_at = current_timestamp_ms();
     save_library_internal(&local_data, &lib)?;
 

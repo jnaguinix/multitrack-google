@@ -52,7 +52,11 @@ import {
   pickNativeFolder,
   ScannedFolderInfo,
 } from './utils/nativeDialog';
-import { updateDesktopSongFolder } from './storage/desktopLibrary';
+import {
+  loadDesktopLibrary,
+  saveDesktopLibrary,
+  updateDesktopSongFolder,
+} from './storage/desktopLibrary';
 import {
   cleanOrphanPcmDirectories,
   ensureStoragePersist,
@@ -82,6 +86,7 @@ import {
   OptimizationProgressModal,
   SectionEditorModal,
   SongFingerprintPromptModal,
+  SongMetadataEditModal,
   StemImporterModal,
 } from './components/LibraryAndModals';
 import {
@@ -2006,6 +2011,7 @@ export default function App() {
 
   const [songToDeleteFromLibrary, setSongToDeleteFromLibrary] = useState<SongProject | null>(null);
   const [missingFolderSong, setMissingFolderSong] = useState<SongProject | null>(null);
+  const [editingMetadataSong, setEditingMetadataSong] = useState<SongProject | null>(null);
 
   // Setlist Management Handlers
   const handleAddToSetlist = (projectId: string) => {
@@ -2118,20 +2124,90 @@ export default function App() {
     setProjects((prev) =>
       prev.map((p) => {
         if (p.id !== projectId) return p;
-        const updated: SongProject = { ...p, inSetlist: false };
+        const updated: SongProject = { ...p, inSetlist: false, setlistOrder: undefined };
         saveProjectToDb(updated).catch(() => {});
         return updated;
       })
     );
 
     if (currentProjectRef.current?.id === projectId) {
-      setCurrentProject((prev) => (prev ? { ...prev, inSetlist: false } : null));
+      setCurrentProject((prev) => (prev ? { ...prev, inSetlist: false, setlistOrder: undefined } : null));
+    }
+
+    if (isDesktopApp) {
+      loadDesktopLibrary().then((lib) => {
+        if (lib) {
+          lib.activeSetlist = (lib.activeSetlist || []).filter((id) => id !== projectId);
+          const s = lib.songs.find((x) => x.id === projectId);
+          if (s) {
+            s.inSetlist = false;
+            s.setlistOrder = undefined;
+          }
+          saveDesktopLibrary(lib).catch(() => {});
+        }
+      }).catch(() => {});
     }
 
     showToast(
       song
-        ? `"${song.title}" quitada del Setlist (conservada en biblioteca)`
-        : 'Canción quitada del Setlist'
+        ? `"${song.title}" quitada de la sesión (conservada en biblioteca)`
+        : 'Canción quitada de la sesión'
+    );
+  };
+
+  const handleClearSetlist = async () => {
+    // 1. If playing, stop playback first
+    if (transport.isPlaying) {
+      audioEngine.stop();
+    }
+
+    const queue = [...setlistQueue];
+    if (queue.length === 0) return;
+
+    // 2. Evict RAM cache and PCM cache for setlist songs on desktop
+    for (const song of queue) {
+      audioEngine.evictSongFromRamCache(song.id);
+      if (isDesktopApp) {
+        deleteProjectNativeCache(song.id).catch(() => {});
+      }
+    }
+
+    // 3. Mark inSetlist = false across projects
+    const idSet = new Set(queue.map((s) => s.id));
+    setProjects((prev) =>
+      prev.map((p) => {
+        if (!idSet.has(p.id)) return p;
+        const updated: SongProject = { ...p, inSetlist: false, setlistOrder: undefined };
+        saveProjectToDb(updated).catch(() => {});
+        return updated;
+      })
+    );
+
+    if (currentProjectRef.current && idSet.has(currentProjectRef.current.id)) {
+      setCurrentProject((prev) => (prev ? { ...prev, inSetlist: false, setlistOrder: undefined } : null));
+    }
+
+    // 4. Update desktop library file if on desktop
+    if (isDesktopApp) {
+      try {
+        const lib = await loadDesktopLibrary();
+        if (lib) {
+          lib.activeSetlist = [];
+          for (const s of lib.songs) {
+            if (idSet.has(s.id)) {
+              s.inSetlist = false;
+              s.setlistOrder = undefined;
+            }
+          }
+          await saveDesktopLibrary(lib);
+        }
+      } catch (err) {
+        console.warn('[Library] Error limpiando setlist en library.json:', err);
+      }
+    }
+
+    showToast(
+      `Sesión vaciada (${queue.length} ${queue.length === 1 ? 'canción quitada' : 'canciones quitadas'} del Setlist)`
     );
   };
 
@@ -2442,6 +2518,9 @@ export default function App() {
             onToggleCollapse={() => setIsSidebarCollapsed((prev) => !prev)}
             onRequestSongAction={(song) => setConfirmSongCandidate(song)}
             onAddToSetlist={handleAddToSetlist}
+            onRemoveFromSetlist={handleRemoveFromSetlist}
+            onClearSetlist={handleClearSetlist}
+            onEditMetadata={(song) => setEditingMetadataSong(song)}
             onDeleteProject={handleDeleteProject}
             onExportJson={handleExportJson}
             onQuickImportNewSongFiles={(files) =>
@@ -2512,6 +2591,7 @@ export default function App() {
               onRequestSongAction={(song) => setConfirmSongCandidate(song)}
               onAddToSetlist={handleAddToSetlist}
               onRemoveFromSetlist={handleRemoveFromSetlist}
+              onClearSetlist={handleClearSetlist}
               onMoveInSetlist={handleMoveInSetlist}
               onReorderSetlist={handleReorderSetlist}
               onOptimizeProject={handleStartOptimizeProject}
@@ -2815,6 +2895,7 @@ export default function App() {
                 if (found) setConfirmSongCandidate(found);
               }}
               onAddToSetlist={handleAddToSetlist}
+              onRemoveFromSetlist={handleRemoveFromSetlist}
               onCreateNewProject={handleCreateNewProject}
               onDeleteProject={handleDeleteProject}
               onExportJson={handleExportJson}
@@ -2843,6 +2924,7 @@ export default function App() {
           handleLoadProjectImmediately(songId, false);
         }}
         onConfirmAddToSetlist={(songId) => handleAddToSetlist(songId)}
+        onConfirmRemoveFromSetlist={(songId) => handleRemoveFromSetlist(songId)}
       />
 
       {/* Song Fingerprint Ambiguity / Confirmation Modal */}
@@ -3019,6 +3101,17 @@ export default function App() {
           <DesktopAudioSettings triggerHost={audioTriggerHost} />
         </React.Suspense>
       )}
+
+      {/* Edit Song Metadata Modal */}
+      <SongMetadataEditModal
+        song={editingMetadataSong}
+        isOpen={Boolean(editingMetadataSong)}
+        onClose={() => setEditingMetadataSong(null)}
+        onSave={(updated) => {
+          handleUpdateSongMetadata(updated);
+          setEditingMetadataSong(null);
+        }}
+      />
 
       {/* Non-intrusive Action Feedback Toast */}
       {toastMessage && (

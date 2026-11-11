@@ -33,6 +33,7 @@ interface LibraryViewProps {
   currentProjectId: string | null;
   onSelectProject: (projectId: string) => void;
   onAddToSetlist: (projectId: string) => void;
+  onRemoveFromSetlist?: (projectId: string) => void;
   onCreateNewProject: (title: string, artist: string, bpm: number, keySig: string) => void;
   onDeleteProject: (projectId: string) => void;
   onExportJson: (project: SongProject) => void;
@@ -48,6 +49,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
   currentProjectId,
   onSelectProject,
   onAddToSetlist,
+  onRemoveFromSetlist,
   onCreateNewProject,
   onDeleteProject,
   onExportJson,
@@ -254,17 +256,32 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                           <span>Editar metadatos</span>
                         </button>
 
-                        <button
-                          type="button"
-                          onClick={(event) => {
+                        {proj.inSetlist && onRemoveFromSetlist ? (
+                          <button
+                            type="button"
+                            onClick={(event) => {
+                              event.currentTarget.closest<HTMLElement>('[popover]')?.hidePopover();
+                              onRemoveFromSetlist(proj.id);
+                            }}
+                            title="Quitar esta canción del Setlist (permanece en la biblioteca)"
+                            className="px-3 py-2 rounded-lg bg-rose-500/15 hover:bg-rose-500/25 text-rose-300 border border-rose-500/40 text-xs font-semibold flex items-center gap-1.5 cursor-pointer transition-colors"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                            <span>Quitar del Setlist</span>
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={(event) => {
                               event.currentTarget.closest<HTMLElement>('[popover]')?.hidePopover();
                               onAddToSetlist(proj.id);
                             }}
-                          className="px-3 py-2 rounded-lg bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 border border-amber-500/40 text-xs font-semibold flex items-center gap-1.5 cursor-pointer transition-colors"
-                        >
-                          <ListMusic className="w-3.5 h-3.5" />
-                          <span>Añadir al Setlist</span>
-                        </button>
+                            className="px-3 py-2 rounded-lg bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 border border-amber-500/40 text-xs font-semibold flex items-center gap-1.5 cursor-pointer transition-colors"
+                          >
+                            <ListMusic className="w-3.5 h-3.5" />
+                            <span>Añadir al Setlist</span>
+                          </button>
+                        )}
 
                         <button
                           type="button"
@@ -567,6 +584,7 @@ interface ConfirmSongActionModalProps {
   onClose: () => void;
   onConfirmLoadInDaw: (songId: string) => void;
   onConfirmAddToSetlist: (songId: string) => void;
+  onConfirmRemoveFromSetlist?: (songId: string) => void;
 }
 
 export const ConfirmSongActionModal: React.FC<ConfirmSongActionModalProps> = ({
@@ -576,6 +594,7 @@ export const ConfirmSongActionModal: React.FC<ConfirmSongActionModalProps> = ({
   onClose,
   onConfirmLoadInDaw,
   onConfirmAddToSetlist,
+  onConfirmRemoveFromSetlist,
 }) => {
   if (!song) return null;
 
@@ -644,17 +663,31 @@ export const ConfirmSongActionModal: React.FC<ConfirmSongActionModalProps> = ({
             </span>
           </button>
 
-          <button
-            type="button"
-            onClick={() => {
-              onConfirmAddToSetlist(song.id);
-              onClose();
-            }}
-            className="py-2.5 px-4 rounded-xl bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/40 text-amber-300 font-semibold text-xs flex items-center justify-center gap-1.5 cursor-pointer transition-colors"
-          >
-            <ListMusic className="w-3.5 h-3.5" />
-            <span>{isInSetlist ? 'Ver en Setlist' : 'Añadir al Setlist'}</span>
-          </button>
+          {isInSetlist && onConfirmRemoveFromSetlist ? (
+            <button
+              type="button"
+              onClick={() => {
+                onConfirmRemoveFromSetlist(song.id);
+                onClose();
+              }}
+              className="py-2.5 px-4 rounded-xl bg-rose-500/15 hover:bg-rose-500/25 border border-rose-500/40 text-rose-300 font-semibold text-xs flex items-center justify-center gap-1.5 cursor-pointer transition-colors"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+              <span>Quitar de la sesión</span>
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={() => {
+                onConfirmAddToSetlist(song.id);
+                onClose();
+              }}
+              className="py-2.5 px-4 rounded-xl bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/40 text-amber-300 font-semibold text-xs flex items-center justify-center gap-1.5 cursor-pointer transition-colors"
+            >
+              <ListMusic className="w-3.5 h-3.5" />
+              <span>Añadir al Setlist</span>
+            </button>
+          )}
 
           <button
             type="button"

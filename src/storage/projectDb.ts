@@ -499,7 +499,7 @@ export async function loadAllProjectsFromDb(): Promise<SongProject[]> {
     if (!lib || !Array.isArray(lib.songs)) return [];
     const activeSet = new Set(lib.activeSetlist || []);
     const userProjects: SongProject[] = lib.songs.map((item: any) => {
-      const inSet = activeSet.has(item.id) || Boolean(item.inSetlist);
+      const inSet = item.inSetlist !== undefined ? Boolean(item.inSetlist) : activeSet.has(item.id);
       return normalizeProjectSectionsToTime({
         ...item,
         inSetlist: inSet,

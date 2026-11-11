@@ -50,6 +50,7 @@ interface SetlistPageViewProps {
   onRequestSongAction: (song: SongProject) => void;
   onAddToSetlist: (songId: string) => void;
   onRemoveFromSetlist: (songId: string) => void;
+  onClearSetlist?: () => void;
   onMoveInSetlist: (songId: string, direction: 'up' | 'down') => void;
   onReorderSetlist: (fromIndex: number, toIndex: number) => void;
   onChangeSetlistTransitionMode: (mode: SetlistTransitionMode) => void;
@@ -104,6 +105,7 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
   onRequestSongAction,
   onAddToSetlist,
   onRemoveFromSetlist,
+  onClearSetlist,
   onMoveInSetlist,
   onReorderSetlist,
   onOptimizeProject,
@@ -135,6 +137,7 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
   const [dragOverCardIdx, setDragOverCardIdx] = useState<number | null>(null);
   const [cursorNotice, setCursorNotice] = useState<string | null>(null);
   const [isFloatingMixerOpen, setIsFloatingMixerOpen] = useState(false);
+  const [showClearConfirm, setShowClearConfirm] = useState(false);
 
   const masterCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const addAudioInputRef = useRef<HTMLInputElement | null>(null);
@@ -384,9 +387,21 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
               <h2>Orden de reproducción</h2>
               <p>{setlistQueue.length === 1 ? '1 canción' : setlistQueue.length + ' canciones'}</p>
             </div>
-            <button type="button" popoverTarget="setlist-add" className="lt-control">
-              <Plus size={16} /> Añadir canción
-            </button>
+            <div className="flex items-center gap-2">
+              {setlistQueue.length > 0 && onClearSetlist && (
+                <button
+                  type="button"
+                  onClick={() => setShowClearConfirm(true)}
+                  className="lt-control text-neutral-300 hover:text-amber-400"
+                  title="Vaciar la lista de reproducción sin borrar las canciones de la biblioteca"
+                >
+                  <RotateCcw size={15} /> Limpiar sesión
+                </button>
+              )}
+              <button type="button" popoverTarget="setlist-add" className="lt-control">
+                <Plus size={16} /> Añadir canción
+              </button>
+            </div>
           </header>
         )}
       <div className="lt-setlist-queue" role="group" aria-label="Canciones del setlist">
@@ -865,6 +880,52 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
       {cursorNotice && (
         <div className="fixed bottom-4 right-4 z-40 bg-studio-panel border border-studio-line text-neutral-200 px-3 py-1.5 rounded-lg text-xs shadow-lg">
           {cursorNotice}
+        </div>
+      )}
+
+      {/* Modal de confirmación para limpiar la sesión (Setlist) */}
+      {showClearConfirm && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          className="fixed inset-0 z-50 bg-black/75 flex items-center justify-center p-4"
+        >
+          <div className="bg-studio-panel border border-neutral-800 rounded-2xl max-w-md w-full p-6 space-y-4 shadow-2xl">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-amber-500/15 border border-amber-500/40 flex items-center justify-center shrink-0">
+                <RotateCcw className="w-5 h-5 text-amber-400" />
+              </div>
+              <div>
+                <h3 className="text-base font-bold text-neutral-100">¿Limpiar la sesión actual?</h3>
+                <p className="text-xs text-neutral-400">
+                  Se quitarán las {setlistQueue.length} canciones del setlist activo.
+                </p>
+              </div>
+            </div>
+            <p className="text-xs text-neutral-300 bg-studio-ground border border-neutral-800 rounded-lg p-3">
+              Tus canciones, pistas y marcadores seguirán <strong>completamente intactos en tu biblioteca</strong>. Podrás volver a agregarlas en cualquier momento.
+            </p>
+            <div className="flex items-center justify-end gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setShowClearConfirm(false)}
+                className="px-3.5 py-2 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-xs text-neutral-300 font-medium cursor-pointer"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowClearConfirm(false);
+                  onClearSetlist?.();
+                }}
+                className="px-4 py-2 rounded-lg bg-amber-500 hover:bg-amber-400 text-neutral-950 font-bold text-xs flex items-center gap-1.5 cursor-pointer shadow-lg shadow-amber-500/20"
+              >
+                <RotateCcw className="w-3.5 h-3.5" />
+                <span>Limpiar sesión</span>
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </section>
