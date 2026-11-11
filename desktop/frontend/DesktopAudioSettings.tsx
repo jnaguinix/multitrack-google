@@ -55,6 +55,7 @@ interface PlaybackStateSnapshot {
   isPlaying: boolean;
   isBuffering?: boolean;
   prefillDurationMs?: number;
+  deviceDisconnected?: boolean;
   positionSec: number;
   durationSec: number;
   currentFrame: number;
@@ -851,330 +852,49 @@ export default memo(function DesktopAudioSettings({ triggerHost }: Props) {
 
           {isDiagnosticsOpen && (
             <div className="space-y-2 pt-1">
-              {/* Fila 1: Canción + Cargar + Botones de Caché + Estado */}
-              <div className="flex items-center gap-2">
-                <select
-                  value={selectedProjectId}
-                  onChange={(e) => {
-                    const id = e.target.value;
-                    setSelectedProjectId(id);
-                    const p = songProjects.find((x) => x.id === id);
-                    if (p?.sections?.length) {
-                      setSelectedSectionId(p.sections[0].id);
-                    } else {
-                      setSelectedSectionId('');
-                    }
-                    setIsNativeLoaded(false);
-                    setLoadErrorDetails(null);
-                    setNativeNotice('');
-                  }}
-                  className="flex-1 min-w-0 bg-studio-strip border border-studio-line rounded-lg px-2.5 py-1 text-xs text-neutral-200 truncate cursor-pointer"
-                >
-                  <option value="">Seleccionar canción...</option>
-                  {songProjects.map((p) => (
-                    <option key={p.id} value={p.id}>
-                      {p.title}
-                    </option>
-                  ))}
-                </select>
-                <button
-                  type="button"
-                  onClick={handleNativeLoad}
-                  disabled={!selectedProjectId}
-                  className="px-2.5 py-1 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-xs font-medium text-neutral-200 cursor-pointer disabled:opacity-50 shrink-0"
-                >
-                  Cargar
-                </button>
-                {selectedProjectId && !isNativeLoaded && (
-                  <>
-                    <button
-                      type="button"
-                      onClick={handleGenerateNativeCache}
-                      disabled={isGeneratingCache}
-                      className="px-2.5 py-1 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-xs text-neutral-300 cursor-pointer disabled:opacity-50 shrink-0"
-                      title="Generar caché nativa a 48 kHz desde IndexedDB"
-                    >
-                      {isGeneratingCache ? 'Generando...' : 'Generar caché'}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={handleImportFromFolder}
-                      disabled={isGeneratingCache}
-                      className="p-1 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-neutral-300 cursor-pointer disabled:opacity-50 shrink-0"
-                      title="Seleccionar carpeta de la canción multitrack en disco"
-                    >
-                      <FolderOpen size={13} />
-                    </button>
-                  </>
-                )}
-                {nativeNotice && (
-                  <span className="text-[11px] text-neutral-400 truncate shrink-0 max-w-[140px]">
-                    {nativeNotice}
-                  </span>
-                )}
-              </div>
-
-              {/* Progreso de generación si está activa */}
-              {isGeneratingCache && (
-                <div className="space-y-1">
-                  <div className="flex justify-between text-[10px] text-neutral-400">
-                    <span className="truncate">{cacheProgressText}</span>
-                    <span>{cacheProgressPercent}%</span>
+              {/* Alerta si el hardware de audio fue desconectado */}
+              {playbackState.deviceDisconnected && (
+                <div className="flex items-center justify-between p-2 rounded-lg bg-rose-950/80 border border-rose-800 text-rose-200 text-xs">
+                  <div className="flex items-center gap-2">
+                    <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0" />
+                    <span>Dispositivo de audio desconectado. Reproducción en pausa.</span>
                   </div>
-                  <div className="h-1 bg-neutral-800 rounded-full overflow-hidden">
-                    <div
-                      className="h-full bg-studio-ink transition-all duration-200"
-                      style={{ width: `${cacheProgressPercent}%` }}
-                    />
-                  </div>
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      if (!invoke) return;
+                      try {
+                        await invoke('audio_reopen_stream');
+                        setNativeNotice('Dispositivo reabierto');
+                      } catch (err: any) {
+                        setNativeNotice(`Error reabriendo: ${err}`);
+                      }
+                    }}
+                    className="px-2 py-0.5 bg-rose-600 hover:bg-rose-500 text-white rounded font-medium cursor-pointer transition-colors shrink-0 text-[11px]"
+                  >
+                    Reabrir dispositivo
+                  </button>
                 </div>
               )}
 
-              {/* Detalle de error si existe */}
-              {loadErrorDetails && (
-                <div className="text-[11px] text-rose-400 bg-rose-950/20 border border-rose-900/40 rounded px-2 py-1 truncate">
-                  {loadErrorDetails}
-                </div>
-              )}
-
-              {/* Fila 2: Transporte + Barra de posición + Carga UI */}
-              <div className="flex items-center gap-2">
-                <div className="flex items-center gap-1 shrink-0">
-                  <button
-                    type="button"
-                    onClick={handleNativePlay}
-                    disabled={!isNativeLoaded}
-                    className="p-1 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-neutral-200 disabled:opacity-40 cursor-pointer"
-                    title="Play"
-                  >
-                    <Play size={12} className={playbackState.isPlaying ? 'text-emerald-400' : ''} />
-                  </button>
-                  <button
-                    type="button"
-                    onClick={handleNativePause}
-                    disabled={!isNativeLoaded}
-                    className="p-1 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-neutral-200 disabled:opacity-40 cursor-pointer"
-                    title="Pausa"
-                  >
-                    <Pause size={12} />
-                  </button>
-                  <button
-                    type="button"
-                    onClick={handleNativeStop}
-                    disabled={!isNativeLoaded}
-                    className="p-1 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-neutral-200 disabled:opacity-40 cursor-pointer"
-                    title="Detener"
-                  >
-                    <Square size={12} />
-                  </button>
-                </div>
-
-                <input
-                  type="range"
-                  min={0}
-                  max={playbackState.durationSec || 100}
-                  step={0.1}
-                  value={seekInputSec}
-                  onChange={(e) => {
-                    setSeekInputSec(Number(e.target.value));
-                  }}
-                  onPointerDown={() => setIsDraggingSeek(true)}
-                  onPointerUp={(e) => {
-                    setIsDraggingSeek(false);
-                    void handleNativeSeek(Number((e.target as HTMLInputElement).value));
-                  }}
-                  disabled={!isNativeLoaded}
-                  className="flex-1 h-1 bg-neutral-800 rounded appearance-none cursor-pointer accent-studio-ink"
-                />
-
-                {playbackState.isBuffering && (
-                  <span className="text-[10px] text-amber-400 font-medium animate-pulse shrink-0">
-                    Llenando...
-                  </span>
-                )}
-
-                <span className="font-mono text-[10px] text-neutral-400 shrink-0 tabular-nums">
-                  {formatTime(playbackState.positionSec)} / {formatTime(playbackState.durationSec)}
-                </span>
-
+              {/* Fila: Prueba de aislamiento del hilo UI */}
+              <div className="flex items-center justify-between gap-2 p-2 rounded-lg bg-neutral-900/60 border border-neutral-800 text-xs">
+                <span className="text-neutral-400 text-[11px]">Prueba de aislamiento de hilo:</span>
                 <button
                   type="button"
                   onClick={handleStressTest}
                   disabled={isStressTesting}
-                  className="px-2 py-1 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-[10px] text-neutral-300 shrink-0 cursor-pointer disabled:opacity-50"
-                  title="Congela el hilo WebView por 3s para probar aislamiento del audio"
+                  className="px-2.5 py-1 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-neutral-200 text-[11px] font-medium cursor-pointer disabled:opacity-50 shrink-0"
+                  title="Congela el hilo de la interfaz por 3s para verificar que el audio no sufre ningún corte"
                 >
-                  {isStressTesting ? 'Probando...' : 'Carga UI (3s)'}
+                  {isStressTesting ? 'Probando...' : 'Carga pesada UI (3s)'}
                 </button>
               </div>
-
-              {/* Resultado de carga pesada UI como texto de una línea */}
               {stressNotice && (
-                <div className="text-[10px] text-neutral-400 truncate">
+                <div className="text-[10px] text-neutral-400 px-1 truncate">
                   {stressNotice}
                 </div>
               )}
-
-              {/* Fila 3: Saltos cuantizados y Vamp */}
-              <div className="flex items-center gap-2 p-2 rounded-lg bg-neutral-900/60 border border-neutral-800 text-xs">
-                <div className="flex items-center gap-1.5 flex-1 min-w-0">
-                  <span className="text-[10px] text-neutral-400 uppercase tracking-wider shrink-0">Sección:</span>
-                  <select
-                    value={selectedSectionId}
-                    onChange={(e) => setSelectedSectionId(e.target.value)}
-                    disabled={!isNativeLoaded || !currentProject?.sections?.length}
-                    className="bg-studio-strip border border-studio-line rounded px-2 py-0.5 text-xs text-neutral-200 truncate cursor-pointer flex-1"
-                  >
-                    {currentProject?.sections && currentProject.sections.length > 0 ? (
-                      currentProject.sections.map((s) => (
-                        <option key={s.id} value={s.id}>
-                          {s.name} ({Math.floor(s.startTimeSec / 60)}:{String(Math.floor(s.startTimeSec % 60)).padStart(2, '0')})
-                        </option>
-                      ))
-                    ) : (
-                      <option value="">Sin secciones</option>
-                    )}
-                  </select>
-
-                  <select
-                    value={quantizeMode}
-                    onChange={(e) => {
-                      setQuantizeMode(e.target.value);
-                      if (invoke) {
-                        void invoke('audio_configure_song', { quantizeMode: e.target.value });
-                      }
-                    }}
-                    className="bg-studio-strip border border-studio-line rounded px-1.5 py-0.5 text-[11px] text-neutral-300 cursor-pointer shrink-0"
-                    title="Modo de cuantización del salto"
-                  >
-                    <option value="1-bar">1 compás</option>
-                    <option value="2-bars">2 compases</option>
-                    <option value="section-end">Fin sección</option>
-                    <option value="immediate">Inmediato</option>
-                  </select>
-
-                  <button
-                    type="button"
-                    onClick={() => void handleQueueJump(selectedSectionId)}
-                    disabled={!isNativeLoaded || !selectedSectionId}
-                    className="px-2.5 py-0.5 rounded bg-studio-ink hover:bg-neutral-200 text-studio-ground text-[11px] font-semibold cursor-pointer disabled:opacity-40 shrink-0 transition-colors"
-                  >
-                    Saltar
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={handleToggleVamp}
-                    disabled={!isNativeLoaded}
-                    className={`px-2.5 py-0.5 rounded text-[11px] font-semibold cursor-pointer transition-colors shrink-0 ${
-                      playbackState.isVamping
-                        ? 'bg-amber-500 text-black font-bold animate-pulse'
-                        : 'bg-neutral-800 hover:bg-neutral-700 text-neutral-300'
-                    }`}
-                    title="Repetir (vamp) la sección activa indefinidamente sin hueco ni chasquido"
-                  >
-                    {playbackState.isVamping ? 'Vamping ON' : 'Vamp'}
-                  </button>
-                </div>
-              </div>
-
-              {/* Indicador de sección activa y salto en cola */}
-              {(playbackState.activeSectionId || playbackState.queuedSectionId) && (
-                <div className="flex items-center justify-between text-[11px] px-2 py-1 rounded bg-neutral-900 border border-neutral-800">
-                  <div className="flex items-center gap-2 truncate">
-                    {playbackState.activeSectionId && (
-                      <span>
-                        Sección activa:{' '}
-                        <strong className="text-emerald-400">
-                          {currentProject?.sections?.find((s) => s.id === playbackState.activeSectionId)?.name || playbackState.activeSectionId}
-                        </strong>
-                      </span>
-                    )}
-                    {playbackState.queuedSectionId && (
-                      <span className="text-amber-400">
-                        ➜ Saltando a:{' '}
-                        <strong>
-                          {currentProject?.sections?.find((s) => s.id === playbackState.queuedSectionId)?.name || playbackState.queuedSectionId}
-                        </strong>
-                      </span>
-                    )}
-                  </div>
-                  {playbackState.queuedSectionId && (
-                    <button
-                      type="button"
-                      onClick={handleCancelJump}
-                      className="text-[10px] text-rose-400 hover:text-rose-300 underline cursor-pointer shrink-0"
-                    >
-                      Cancelar salto
-                    </button>
-                  )}
-                </div>
-              )}
-
-              {/* Fila 4: Click sintetizado + Tono (Varispeed rubato) */}
-              <div className="flex items-center justify-between gap-3 p-2 rounded-lg bg-neutral-900/60 border border-neutral-800 text-xs">
-                {/* Click sintetizado */}
-                <div className="flex items-center gap-2">
-                  <label className="flex items-center gap-1.5 cursor-pointer select-none">
-                    <input
-                      type="checkbox"
-                      checked={clickEnabled}
-                      onChange={(e) => void handleMetronomeChange(e.target.checked, clickGain, clickSubdiv)}
-                      className="rounded border-neutral-700 bg-neutral-900 text-studio-ink focus:ring-0 cursor-pointer"
-                    />
-                    <span className="text-[11px] text-neutral-300 font-medium">Click</span>
-                  </label>
-
-                  <select
-                    value={clickSubdiv}
-                    onChange={(e) => void handleMetronomeChange(clickEnabled, clickGain, Number(e.target.value) as 1 | 2)}
-                    className="bg-studio-strip border border-studio-line rounded px-1.5 py-0.5 text-[10px] text-neutral-300 cursor-pointer"
-                    title="Subdivisión del click"
-                  >
-                    <option value={1}>1/4 (Negra)</option>
-                    <option value={2}>1/8 (Corchea)</option>
-                  </select>
-
-                  <input
-                    type="range"
-                    min={0}
-                    max={1.5}
-                    step={0.05}
-                    value={clickGain}
-                    onChange={(e) => void handleMetronomeChange(clickEnabled, Number(e.target.value), clickSubdiv)}
-                    className="w-16 h-1 bg-neutral-800 rounded appearance-none cursor-pointer accent-studio-ink"
-                    title={`Volumen click: ${Math.round(clickGain * 100)}%`}
-                  />
-                </div>
-
-                {/* Tono / Varispeed (-6 a +6 st) */}
-                <div className="flex items-center gap-1.5">
-                  <span className="text-[10px] text-neutral-400 uppercase tracking-wider shrink-0">Tono:</span>
-                  <span className="font-mono text-[11px] text-neutral-200 w-10 text-right">
-                    {pitchSemitones > 0 ? `+${pitchSemitones}` : pitchSemitones} st
-                  </span>
-                  <input
-                    type="range"
-                    min={-6}
-                    max={6}
-                    step={1}
-                    value={pitchSemitones}
-                    onChange={(e) => void handlePitchChange(Number(e.target.value))}
-                    className="w-20 h-1 bg-neutral-800 rounded appearance-none cursor-pointer accent-studio-ink"
-                    title="Varispeed pitch shift (-6 a +6 semitonos). Con 0 st el remuestreo se desactiva por bypass."
-                  />
-                  {pitchSemitones !== 0 && (
-                    <button
-                      type="button"
-                      onClick={() => void handlePitchChange(0)}
-                      className="text-[10px] px-1 py-0.5 rounded bg-neutral-800 hover:bg-neutral-700 text-neutral-300 cursor-pointer"
-                      title="Restablecer tono a 0 (sin remuestreo)"
-                    >
-                      0 st
-                    </button>
-                  )}
-                </div>
-              </div>
 
               {/* Fila: Precarga y conmutación de canción (Setlist) */}
               <div className="flex items-center gap-2 p-2 rounded-lg bg-neutral-900/60 border border-neutral-800 text-xs">

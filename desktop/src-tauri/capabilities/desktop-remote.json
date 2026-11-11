@@ -42,6 +42,7 @@
     "allow-audio-configure-song",
     "allow-audio-preload-project",
     "allow-audio-set-master-gains",
-    "allow-audio-switch-to-preloaded"
+    "allow-audio-switch-to-preloaded",
+    "allow-audio-reopen-stream"
   ]
 }

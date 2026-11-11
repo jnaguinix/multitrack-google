@@ -403,5 +403,13 @@ Para evitar cualquier remuestreo en tiempo real durante la reproducción en vivo
 
 ---
 
+## 10. Pendientes Conocidos
+
+1. **Horizonte de lectura del feeder y saltos cuantizados:**
+   Cuando el límite de un salto cuantizado (ej. 1-bar o 2-bars) cae dentro del horizonte temporal ya leído y encolado por el hilo feeder (~600 ms respecto al cabezal DAC), el salto se pospone al siguiente límite de compás para no generar un empalme truncado en el flujo de audio encolado.
+   *Solución prevista:* Implementar búferes de destino preparados (*Jump Reserve Buffers*) con conmutación y descarte exactos a la muestra en el callback de audio mediante micro-crossfade directo. Se abordará después de la Fase 6.
+
+---
+
 *Fin del documento de diseño actualizado.*
 

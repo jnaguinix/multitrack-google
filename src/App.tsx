@@ -4,8 +4,9 @@
  */
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Upload, Music, FolderOpen } from 'lucide-react';
+import { Upload, Music, FolderOpen, AlertTriangle } from 'lucide-react';
 import { audioEngine } from './audio/audioEngine';
+import { nativeAudioEngine } from './audio/nativeAudioEngine';
 import { inferSongMetadataFromFiles } from './audio/smartAnalyzer';
 import {
   createEmptyProjectTemplate,
@@ -203,6 +204,30 @@ export default function App() {
       setToastMessage((prev) => (prev === msg ? null : prev));
     }, 3400);
   }, []);
+
+  const isDesktopApp = typeof window !== 'undefined' && Boolean((window as any).__TAURI__);
+  const [isDeviceDisconnected, setIsDeviceDisconnected] = useState(false);
+  const [missingNativeCache, setMissingNativeCache] = useState(false);
+  const [isGeneratingNativeCache, setIsGeneratingNativeCache] = useState(false);
+  const [nativeCacheProgress, setNativeCacheProgress] = useState<{ percent: number; text: string }>({ percent: 0, text: '' });
+
+  useEffect(() => {
+    if (isDesktopApp) {
+      nativeAudioEngine.setOnDeviceDisconnected((disconnected) => {
+        setIsDeviceDisconnected(disconnected);
+      });
+    }
+  }, [isDesktopApp]);
+
+  useEffect(() => {
+    if (isDesktopApp && currentProject && currentProject.tracks.length > 0) {
+      nativeAudioEngine.checkProjectCacheStatus(currentProject).then((st) => {
+        setMissingNativeCache(!st.isReady);
+      });
+    } else {
+      setMissingNativeCache(false);
+    }
+  }, [currentProject?.id, isDesktopApp]);
 
   // Derived ordered Setlist Queue
   const setlistQueue = useMemo(() => {
@@ -1171,6 +1196,17 @@ export default function App() {
 
       // Single-pass pipeline: decode each stem ONCE, straight into the OPFS cache (peaks and
       // duration come from the same pass). No RAM decode of the whole song at import time.
+      // En escritorio (isDesktopApp), la caché OPFS se omite por completo: el motor nativo usa su propia caché PCM en disco.
+      if (isDesktopApp) {
+        showToast(
+          restoredSectionsCount > 0
+            ? `"${effectiveSongTitle}" importada en motor nativo (${initialTracks.length} pistas · ${restoredSectionsCount} marcadores restaurados).`
+            : `"${effectiveSongTitle}" importada en motor nativo (${initialTracks.length} pistas).`
+        );
+        await stemsSavePromise;
+        return;
+      }
+
       if (effectiveMode === 'new-song' && isOpfsSupported()) {
         showToast(
           restoredSectionsCount > 0
@@ -1700,6 +1736,61 @@ export default function App() {
         onSelectView={handleSelectView}
         onOpenImportModal={() => setIsImportModalOpen(true)}
       />
+
+      {/* Banner de alerta: Desconexión de interfaz de audio en caliente */}
+      {isDeviceDisconnected && (
+        <div className="bg-rose-950/95 border-b border-rose-800 text-rose-200 px-4 py-2 flex items-center justify-between text-xs z-50 shadow-lg">
+          <div className="flex items-center gap-2">
+            <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0" />
+            <span>
+              <strong>Dispositivo de audio desconectado.</strong> La reproducción se ha pausado y la posición se conserva en{' '}
+              <strong className="font-mono text-white">
+                {Math.floor(transport.currentTimeSec / 60)}:{String(Math.floor(transport.currentTimeSec % 60)).padStart(2, '0')}.{Math.floor((transport.currentTimeSec % 1) * 10)}
+              </strong>. Conéctalo de nuevo y pulsa Reabrir.
+            </span>
+          </div>
+          <button
+            type="button"
+            onClick={() => void nativeAudioEngine.reopenDevice()}
+            className="px-3 py-1 bg-rose-600 hover:bg-rose-500 text-white rounded font-medium cursor-pointer transition-colors shrink-0"
+          >
+            Reabrir dispositivo
+          </button>
+        </div>
+      )}
+
+      {/* Banner de aviso: Canción sin caché nativa a la frecuencia del dispositivo */}
+      {missingNativeCache && (
+        <div className="bg-amber-950/90 border-b border-amber-800/80 text-amber-200 px-4 py-2 flex items-center justify-between text-xs z-50 shadow-md">
+          <div className="flex items-center gap-2">
+            <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0" />
+            <span>
+              La canción actual <strong>"{currentProject?.title}"</strong> no dispone de caché PCM nativa para este dispositivo.
+              {isGeneratingNativeCache ? ` (${nativeCacheProgress.percent}% - ${nativeCacheProgress.text})` : ''}
+            </span>
+          </div>
+          <button
+            type="button"
+            disabled={isGeneratingNativeCache}
+            onClick={async () => {
+              if (!currentProject) return;
+              setIsGeneratingNativeCache(true);
+              const ok = await nativeAudioEngine.generateNativeCacheForProject(currentProject, (percent, text) => {
+                setNativeCacheProgress({ percent, text });
+              });
+              setIsGeneratingNativeCache(false);
+              if (ok) {
+                setMissingNativeCache(false);
+                await nativeAudioEngine.loadProject(currentProject);
+                showToast(`Caché nativa lista para "${currentProject.title}".`);
+              }
+            }}
+            className="px-3 py-1 bg-amber-500 hover:bg-amber-400 text-black font-semibold rounded cursor-pointer transition-colors disabled:opacity-50 shrink-0"
+          >
+            {isGeneratingNativeCache ? 'Generando...' : 'Generar caché nativa'}
+          </button>
+        </div>
+      )}
 
       {/* Studio Transport Deck (Shown when a song is loaded; the Live page has its own) */}
       {transportProject && (

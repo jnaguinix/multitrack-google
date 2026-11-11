@@ -244,7 +244,8 @@ fn main() {
             omnitracks_desktop::audio::audio_configure_song,
             omnitracks_desktop::audio::audio_preload_project,
             omnitracks_desktop::audio::audio_set_master_gains,
-            omnitracks_desktop::audio::audio_switch_to_preloaded
+            omnitracks_desktop::audio::audio_switch_to_preloaded,
+            omnitracks_desktop::audio::audio_reopen_stream
         ])
         .run(tauri::generate_context!())
         .expect("OmniTracks");

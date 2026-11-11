@@ -39,6 +39,7 @@ fn main() {
             "audio_preload_project",
             "audio_set_master_gains",
             "audio_switch_to_preloaded",
+            "audio_reopen_stream",
         ]);
         tauri_build::try_build(tauri_build::Attributes::new().app_manifest(manifest))
             .expect("Tauri build configuration");

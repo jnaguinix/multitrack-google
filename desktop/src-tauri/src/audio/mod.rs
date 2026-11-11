@@ -572,3 +572,10 @@ pub async fn audio_switch_to_preloaded(
 
     state.playback.switch_to_preloaded(&local_data, sr).await
 }
+
+#[tauri::command]
+pub async fn audio_reopen_stream(
+    state: State<'_, AudioEngineState>,
+) -> Result<(), String> {
+    state.playback.reopen_stream(&state).await
+}

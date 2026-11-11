@@ -283,6 +283,7 @@ pub struct PlaybackEngine {
     pub metronome: Arc<std::sync::Mutex<MetronomeEngine>>,
     pub guide_cue: Arc<std::sync::Mutex<GuideCueEngine>>,
     pub preloaded_project_id: TokioMutex<Option<String>>,
+    pub device_disconnected: Arc<AtomicBool>,
 }
 
 fn read_frames_to_slices<R: Read>(
@@ -443,6 +444,7 @@ impl PlaybackEngine {
             ))),
             guide_cue: Arc::new(std::sync::Mutex::new(GuideCueEngine::new())),
             preloaded_project_id: TokioMutex::new(None),
+            device_disconnected: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -1126,6 +1128,17 @@ impl PlaybackEngine {
         Ok(res)
     }
 
+    pub async fn reopen_stream(&self, engine_state: &AudioEngineState) -> Result<(), String> {
+        {
+            let mut stream_guard = self.stream.lock().await;
+            *stream_guard = None;
+        }
+        self.device_disconnected.store(false, Ordering::SeqCst);
+        self.ensure_stream(engine_state).await?;
+        tracing::info!("[NativeEngine] Audio stream reopened successfully");
+        Ok(())
+    }
+
     pub async fn play(&self, state: &AudioEngineState) -> Result<(), String> {
         let loaded = self.loaded_project_id.lock().await;
         if loaded.is_none() {
@@ -1234,6 +1247,7 @@ impl PlaybackEngine {
             is_playing: self.is_playing.load(Ordering::SeqCst),
             is_buffering: self.is_buffering.load(Ordering::SeqCst),
             prefill_duration_ms: self.last_prefill_duration_ms.load(Ordering::Relaxed),
+            device_disconnected: self.device_disconnected.load(Ordering::Relaxed),
             position_sec: cur_sec,
             duration_sec: tot as f64 / sr as f64,
             current_frame: cur,
@@ -1360,8 +1374,13 @@ impl PlaybackEngine {
         let pitch_arc = Arc::clone(&self.pitch_semitones);
         let vamping_arc = Arc::clone(&self.is_vamping);
 
+        let dev_disconnected_arc = Arc::clone(&self.device_disconnected);
+        let is_playing_arc_err = Arc::clone(&self.is_playing);
+
         let err_fn = move |err| {
-            eprintln!("[NativeAudioStream] Error en stream CPAL: {err}");
+            eprintln!("[NativeAudioStream] Error en stream CPAL (posible desconexión): {err}");
+            dev_disconnected_arc.store(true, Ordering::SeqCst);
+            is_playing_arc_err.store(false, Ordering::SeqCst);
         };
         let stream_config: cpal::StreamConfig = default_config.into();
 
@@ -1478,7 +1497,6 @@ impl PlaybackEngine {
                             prefill_dur_arc.store(dur_ms, Ordering::Relaxed);
                             stats.min_ring_buffer_level_ms.store(u64::MAX, Ordering::Relaxed);
                             fade.start_fade_in();
-                            tracing::info!("[NativeEngine] Buffering finished in {} ms. Min level: {} ms", dur_ms, track_level_ms);
                         }
                     }
 
@@ -1594,6 +1612,7 @@ pub struct PlaybackStateSnapshot {
     pub is_playing: bool,
     pub is_buffering: bool,
     pub prefill_duration_ms: u64,
+    pub device_disconnected: bool,
     pub position_sec: f64,
     pub duration_sec: f64,
     pub current_frame: u64,
@@ -2459,5 +2478,31 @@ pub mod tests {
         assert_eq!(stats.underruns.load(Ordering::Relaxed), 0, "Steady playback produced underruns!");
         let min_buf = stats.min_ring_buffer_level_ms.load(Ordering::Relaxed);
         assert!(min_buf >= 400, "Steady playback buffer fell below 400 ms: {min_buf} ms");
+    }
+
+    #[tokio::test]
+    async fn test_device_disconnect_and_reopen_preserves_position() {
+        let stats = Arc::new(AudioStreamStats::default());
+        let engine = PlaybackEngine::new(stats);
+
+        engine.sample_rate.store(48000, Ordering::SeqCst);
+        engine.total_frames.store(48000 * 60, Ordering::SeqCst); // 60s
+        engine.current_frame.store(48000 * 25, Ordering::SeqCst); // Position: 25s
+        engine.is_playing.store(true, Ordering::SeqCst);
+
+        // Simulate device unplug (err_fn triggered)
+        engine.device_disconnected.store(true, Ordering::SeqCst);
+        engine.is_playing.store(false, Ordering::SeqCst);
+
+        let state = engine.get_playback_state();
+        assert!(state.device_disconnected);
+        assert!(!state.is_playing);
+        assert_eq!(state.position_sec, 25.0, "Position was lost on disconnect!");
+
+        // Clear disconnect on reopen
+        engine.device_disconnected.store(false, Ordering::SeqCst);
+        let state_reopened = engine.get_playback_state();
+        assert!(!state_reopened.device_disconnected);
+        assert_eq!(state_reopened.position_sec, 25.0, "Position was not preserved after reopen!");
     }
 }

@@ -2615,7 +2615,11 @@ export class LibreTracksAudioEngine {
   }
 }
 
-export const audioEngine = new LibreTracksAudioEngine();
+import { nativeAudioEngine } from './nativeAudioEngine';
+
+export const webAudioEngine = new LibreTracksAudioEngine();
+const isDesktopEnvironment = typeof window !== 'undefined' && Boolean((window as any).__TAURI__);
+export const audioEngine: LibreTracksAudioEngine = (isDesktopEnvironment ? nativeAudioEngine : webAudioEngine) as unknown as LibreTracksAudioEngine;
 
 if (typeof window !== 'undefined') {
   const win = window as unknown as {
@@ -2623,8 +2627,8 @@ if (typeof window !== 'undefined') {
     __audioEngine: LibreTracksAudioEngine;
   };
   win.__streamStats = () => {
-    const stats = audioEngine.getGlobalStreamStats();
-    audioEngine.logStreamMetrics('window.__streamStats()');
+    const stats = webAudioEngine.getGlobalStreamStats();
+    webAudioEngine.logStreamMetrics('window.__streamStats()');
     return stats;
   };
   win.__audioEngine = audioEngine;
