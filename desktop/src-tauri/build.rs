@@ -29,6 +29,14 @@ fn main() {
             "audio_seek",
             "audio_get_playback_state",
             "audio_set_track_controls",
+            "audio_queue_jump",
+            "audio_cancel_jump",
+            "audio_toggle_vamp",
+            "audio_set_pitch",
+            "audio_set_metronome",
+            "audio_set_split_mono",
+            "audio_configure_song",
+            "audio_preload_project",
         ]);
         tauri_build::try_build(tauri_build::Attributes::new().app_manifest(manifest))
             .expect("Tauri build configuration");

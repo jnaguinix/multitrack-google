@@ -1,7 +1,9 @@
 pub mod cache;
 pub mod import;
+pub mod metronome;
 pub mod output;
 pub mod playback;
+pub mod resampler;
 
 use cache::{read_track_metadata, ImportProgressEvent, ProjectCacheStatus};
 use import::{ImportResult, ImportTrackFile};
@@ -446,4 +448,85 @@ pub async fn audio_set_track_controls(
         .set_track_controls(&track_id, gain, pan, muted, soloed)
         .await;
     Ok(())
+}
+
+#[tauri::command]
+pub async fn audio_queue_jump(
+    state: State<'_, AudioEngineState>,
+    section_id: String,
+    mode: Option<String>,
+) -> Result<playback::QueuedJumpInfo, String> {
+    state.playback.queue_section_jump(&section_id, mode.as_deref()).await
+}
+
+#[tauri::command]
+pub async fn audio_cancel_jump(
+    state: State<'_, AudioEngineState>,
+) -> Result<(), String> {
+    state.playback.cancel_queued_jump().await;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn audio_toggle_vamp(
+    state: State<'_, AudioEngineState>,
+    enable: Option<bool>,
+) -> Result<bool, String> {
+    Ok(state.playback.toggle_vamp(enable).await)
+}
+
+#[tauri::command]
+pub async fn audio_set_pitch(
+    state: State<'_, AudioEngineState>,
+    semitones: i32,
+) -> Result<(), String> {
+    state.playback.set_pitch(semitones).await;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn audio_set_metronome(
+    state: State<'_, AudioEngineState>,
+    config: metronome::MetronomeConfig,
+) -> Result<(), String> {
+    state.playback.set_metronome(config);
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn audio_set_split_mono(
+    state: State<'_, AudioEngineState>,
+    enabled: bool,
+) -> Result<(), String> {
+    state.playback.set_split_mono(enabled);
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn audio_configure_song(
+    state: State<'_, AudioEngineState>,
+    bpm: Option<f32>,
+    beats_per_bar: Option<u32>,
+    sections: Option<Vec<playback::NativeSongSection>>,
+    quantize_mode: Option<String>,
+) -> Result<(), String> {
+    state.playback.configure_song(bpm, beats_per_bar, sections, quantize_mode);
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn audio_preload_project(
+    app: tauri::AppHandle,
+    state: State<'_, AudioEngineState>,
+    project_id: String,
+) -> Result<(), String> {
+    let local_data = app
+        .path()
+        .app_local_data_dir()
+        .map_err(|e| format!("Error resolviendo app_local_data_dir: {e}"))?;
+
+    let settings = state.current_settings.lock().await;
+    let sr = settings.sample_rate.unwrap_or(48000);
+
+    state.playback.preload_project(&local_data, &project_id, sr).await
 }

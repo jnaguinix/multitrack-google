@@ -32,6 +32,14 @@
     "allow-audio-stop",
     "allow-audio-seek",
     "allow-audio-get-playback-state",
-    "allow-audio-set-track-controls"
+    "allow-audio-set-track-controls",
+    "allow-audio-queue-jump",
+    "allow-audio-cancel-jump",
+    "allow-audio-toggle-vamp",
+    "allow-audio-set-pitch",
+    "allow-audio-set-metronome",
+    "allow-audio-set-split-mono",
+    "allow-audio-configure-song",
+    "allow-audio-preload-project"
   ]
 }
