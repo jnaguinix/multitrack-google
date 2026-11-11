@@ -59,6 +59,7 @@ pub struct AudioStreamStats {
     pub callbacks: AtomicU64,
     pub max_callback_duration_us: AtomicU64,
     pub min_ring_buffer_level_ms: AtomicU64,
+    pub max_feeder_block_duration_us: AtomicU64,
 }
 
 impl Default for AudioStreamStats {
@@ -68,6 +69,7 @@ impl Default for AudioStreamStats {
             callbacks: AtomicU64::new(0),
             max_callback_duration_us: AtomicU64::new(0),
             min_ring_buffer_level_ms: AtomicU64::new(u64::MAX),
+            max_feeder_block_duration_us: AtomicU64::new(0),
         }
     }
 }
@@ -78,6 +80,7 @@ impl AudioStreamStats {
         self.callbacks.store(0, Ordering::Relaxed);
         self.max_callback_duration_us.store(0, Ordering::Relaxed);
         self.min_ring_buffer_level_ms.store(u64::MAX, Ordering::Relaxed);
+        self.max_feeder_block_duration_us.store(0, Ordering::Relaxed);
     }
 }
 
@@ -88,6 +91,7 @@ pub struct AudioStreamStatsSnapshot {
     pub callbacks: u64,
     pub max_callback_duration_us: u64,
     pub min_ring_buffer_level_ms: Option<u64>,
+    pub max_feeder_block_duration_us: u64,
 }
 
 pub struct AudioEngineState {
@@ -145,6 +149,7 @@ impl AudioEngineState {
             callbacks: self.stats.callbacks.load(Ordering::Relaxed),
             max_callback_duration_us: self.stats.max_callback_duration_us.load(Ordering::Relaxed),
             min_ring_buffer_level_ms,
+            max_feeder_block_duration_us: self.stats.max_feeder_block_duration_us.load(Ordering::Relaxed),
         }
     }
 

@@ -389,6 +389,10 @@ pub async fn audio_load_project(
     app: tauri::AppHandle,
     state: State<'_, AudioEngineState>,
     project_id: String,
+    bpm: Option<f32>,
+    beats_per_bar: Option<u32>,
+    sections: Option<Vec<playback::NativeSongSection>>,
+    quantize_mode: Option<String>,
 ) -> Result<playback::ProjectLoadInfo, String> {
     let local_data = app
         .path()
@@ -398,7 +402,18 @@ pub async fn audio_load_project(
     let settings = state.current_settings.lock().await;
     let sr = settings.sample_rate.unwrap_or(48000);
 
-    state.playback.load_project(&local_data, &project_id, sr).await
+    state
+        .playback
+        .load_project(
+            &local_data,
+            &project_id,
+            sr,
+            bpm,
+            beats_per_bar,
+            sections,
+            quantize_mode,
+        )
+        .await
 }
 
 #[tauri::command]
@@ -442,10 +457,11 @@ pub async fn audio_set_track_controls(
     pan: Option<i32>,
     muted: Option<bool>,
     soloed: Option<bool>,
+    bus: Option<String>,
 ) -> Result<(), String> {
     state
         .playback
-        .set_track_controls(&track_id, gain, pan, muted, soloed)
+        .set_track_controls(&track_id, gain, pan, muted, soloed, bus.as_deref())
         .await;
     Ok(())
 }
@@ -529,4 +545,30 @@ pub async fn audio_preload_project(
     let sr = settings.sample_rate.unwrap_or(48000);
 
     state.playback.preload_project(&local_data, &project_id, sr).await
+}
+
+#[tauri::command]
+pub async fn audio_set_master_gains(
+    state: State<'_, AudioEngineState>,
+    master_gain: Option<f32>,
+    cue_master_gain: Option<f32>,
+) -> Result<(), String> {
+    state.playback.set_master_gains(master_gain, cue_master_gain);
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn audio_switch_to_preloaded(
+    app: tauri::AppHandle,
+    state: State<'_, AudioEngineState>,
+) -> Result<playback::ProjectLoadInfo, String> {
+    let local_data = app
+        .path()
+        .app_local_data_dir()
+        .map_err(|e| format!("Error resolviendo app_local_data_dir: {e}"))?;
+
+    let settings = state.current_settings.lock().await;
+    let sr = settings.sample_rate.unwrap_or(48000);
+
+    state.playback.switch_to_preloaded(&local_data, sr).await
 }

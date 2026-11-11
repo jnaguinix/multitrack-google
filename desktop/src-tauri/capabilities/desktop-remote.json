@@ -40,6 +40,8 @@
     "allow-audio-set-metronome",
     "allow-audio-set-split-mono",
     "allow-audio-configure-song",
-    "allow-audio-preload-project"
+    "allow-audio-preload-project",
+    "allow-audio-set-master-gains",
+    "allow-audio-switch-to-preloaded"
   ]
 }

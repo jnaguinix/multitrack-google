@@ -37,6 +37,8 @@ fn main() {
             "audio_set_split_mono",
             "audio_configure_song",
             "audio_preload_project",
+            "audio_set_master_gains",
+            "audio_switch_to_preloaded",
         ]);
         tauri_build::try_build(tauri_build::Attributes::new().app_manifest(manifest))
             .expect("Tauri build configuration");
