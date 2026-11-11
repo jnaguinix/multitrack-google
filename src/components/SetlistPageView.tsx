@@ -254,9 +254,11 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
     };
   }, [project, trackFilterText]);
 
+  const isProjectInSetlist = Boolean(project && setlistQueue.some((s) => s.id === project.id));
+
   return (
     <section className="lt-setlist flex-1 flex flex-col overflow-y-auto min-w-0" aria-labelledby="setlist-title">
-      {project && (
+      {isProjectInSetlist && project && (
         <header className="lt-setlist-heading shrink-0">
           <div className="min-w-0">
             <h1 id="setlist-title" className="lt-setlist-song-title">{project.title}</h1>
@@ -275,7 +277,7 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
           </button>
         </header>
       )}
-      {project ? (
+      {isProjectInSetlist && project ? (
         <div className="lt-waveform relative shrink-0 overflow-hidden">
           <canvas
             ref={masterCanvasRef}
@@ -301,14 +303,14 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
       ) : (
         <div className="lt-empty shrink-0">
           <Music size={24} className="text-neutral-400" aria-hidden="true" />
-          <h1 id="setlist-title">{setlistQueue.length ? 'Elige una canción' : 'Prepara tu setlist'}</h1>
-          <p>Importa las pistas de una canción o añade una desde tu repertorio para empezar.</p>
+          <h1 id="setlist-title">{setlistQueue.length ? 'Elige una canción del setlist' : 'Setlist vacío'}</h1>
+          <p>{setlistQueue.length ? 'Selecciona una canción de la lista para montarla en consola.' : 'Añade canciones desde la biblioteca pulsando "+ Set" para preparar la sesión.'}</p>
           <button type="button" popoverTarget="setlist-add" className="lt-primary"><Plus size={16} /> Añadir canción</button>
         </div>
       )}
 
       <div className="space-y-4">
-        {project ? (
+        {isProjectInSetlist && project ? (
           <>
             <section aria-labelledby="setlist-sections-title" className="lt-setlist-sections">
               <div className="flex flex-wrap items-center justify-between gap-2 mb-2.5">
@@ -380,15 +382,15 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
         ) : null}
       </div>
 
-      <section className="lt-setlist-order shrink-0" aria-label="Orden de reproducción">
-        {(project || setlistQueue.length > 0) && (
+      {setlistQueue.length > 0 && (
+        <section className="lt-setlist-order shrink-0" aria-label="Orden de reproducción">
           <header className="lt-setlist-order-header">
             <div>
               <h2>Orden de reproducción</h2>
               <p>{setlistQueue.length === 1 ? '1 canción' : setlistQueue.length + ' canciones'}</p>
             </div>
             <div className="flex items-center gap-2">
-              {setlistQueue.length > 0 && onClearSetlist && (
+              {onClearSetlist && (
                 <button
                   type="button"
                   onClick={() => setShowClearConfirm(true)}
@@ -403,7 +405,6 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
               </button>
             </div>
           </header>
-        )}
       <div className="lt-setlist-queue" role="group" aria-label="Canciones del setlist">
           {setlistQueue.map((song, idx) => {
             const isCurrent = project?.id === song.id;
@@ -794,6 +795,7 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
       </div>
 
       </section>
+      )}
 
       {/* 4. FLOATING MIXER CARD MODAL / DRAWER (Opens on demand, closes with 1 click or Esc) */}
       {isFloatingMixerOpen && filteredProjectForMixer && (

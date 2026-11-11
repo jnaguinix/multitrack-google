@@ -1232,8 +1232,8 @@ export default function App() {
           title: songTitle,
           artist: 'Sesión Importada',
           folder: 'imported',
-          inSetlist: true,
-          setlistOrder: projects.length,
+          inSetlist: false,
+          setlistOrder: undefined,
           bpm,
           beatsPerBar: 4,
           beatUnit: 4,
@@ -1650,8 +1650,8 @@ export default function App() {
               durationSec: initialDurationSec,
               tracks: mergedTracks,
               sections: existingCandidate.sections.length > 0 ? existingCandidate.sections : initialSections,
-              inSetlist: true,
-              setlistOrder: existingCandidate.inSetlist ? existingCandidate.setlistOrder : projects.length,
+              inSetlist: existingCandidate.inSetlist ?? false,
+              setlistOrder: existingCandidate.setlistOrder,
               folderPath: scanned.folderPath || existingCandidate.folderPath,
               updatedAt: Date.now(),
             };
@@ -1659,7 +1659,9 @@ export default function App() {
             nativeAudioEngine.markImportStarted(targetProjectId, `Actualizando ${scanned.files.length} pistas...`);
             audioEngine.prepareProjectShell(newSongProject);
             setMissingNativeCache(false);
-            setCurrentProject(newSongProject);
+            if (newSongProject.inSetlist) {
+              setCurrentProject(newSongProject);
+            }
             setProjects((prev) =>
               prev.map((p) => (p.id === newSongProject.id ? newSongProject : p))
             );
@@ -1671,8 +1673,8 @@ export default function App() {
               artist: scanned.artist || 'Sesión Importada',
               folderPath: scanned.folderPath,
               folder: 'imported',
-              inSetlist: true,
-              setlistOrder: projects.length,
+              inSetlist: false,
+              setlistOrder: undefined,
               bpm,
               beatsPerBar,
               beatUnit: 4,
@@ -1698,7 +1700,9 @@ export default function App() {
             nativeAudioEngine.markImportStarted(targetProjectId, `Decodificando ${scanned.files.length} pistas...`);
             audioEngine.prepareProjectShell(newSongProject);
             setMissingNativeCache(false);
-            setCurrentProject(newSongProject);
+            if (newSongProject.inSetlist) {
+              setCurrentProject(newSongProject);
+            }
             setProjects((prev) => [newSongProject, ...prev]);
             saveProjectToDb(newSongProject).catch(() => {});
           }
@@ -2131,7 +2135,12 @@ export default function App() {
     );
 
     if (currentProjectRef.current?.id === projectId) {
-      setCurrentProject((prev) => (prev ? { ...prev, inSetlist: false, setlistOrder: undefined } : null));
+      const remaining = setlistQueue.filter((s) => s.id !== projectId);
+      if (remaining.length > 0) {
+        handleLoadProjectImmediately(remaining[0].id, false);
+      } else {
+        setCurrentProject(null);
+      }
     }
 
     if (isDesktopApp) {
@@ -2183,9 +2192,7 @@ export default function App() {
       })
     );
 
-    if (currentProjectRef.current && idSet.has(currentProjectRef.current.id)) {
-      setCurrentProject((prev) => (prev ? { ...prev, inSetlist: false, setlistOrder: undefined } : null));
-    }
+    setCurrentProject(null);
 
     // 4. Update desktop library file if on desktop
     if (isDesktopApp) {
@@ -2255,11 +2262,11 @@ export default function App() {
     keySignature: string
   ) => {
     const newProj = createEmptyProjectTemplate(title, artist, bpm, keySignature);
-    newProj.inSetlist = true;
-    newProj.setlistOrder = projects.length;
+    newProj.inSetlist = false;
+    newProj.setlistOrder = undefined;
     await activateProject(newProj);
-    handleSelectView('setlist');
-    showToast(`Nueva canción creada: ${title}`);
+    handleSelectView('library');
+    showToast(`Nueva canción creada en biblioteca: ${title}`);
   };
 
   const handleUpdateSongMetadata = (updated: SongProject) => {
