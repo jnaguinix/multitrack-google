@@ -245,15 +245,38 @@ pub fn write_track_pcm_and_metadata(
     let tmp_pcm = pcm_path.with_extension("pcm.tmp");
     let tmp_json = json_path.with_extension("json.tmp");
 
-    // 1. Write PCM file via buffer
+    // 1. Write PCM file via large 4MB buffer and fast chunked/direct slice
     {
         let file = File::create(&tmp_pcm).map_err(|e| format!("Error creando archivo PCM temporal: {e}"))?;
-        let mut writer = BufWriter::new(file);
-        for &sample in pcm_samples {
+        let mut writer = BufWriter::with_capacity(4 * 1024 * 1024, file);
+
+        #[cfg(target_endian = "little")]
+        {
+            let byte_slice = unsafe {
+                std::slice::from_raw_parts(
+                    pcm_samples.as_ptr() as *const u8,
+                    pcm_samples.len() * std::mem::size_of::<i16>(),
+                )
+            };
             writer
-                .write_all(&sample.to_le_bytes())
+                .write_all(byte_slice)
                 .map_err(|e| format!("Error escribiendo PCM: {e}"))?;
         }
+
+        #[cfg(not(target_endian = "little"))]
+        {
+            let mut chunk_buf = Vec::with_capacity(65536 * 2);
+            for chunk in pcm_samples.chunks(65536) {
+                chunk_buf.clear();
+                for &sample in chunk {
+                    chunk_buf.extend_from_slice(&sample.to_le_bytes());
+                }
+                writer
+                    .write_all(&chunk_buf)
+                    .map_err(|e| format!("Error escribiendo PCM: {e}"))?;
+            }
+        }
+
         writer.flush().map_err(|e| format!("Error en flush de PCM: {e}"))?;
     }
 

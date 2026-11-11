@@ -48,6 +48,7 @@ import {
   scanNativeFolder,
   scanNativeFiles,
   importTrackBytesRaw,
+  deleteProjectNativeCache,
   ScannedFolderInfo,
 } from './utils/nativeDialog';
 import {
@@ -1401,6 +1402,7 @@ export default function App() {
             peaks: [],
             isCustomAudio: true,
             fileName: file.fileName,
+            filePath: file.filePath,
             durationSec: estDuration > 0 ? estDuration : undefined,
           };
         });
@@ -1425,6 +1427,7 @@ export default function App() {
             id: targetProjectId,
             title: scanned.title || 'Nueva Sesión',
             artist: scanned.artist || 'Sesión Importada',
+            folderPath: scanned.folderPath,
             folder: 'imported',
             inSetlist: true,
             setlistOrder: projects.length,
@@ -1533,8 +1536,18 @@ export default function App() {
               saveProjectToDb(completedProject).catch(() => {});
               audioEngine.updateProjectConfig(completedProject);
 
-              showToast(`"${completedProject.title}": pistas listas para reproducir.`);
-              console.info(`[NativeImport] "${completedProject.title}" lista para reproducir.`);
+              // Actualizar estado de caché y cargar en el motor nativo de forma automática
+              nativeAudioEngine.checkProjectCacheStatus(completedProject).then((st) => {
+                setMissingNativeCache(!st.isReady);
+              }).catch(() => {});
+
+              nativeAudioEngine.loadProject(completedProject).then(() => {
+                showToast(`"${completedProject.title}": lista para reproducir.`);
+                console.info(`[NativeImport] "${completedProject.title}" cargada en motor nativo.`);
+              }).catch((loadErr) => {
+                console.error('[NativeImport] Error cargando proyecto en motor nativo:', loadErr);
+                showToast(`Pistas decodificadas, pero ocurrió un error al cargar: ${loadErr}`);
+              });
             }
           })
           .catch((importErr: any) => {
@@ -1840,6 +1853,11 @@ export default function App() {
   const handleDeleteProject = async (projectId: string) => {
     audioEngine.evictSongFromRamCache(projectId);
     await deleteProjectFromDb(projectId);
+    if (isDesktopApp) {
+      deleteProjectNativeCache(projectId).catch((err: any) => {
+        console.error('[Cache] Error al eliminar carpeta de caché nativa:', err);
+      });
+    }
     const remaining = projects.filter((p) => p.id !== projectId);
     setProjects(remaining);
     if (currentProject?.id === projectId) {
@@ -1995,14 +2013,23 @@ export default function App() {
             onClick={async () => {
               if (!currentProject) return;
               setIsGeneratingNativeCache(true);
-              const ok = await nativeAudioEngine.generateNativeCacheForProject(currentProject, (percent, text) => {
-                setNativeCacheProgress({ percent, text });
-              });
-              setIsGeneratingNativeCache(false);
-              if (ok) {
-                setMissingNativeCache(false);
-                await nativeAudioEngine.loadProject(currentProject);
-                showToast(`Caché nativa lista para "${currentProject.title}".`);
+              setNativeCacheProgress({ percent: 5, text: 'Iniciando verificación...' });
+              try {
+                const ok = await nativeAudioEngine.generateNativeCacheForProject(currentProject, (percent, text) => {
+                  setNativeCacheProgress({ percent, text });
+                });
+                if (ok) {
+                  setMissingNativeCache(false);
+                  await nativeAudioEngine.loadProject(currentProject);
+                  showToast(`Caché nativa lista para "${currentProject.title}".`);
+                } else {
+                  showToast(`No se pudo generar la caché nativa para "${currentProject.title}".`);
+                }
+              } catch (err: any) {
+                console.error('[Banner] Error generando caché nativa:', err);
+                showToast(`Error al generar caché nativa: ${err?.message || err}`);
+              } finally {
+                setIsGeneratingNativeCache(false);
               }
             }}
             className="px-3 py-1 bg-amber-500 hover:bg-amber-400 text-black font-semibold rounded cursor-pointer transition-colors disabled:opacity-50 shrink-0"

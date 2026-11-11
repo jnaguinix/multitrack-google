@@ -46,6 +46,10 @@
     "allow-audio-reopen-stream",
     "allow-audio-scan-folder",
     "allow-audio-scan-files",
-    "allow-audio-import-track-bytes-raw"
+    "allow-audio-import-track-bytes-raw",
+    "allow-audio-delete-project-cache",
+    "allow-audio-get-cache-stats",
+    "allow-audio-clean-orphan-caches",
+    "allow-audio-check-files-exist"
   ]
 }

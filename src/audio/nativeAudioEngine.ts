@@ -8,6 +8,12 @@
 
 import { SongProject, TrackChannel, TransportState, MetersSnapshot } from '../types/project';
 import { loadProjectStemsFromDb, extractStemArrayBuffer } from '../storage/projectDb';
+import {
+  pickNativeFolder,
+  scanNativeFolder,
+  checkFilesExist,
+  importTrackBytesRaw,
+} from '../utils/nativeDialog';
 
 type Invoke = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
 
@@ -74,10 +80,57 @@ export class NativeAudioEngine {
     lastCueMessage: null,
   };
 
+  private importProgressByProject = new Map<string, { percent: number; text: string; completed: boolean }>();
+  private playPendingProjectId: string | null = null;
+
   constructor() {
     if (typeof window !== 'undefined' && (window as any).__TAURI__) {
       this.startPolling();
+      this.setupEventListeners();
     }
+  }
+
+  private setupEventListeners(): void {
+    const listen = (window as any).__TAURI__?.event?.listen;
+    if (!listen) return;
+
+    listen('audio://import-progress', async (event: any) => {
+      const payload = event.payload;
+      if (!payload) return;
+      const projId = payload.project_id || payload.projectId;
+      const percent = Math.round(payload.percent || 0);
+      const text = payload.track_name || '';
+      const completed = Boolean(payload.completed);
+
+      this.importProgressByProject.set(projId, {
+        percent,
+        text,
+        completed,
+      });
+
+      this.notifyCache();
+
+      if (completed) {
+        console.info(`[NativeAudioEngine] Importación de caché completada para proyecto '${projId}'`);
+        if (this.currentProject && this.currentProject.id === projId) {
+          try {
+            await this.loadProject(this.currentProject);
+            if (this.playPendingProjectId === projId) {
+              this.playPendingProjectId = null;
+              await this.play();
+            }
+          } catch (err) {
+            console.error('[NativeAudioEngine] Error auto-cargando proyecto al finalizar importación:', err);
+          }
+        }
+      }
+    }).catch((err: any) => {
+      console.warn('[NativeAudioEngine] Error suscribiendo a audio://import-progress:', err);
+    });
+  }
+
+  public getImportProgress(projectId: string): { percent: number; text: string; completed: boolean } | null {
+    return this.importProgressByProject.get(projectId) || null;
   }
 
   public isDesktop(): boolean {
@@ -224,6 +277,34 @@ export class NativeAudioEngine {
   public async play(): Promise<void> {
     const invoke = getInvoke();
     if (!invoke) return;
+
+    if (!this.currentProject) {
+      this.onNoticeCallback?.('No hay ninguna canción seleccionada.');
+      return;
+    }
+
+    const projId = this.currentProject.id;
+    const progress = this.importProgressByProject.get(projId);
+    if (progress && !progress.completed) {
+      this.playPendingProjectId = projId;
+      this.onNoticeCallback?.(
+        `Decodificando pistas (${progress.percent}%) de "${this.currentProject.title}"... Comenzará a sonar al finalizar.`
+      );
+      return;
+    }
+
+    if (!this.isLoaded) {
+      const status = await this.checkProjectCacheStatus(this.currentProject);
+      if (status.isReady) {
+        await this.loadProject(this.currentProject);
+      } else {
+        this.onNoticeCallback?.(
+          `La canción "${this.currentProject.title}" no dispone de caché PCM nativa. Pulsa «Generar caché nativa».`
+        );
+        return;
+      }
+    }
+
     try {
       await invoke('audio_play');
     } catch (err: any) {
@@ -487,40 +568,114 @@ export class NativeAudioEngine {
     if (!invoke) return false;
 
     try {
+      onProgress?.(5, 'Comprobando rutas de origen...');
+
+      // 1. INTENTO 1: Rutas de archivos originales en disco (track.filePath)
+      const tracksWithPaths = project.tracks.filter((t) => Boolean(t.filePath));
+      if (tracksWithPaths.length === project.tracks.length && tracksWithPaths.length > 0) {
+        const paths = tracksWithPaths.map((t) => t.filePath!);
+        const existResults = await checkFilesExist(paths);
+        const allExist = existResults.every(Boolean);
+
+        if (allExist) {
+          onProgress?.(15, `Decodificando ${paths.length} pistas desde rutas originales...`);
+          const filesToImport = tracksWithPaths.map((t) => ({
+            filePath: t.filePath!,
+            trackId: t.id,
+          }));
+
+          const res: any = await invoke('audio_import_tracks', {
+            projectId: project.id,
+            files: filesToImport,
+            targetSampleRate: null,
+          });
+
+          if (res?.tracks && res.tracks.length > 0) {
+            onProgress?.(100, `¡Caché nativa generada para ${res.tracks.length} pistas!`);
+            this.notifyCache();
+            return true;
+          }
+        }
+      }
+
+      // 2. INTENTO 2: Audios guardados en almacenamiento IndexedDB (versión web o drag & drop)
+      onProgress?.(20, 'Buscando pistas en almacenamiento local (IndexedDB)...');
       const stems = await loadProjectStemsFromDb(project.id);
-      if (!stems || stems.length === 0) {
-        onProgress?.(0, 'No se encontraron stems en almacenamiento para decodificar.');
-        return false;
+      if (stems && stems.length > 0) {
+        const total = stems.length;
+        let completed = 0;
+
+        for (let i = 0; i < total; i++) {
+          const stem = stems[i];
+          const label = stem.fileName || stem.trackId;
+          onProgress?.(
+            Math.round(20 + ((i + 1) / total) * 75),
+            `Decodificando "${label}" (${i + 1}/${total})...`
+          );
+
+          const arrayBuf = await extractStemArrayBuffer(stem);
+          if (!arrayBuf || arrayBuf.byteLength === 0) continue;
+
+          await importTrackBytesRaw(
+            project.id,
+            stem.trackId,
+            stem.fileName || `${stem.trackId}.mp3`,
+            new Uint8Array(arrayBuf)
+          );
+          completed++;
+        }
+
+        if (completed > 0) {
+          onProgress?.(100, `¡Caché nativa generada para ${completed} pistas!`);
+          this.notifyCache();
+          return true;
+        }
       }
 
-      const total = stems.length;
-      let completed = 0;
-
-      for (let i = 0; i < total; i++) {
-        const stem = stems[i];
-        const label = stem.fileName || stem.trackId;
-        onProgress?.(Math.round((i / total) * 100), `Decodificando "${label}" (${i + 1}/${total})...`);
-
-        const arrayBuf = await extractStemArrayBuffer(stem);
-        if (!arrayBuf || arrayBuf.byteLength === 0) continue;
-
-        const bytes = Array.from(new Uint8Array(arrayBuf));
-        await invoke('audio_import_track_bytes', {
-          projectId: project.id,
-          trackId: stem.trackId,
-          fileName: stem.fileName || `${stem.trackId}.mp3`,
-          bytes,
-          targetSampleRate: null,
-        });
-        completed++;
+      // 3. INTENTO 3: Solicitar carpeta con selector nativo de Windows
+      onProgress?.(30, `Solicitando carpeta original para "${project.title}"...`);
+      const selectedFolder = await pickNativeFolder();
+      if (!selectedFolder) {
+        throw new Error('Operación cancelada: no se seleccionó ninguna carpeta.');
       }
 
-      onProgress?.(100, `¡Caché nativa generada para ${completed} pistas!`);
-      this.notifyCache();
-      return completed > 0;
+      onProgress?.(45, `Escaneando carpeta "${selectedFolder}"...`);
+      const scanned = await scanNativeFolder(selectedFolder);
+      if (!scanned.files || scanned.files.length === 0) {
+        throw new Error('No se encontraron archivos de audio compatibles en la carpeta seleccionada.');
+      }
+
+      const filesToImport = scanned.files.map((file, idx) => {
+        const matchedTrack = project.tracks.find(
+          (t) => t.name.toLowerCase() === file.trackName.toLowerCase() || t.fileName === file.fileName
+        );
+        const trackId = matchedTrack ? matchedTrack.id : project.tracks[idx]?.id || file.trackId;
+        if (matchedTrack) matchedTrack.filePath = file.filePath;
+        return {
+          filePath: file.filePath,
+          trackId,
+        };
+      });
+
+      onProgress?.(60, `Decodificando ${filesToImport.length} pistas...`);
+      const res: any = await invoke('audio_import_tracks', {
+        projectId: project.id,
+        files: filesToImport,
+        targetSampleRate: null,
+      });
+
+      if (res?.tracks && res.tracks.length > 0) {
+        onProgress?.(100, `¡Caché nativa generada para ${res.tracks.length} pistas!`);
+        this.notifyCache();
+        return true;
+      }
+
+      throw new Error('No se generaron pistas en la caché.');
     } catch (err: any) {
-      console.warn('[NativeAudioEngine] Error generando caché nativa:', err);
-      onProgress?.(0, `Error generando caché: ${err}`);
+      const msg = err?.message || String(err);
+      console.error('[NativeAudioEngine] Error generando caché nativa:', err);
+      onProgress?.(0, `Error: ${msg}`);
+      this.onNoticeCallback?.(`Error al generar caché nativa: ${msg}`);
       return false;
     }
   }
@@ -536,13 +691,13 @@ export class NativeAudioEngine {
     this.currentProject = project;
     onProgress?.(10, `Verificando caché nativa para "${project.title}"...`);
 
-    // Comprobar si existe caché nativa completa en disco
     const cacheStatus = await this.checkProjectCacheStatus(project);
     if (!cacheStatus.isReady && project.tracks.length > 0) {
       onProgress?.(20, 'Generando caché PCM nativa...');
       const success = await this.generateNativeCacheForProject(project, onProgress);
       if (!success) {
         this.onNoticeCallback?.(`La canción "${project.title}" no dispone de caché PCM nativa.`);
+        return { peaksMap, wasCancelled: false };
       }
     }
 
@@ -570,8 +725,9 @@ export class NativeAudioEngine {
 
       onProgress?.(100, `Cargadas ${loadRes?.trackCount || project.tracks.length} pistas.`);
     } catch (err: any) {
-      console.warn('[NativeAudioEngine] Error al cargar proyecto en Rust:', err);
+      console.error('[NativeAudioEngine] Error al cargar proyecto en Rust:', err);
       this.onNoticeCallback?.(`Error al cargar pistas en motor nativo: ${err}`);
+      throw err;
     }
 
     return { peaksMap, wasCancelled: false };
@@ -581,10 +737,14 @@ export class NativeAudioEngine {
     const invoke = getInvoke();
     if (!invoke) return;
     try {
+      const cacheStatus = await this.checkProjectCacheStatus(project);
+      if (!cacheStatus.isReady) {
+        console.info(`[NativeAudioEngine] Preload omitido para '${project.id}' (caché aún no lista)`);
+        return;
+      }
       await invoke('audio_preload_project', { projectId: project.id });
-      console.info(`[NativeAudioEngine] Canción precargada: ${project.title}`);
-    } catch (err) {
-      console.warn(`[NativeAudioEngine] No se pudo precargar "${project.title}":`, err);
+    } catch (err: any) {
+      console.warn('[NativeAudioEngine] Error al precargar proyecto:', err);
     }
   }
 

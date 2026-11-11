@@ -43,6 +43,10 @@ fn main() {
             "audio_scan_folder",
             "audio_scan_files",
             "audio_import_track_bytes_raw",
+            "audio_delete_project_cache",
+            "audio_get_cache_stats",
+            "audio_clean_orphan_caches",
+            "audio_check_files_exist",
         ]);
         tauri_build::try_build(tauri_build::Attributes::new().app_manifest(manifest))
             .expect("Tauri build configuration");

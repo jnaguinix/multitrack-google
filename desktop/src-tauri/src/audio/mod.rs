@@ -901,3 +901,159 @@ pub async fn audio_import_track_bytes_raw(
     .await
     .map_err(|e| format!("Fallo en tarea blocking de bytes: {e}"))?
 }
+
+
+fn dir_size(path: &Path) -> u64 {
+    let mut total = 0;
+    if let Ok(entries) = std::fs::read_dir(path) {
+        for entry in entries.flatten() {
+            let p = entry.path();
+            if p.is_dir() {
+                total += dir_size(&p);
+            } else if let Ok(meta) = p.metadata() {
+                total += meta.len();
+            }
+        }
+    }
+    total
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct NativeCacheStats {
+    pub total_bytes: u64,
+    pub project_count: usize,
+    pub project_ids: Vec<String>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct CleanOrphanResult {
+    pub freed_bytes: u64,
+    pub deleted_count: usize,
+}
+
+#[tauri::command]
+pub async fn audio_delete_project_cache(
+    app: tauri::AppHandle,
+    state: State<'_, AudioEngineState>,
+    project_id: String,
+) -> Result<(), String> {
+    let local_data = app
+        .path()
+        .app_local_data_dir()
+        .map_err(|e| format!("Error resolviendo app_local_data_dir: {e}"))?;
+
+    let pcm_base = local_data.join("pcm");
+    let proj_dir = pcm_base.join(&project_id);
+    if proj_dir.exists() {
+        std::fs::remove_dir_all(&proj_dir)
+            .map_err(|e| format!("Error eliminando carpeta de caché para '{project_id}': {e}"))?;
+        tracing::info!("[Cache] Carpeta de caché eliminada para '{}'", project_id);
+    }
+
+    state.playback.unload_project_if_matches(&project_id).await;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn audio_get_cache_stats(
+    app: tauri::AppHandle,
+) -> Result<NativeCacheStats, String> {
+    let local_data = app
+        .path()
+        .app_local_data_dir()
+        .map_err(|e| format!("Error resolviendo app_local_data_dir: {e}"))?;
+
+    let pcm_base = local_data.join("pcm");
+    if !pcm_base.exists() {
+        return Ok(NativeCacheStats {
+            total_bytes: 0,
+            project_count: 0,
+            project_ids: Vec::new(),
+        });
+    }
+
+    let mut total_bytes = 0u64;
+    let mut project_ids = Vec::new();
+
+    if let Ok(entries) = std::fs::read_dir(&pcm_base) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                if let Some(name) = path.file_name().and_then(|s| s.to_str()) {
+                    project_ids.push(name.to_string());
+                }
+                total_bytes += dir_size(&path);
+            }
+        }
+    }
+
+    Ok(NativeCacheStats {
+        total_bytes,
+        project_count: project_ids.len(),
+        project_ids,
+    })
+}
+
+#[tauri::command]
+pub async fn audio_clean_orphan_caches(
+    app: tauri::AppHandle,
+    valid_project_ids: Vec<String>,
+) -> Result<CleanOrphanResult, String> {
+    let local_data = app
+        .path()
+        .app_local_data_dir()
+        .map_err(|e| format!("Error resolviendo app_local_data_dir: {e}"))?;
+
+    let pcm_base = local_data.join("pcm");
+    if !pcm_base.exists() {
+        return Ok(CleanOrphanResult {
+            freed_bytes: 0,
+            deleted_count: 0,
+        });
+    }
+
+    let valid_set: std::collections::HashSet<String> = valid_project_ids.into_iter().collect();
+    let mut freed_bytes = 0u64;
+    let mut deleted_count = 0usize;
+
+    if let Ok(entries) = std::fs::read_dir(&pcm_base) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                if let Some(folder_name) = path.file_name().and_then(|s| s.to_str()) {
+                    if !valid_set.contains(folder_name) {
+                        let size = dir_size(&path);
+                        if std::fs::remove_dir_all(&path).is_ok() {
+                            freed_bytes += size;
+                            deleted_count += 1;
+                            tracing::info!(
+                                "[Cache] Carpeta huérfana eliminada: '{}' ({} bytes)",
+                                folder_name,
+                                size
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(CleanOrphanResult {
+        freed_bytes,
+        deleted_count,
+    })
+}
+
+#[tauri::command]
+pub async fn audio_check_files_exist(paths: Vec<String>) -> Result<Vec<bool>, String> {
+    let results = paths
+        .iter()
+        .map(|p| {
+            let path = Path::new(p);
+            path.exists() && path.is_file()
+        })
+        .collect();
+    Ok(results)
+}

@@ -1128,6 +1128,23 @@ impl PlaybackEngine {
         Ok(res)
     }
 
+    pub async fn unload_project_if_matches(&self, project_id: &str) {
+        let mut loaded = self.loaded_project_id.lock().await;
+        if loaded.as_deref() == Some(project_id) {
+            self.is_playing.store(false, Ordering::SeqCst);
+            self.current_frame.store(0, Ordering::SeqCst);
+            self.total_frames.store(0, Ordering::SeqCst);
+            let mut tracks = self.tracks.lock().await;
+            tracks.clear();
+            *loaded = None;
+            tracing::info!("[NativeEngine] Unloaded project '{}'", project_id);
+        }
+        let mut preloaded = self.preloaded_project_id.lock().await;
+        if preloaded.as_deref() == Some(project_id) {
+            *preloaded = None;
+        }
+    }
+
     pub async fn reopen_stream(&self, engine_state: &AudioEngineState) -> Result<(), String> {
         {
             let mut stream_guard = self.stream.lock().await;

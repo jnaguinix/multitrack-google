@@ -41,6 +41,7 @@ export interface TrackChannel {
   peaks: number[]; // Normalized 0..1 envelope peaks for canvas waveform rendering
   isCustomAudio?: boolean;
   fileName?: string;
+  filePath?: string;
   durationSec?: number;
   pcm?: TrackPcmMetadata;
 }
@@ -51,6 +52,7 @@ export interface SongProject {
   id: string;
   title: string;
   artist: string;
+  folderPath?: string;
   folder?: RepertoireFolder;
   inSetlist?: boolean;
   setlistOrder?: number;

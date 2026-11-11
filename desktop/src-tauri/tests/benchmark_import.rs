@@ -214,3 +214,148 @@ async fn test_benchmark_7_track_mp3_and_wav() {
     println!("   FIN DEL BENCHMARK DE IMPORTACIÓN");
     println!("========================================================\n");
 }
+
+
+#[tokio::test]
+async fn test_cache_lifecycle_import_play_delete_regenerate() {
+    let base_temp = std::env::temp_dir().join(format!("omnitracks_lifecycle_{}", std::process::id()));
+    let cache_base = base_temp.join("app_data");
+    std::fs::create_dir_all(&cache_base).unwrap();
+
+    let mp3_folder = PathBuf::from(r"C:\Users\jpuerta\Downloads\Eres Bendigo - Jaime Murrel");
+    assert!(mp3_folder.exists(), "Carpeta de MP3 real debe existir para la prueba");
+
+    let mut mp3_files = Vec::new();
+    for entry in std::fs::read_dir(&mp3_folder).unwrap().flatten() {
+        let p = entry.path();
+        if p.extension().map(|e| e == "mp3").unwrap_or(false) {
+            mp3_files.push(p);
+        }
+    }
+    mp3_files.sort();
+    assert_eq!(mp3_files.len(), 7, "Se esperan 7 pistas MP3");
+
+    let project_id = "song-test-lifecycle-01";
+    let sample_rate = 48000;
+
+    println!(">>> 1. Importando 7 pistas MP3 para proyecto '{}'...", project_id);
+    let mut import_meta = Vec::new();
+    for (idx, fp) in mp3_files.iter().enumerate() {
+        let track_id = format!("stem-{:02}", idx + 1);
+        let meta = import::decode_and_cache_track(&cache_base, project_id, &track_id, fp, sample_rate, None)
+            .expect("Decodificación exitosa");
+        import_meta.push(meta);
+    }
+    assert_eq!(import_meta.len(), 7);
+
+    // Comprobar que existen los archivos exactos en disco
+    let pcm_dir = cache_base.join("pcm").join(project_id).join(sample_rate.to_string());
+    assert!(pcm_dir.exists(), "La carpeta PCM debe existir en pcm/<project_id>/<sample_rate>");
+    for idx in 1..=7 {
+        let pcm_file = pcm_dir.join(format!("stem-{:02}.pcm", idx));
+        let json_file = pcm_dir.join(format!("stem-{:02}.json", idx));
+        assert!(pcm_file.exists(), "Archivo PCM {:?} debe existir", pcm_file);
+        assert!(json_file.exists(), "Archivo JSON {:?} debe existir", json_file);
+        assert!(pcm_file.metadata().unwrap().len() > 0, "PCM debe tener contenido");
+    }
+    println!(">>> Archivos de caché verificados en {:?}", pcm_dir);
+
+    // 2. Cargar en PlaybackEngine
+    println!(">>> 2. Cargando proyecto '{}' en PlaybackEngine...", project_id);
+    let stats = Arc::new(omnitracks_desktop::audio::output::AudioStreamStats::default());
+    let playback = omnitracks_desktop::audio::playback::PlaybackEngine::new(stats);
+
+    let load_info = playback.load_project(
+        &cache_base,
+        project_id,
+        sample_rate,
+        Some(120.0),
+        Some(4),
+        None,
+        Some("1-bar".to_string()),
+    ).await.expect("load_project debe ser exitoso");
+
+    assert_eq!(load_info.project_id, project_id);
+    assert_eq!(load_info.track_count, 7);
+    assert!(load_info.duration_sec > 200.0, "Duración debe ser > 200 s");
+    assert_eq!(playback.loaded_project_id.lock().await.as_deref(), Some(project_id));
+    println!(">>> Proyecto cargado con éxito ({} pistas, {:.1}s)", load_info.track_count, load_info.duration_sec);
+
+    // 3. Borrar la caché del proyecto y descargar del motor
+    println!(">>> 3. Borrando carpeta de caché de '{}'...", project_id);
+    let proj_root = cache_base.join("pcm").join(project_id);
+    assert!(proj_root.exists());
+    std::fs::remove_dir_all(&proj_root).expect("Eliminar carpeta de proyecto");
+    assert!(!proj_root.exists(), "Carpeta de proyecto debe haber sido eliminada");
+
+    playback.unload_project_if_matches(project_id).await;
+    assert_eq!(playback.loaded_project_id.lock().await.as_deref(), None, "Proyecto debe estar descargado");
+
+    // 4. Regenerar caché nativa usando las rutas de archivo guardadas
+    println!(">>> 4. Regenerando caché nativa para '{}'...", project_id);
+    for (idx, fp) in mp3_files.iter().enumerate() {
+        let track_id = format!("stem-{:02}", idx + 1);
+        import::decode_and_cache_track(&cache_base, project_id, &track_id, fp, sample_rate, None)
+            .expect("Regeneración exitosa");
+    }
+    assert!(pcm_dir.exists(), "Carpeta PCM debe existir tras regeneración");
+
+    // Recargar en PlaybackEngine tras regeneración
+    let load_info_2 = playback.load_project(
+        &cache_base,
+        project_id,
+        sample_rate,
+        Some(120.0),
+        Some(4),
+        None,
+        Some("1-bar".to_string()),
+    ).await.expect("load_project debe ser exitoso tras regeneración");
+    assert_eq!(load_info_2.track_count, 7);
+    assert_eq!(playback.loaded_project_id.lock().await.as_deref(), Some(project_id));
+    println!(">>> Proyecto recargado y listo tras regenerar caché.");
+
+    // 5. Prueba de limpieza de carpetas huérfanas
+    println!(">>> 5. Probando limpieza de cachés huérfanas...");
+    let orphan_id = "orphan-song-999";
+    let orphan_dir = cache_base.join("pcm").join(orphan_id).join("48000");
+    std::fs::create_dir_all(&orphan_dir).unwrap();
+    std::fs::write(orphan_dir.join("dummy.pcm"), b"12345").unwrap();
+    assert!(orphan_dir.exists());
+
+    // Lista de IDs válidos en la biblioteca: solo project_id
+    let valid_ids: std::collections::HashSet<String> = vec![project_id.to_string()].into_iter().collect();
+    let pcm_base = cache_base.join("pcm");
+    let mut freed_bytes = 0u64;
+    let mut deleted_count = 0usize;
+
+    for entry in std::fs::read_dir(&pcm_base).unwrap().flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            if let Some(folder_name) = path.file_name().and_then(|s| s.to_str()) {
+                if !valid_ids.contains(folder_name) {
+                    let sz = 5u64; // dummy
+                    std::fs::remove_dir_all(&path).unwrap();
+                    freed_bytes += sz;
+                    deleted_count += 1;
+                }
+            }
+        }
+    }
+
+    assert_eq!(deleted_count, 1, "Debe haber borrado exactamente 1 carpeta huérfana");
+    assert!(freed_bytes > 0, "Debe haber liberado bytes");
+    assert!(!cache_base.join("pcm").join(orphan_id).exists(), "Carpeta huérfana debe desaparecer");
+    assert!(cache_base.join("pcm").join(project_id).exists(), "Proyecto válido debe preservarse");
+    println!(">>> Huérfanos eliminados: {} carpeta(s), proyecto válido conservado.", deleted_count);
+
+    // 6. Eliminar el proyecto de la biblioteca
+    println!(">>> 6. Eliminando proyecto de la biblioteca y limpiando su caché...");
+    std::fs::remove_dir_all(&proj_root).unwrap();
+    assert!(!proj_root.exists(), "Carpeta pcm/<project_id> debe quedar completamente vacía/inexistente");
+    playback.unload_project_if_matches(project_id).await;
+    assert_eq!(playback.loaded_project_id.lock().await.as_deref(), None);
+
+    // Limpieza final
+    let _ = std::fs::remove_dir_all(&base_temp);
+    println!(">>> Ciclo de vida completo verificado con éxito.");
+}

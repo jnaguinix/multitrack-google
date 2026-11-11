@@ -162,6 +162,45 @@ export default memo(function DesktopAudioSettings({ triggerHost }: Props) {
 
   const [splitMono, setSplitMono] = useState(() => localStorage.getItem('omnitracks_split_mono') === 'true');
   const [isDiagnosticsOpen, setIsDiagnosticsOpen] = useState(false);
+  const [cacheStats, setCacheStats] = useState<{ totalBytes: number; projectCount: number; projectIds: string[] }>({
+    totalBytes: 0,
+    projectCount: 0,
+    projectIds: [],
+  });
+  const [isCleaningCache, setIsCleaningCache] = useState(false);
+  const [cleanCacheNotice, setCleanCacheNotice] = useState('');
+
+  const refreshCacheStats = async () => {
+    if (!invoke) return;
+    try {
+      const s = await invoke<any>('audio_get_cache_stats');
+      if (s) setCacheStats(s);
+    } catch {
+      // ignore
+    }
+  };
+
+  const handleCleanOrphanCache = async () => {
+    if (!invoke) return;
+    const confirmed = window.confirm(
+      '¿Deseas eliminar las carpetas de caché nativa de canciones que ya no están en tu biblioteca?'
+    );
+    if (!confirmed) return;
+
+    setIsCleaningCache(true);
+    setCleanCacheNotice('');
+    try {
+      const validIds = songProjects.map((p) => p.id);
+      const res: any = await invoke('audio_clean_orphan_caches', { validProjectIds: validIds });
+      const freedMb = (res.freedBytes / (1024 * 1024)).toFixed(1);
+      setCleanCacheNotice(`Se eliminaron ${res.deletedCount} carpetas huérfanas (${freedMb} MB liberados).`);
+      await refreshCacheStats();
+    } catch (err: any) {
+      setCleanCacheNotice(`Error limpiando caché: ${err}`);
+    } finally {
+      setIsCleaningCache(false);
+    }
+  };
 
   const [selectedSectionId, setSelectedSectionId] = useState<string>('');
   const [quantizeMode, setQuantizeMode] = useState<string>('1-bar');
@@ -837,7 +876,11 @@ export default memo(function DesktopAudioSettings({ triggerHost }: Props) {
         <div className="border-t border-neutral-800 pt-2 space-y-2">
           <button
             type="button"
-            onClick={() => setIsDiagnosticsOpen(!isDiagnosticsOpen)}
+            onClick={() => {
+              const next = !isDiagnosticsOpen;
+              setIsDiagnosticsOpen(next);
+              if (next) refreshCacheStats();
+            }}
             className="flex items-center justify-between w-full text-xs font-semibold text-neutral-400 hover:text-neutral-200 py-0.5 cursor-pointer select-none transition-colors"
           >
             <div className="flex items-center gap-1.5">
@@ -874,6 +917,30 @@ export default memo(function DesktopAudioSettings({ triggerHost }: Props) {
                   >
                     Reabrir dispositivo
                   </button>
+                </div>
+              )}
+
+              {/* Fila: Gestión de caché nativa y limpieza de huérfanos */}
+              <div className="flex items-center justify-between gap-2 p-2 rounded-lg bg-neutral-900/60 border border-neutral-800 text-xs">
+                <div>
+                  <span className="text-neutral-400 text-[11px] block">Caché nativa en disco:</span>
+                  <span className="font-mono text-neutral-200 text-xs">
+                    {(cacheStats.totalBytes / (1024 * 1024)).toFixed(1)} MB ({cacheStats.projectCount} {cacheStats.projectCount === 1 ? 'canción' : 'canciones'})
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleCleanOrphanCache}
+                  disabled={isCleaningCache}
+                  className="px-2.5 py-1 rounded bg-neutral-800 hover:bg-neutral-700 text-neutral-200 text-[11px] font-medium cursor-pointer disabled:opacity-50 shrink-0"
+                  title="Elimina carpetas de caché de canciones que ya no existen en tu biblioteca"
+                >
+                  {isCleaningCache ? 'Limpiando...' : 'Limpiar caché huérfana'}
+                </button>
+              </div>
+              {cleanCacheNotice && (
+                <div className="text-[10px] text-emerald-400 px-1 truncate">
+                  {cleanCacheNotice}
                 </div>
               )}
 
