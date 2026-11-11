@@ -1,256 +1,238 @@
 # Manual Técnico y de Arquitectura — OmniTracks (DAW & Setlist Multitrack Player)
 
-Este documento está diseñado como **guía de transferencia técnica (Handoff Manual)** para que cualquier IA o desarrollador pueda retomar el proyecto inmediatamente, comprender su arquitectura interna al 100%, diagnosticar los problemas actuales de memoria/almacenamiento y ejecutar el plan de mejora propuesto.
+Este documento es la **guía técnica de referencia y transferencia arquitectónica (Handoff Manual)** de OmniTracks. Su propósito es permitir que cualquier desarrollador o sistema de inteligencia artificial comprenda en profundidad el funcionamiento del sistema, cómo se interconectan todos sus archivos, el ciclo de vida del audio y los datos, y cómo extenderlo de forma segura y consistente.
 
 ---
 
-## 1. Visión General del Proyecto
+## 1. Visión General y Propósito del Sistema
 
-**OmniTracks** es una aplicación web tipo DAW / reproductor multipista en vivo (estilo *Ableton Live / Playback / Reaper* para músicos y directores de alabanza/escenario). Permite importar canciones por carpetas o stems sueltos (`.wav`, `.mp3`, `.flac`, `.ogg`, `.m4a`), armar un **Setlist**, controlar secciones en tiempo real (saltos cuantizados, loops tipo *Vamp*, metrónomo/click dinámico, guía hablada/cues), mezclar niveles/paneos/buses (`MAIN` y `CUE/CLICK`), y controlar el escenario desde una vista remota vía `BroadcastChannel`.
+**OmniTracks** es una estación de trabajo de audio digital (DAW) y reproductor multipista especializado para escenarios y conciertos en vivo (estilo *Ableton Live / Playback / Prime / Reaper*).
+
+### Capacidades Principales
+- **Reproducción multipista con sincronización absoluta:** Admite múltiples pistas simultáneas (stems) en formatos WAV, MP3, FLAC, M4A, OGG y AAC.
+- **Motor nativo de alto rendimiento en Rust (Windows Desktop):** Ejecuta la reproducción a través de un backend CPAL/WASAPI dedicado con hilo de audio en tiempo real, remuestreo dinámico con varispeed continuo sin chasquidos, y ruteo multicanal / Split-Mono.
+- **Motor Web Audio API (Web / Navegador):** Modo dual con streaming por bloques desde OPFS (Origin Private File System) o decodificación completa en memoria RAM con control de presupuesto.
+- **Modelo de Dos Niveles (Biblioteca Permanente vs. Setlist Efímero):**
+  - La **Biblioteca** almacena el catálogo permanente en `%LOCALAPPDATA%\org.omnitracks.desktop\library.json` y sidecars visibles `omnitracks.project.json` en las carpetas de canciones. Los archivos de audio originales **jamás se tocan**.
+  - El **Setlist** es la sesión del concierto o ensayo (`inSetlist: true`). Puede vaciarse («Limpiar sesión») o modificarse en vivo sin tocar la biblioteca.
+- **Navegación musical en directo:** Saltos de sección cuantizados al compás (`immediate`, `1-bar`, `2-bars`, `section-end`), bucles infinitos (*Vamp*) sin saltos ni micro-cortes, metrónomo / click dinámico y avisos hablados de guía (*Cues*).
+- **Servidor LAN integrado:** Un servidor HTTP/WebSocket nativo en Rust sirve páginas ligeras para teléfonos en la red local (`/monitor` para músicos y `/mezclador` para el técnico de audio).
 
 ---
 
-## 2. Mapa de Archivos Clave y Responsabilidades
+## 2. Diagrama de Arquitectura Global
 
-```text
-/
-├── src/
-│   ├── App.tsx                        # Estado global, cola de Setlist, importación instantánea, atajos y BroadcastChannel
-│   ├── types/project.ts               # Contratos de datos (SongProject, TrackChannel, SongSection, TransportState, etc.)
-│   ├── audio/
-│   │   ├── audioEngine.ts             # Motor de audio híbrido ('buffer' en RAM y 'stream' desde OPFS) + Lookahead Scheduler
-│   │   ├── streamingTrack.ts          # Ventana deslizante (ring buffer) por pista para reproducción por chunks desde OPFS
-│   │   ├── pcmReaderClient.ts         # Cliente en hilo principal que gestiona peticiones al Worker de lectura OPFS
-│   │   ├── pcmReader.worker.ts        # Web Worker dedicado que lee archivos .pcm usando FileSystemSyncAccessHandle
-│   │   ├── smartAnalyzer.ts           # Inferencia automática de título, BPM, tonalidad y nombres limpios de pistas al importar
-│   │   └── demoSynthesizer.ts         # Extracción de picos de forma de onda (extractWaveformPeaks)
-│   ├── storage/
-│   │   ├── projectDb.ts               # Capa IndexedDB ('projects' para metadatos JSON y 'audioBuffers' para Blobs nativos)
-│   │   ├── opfsStorage.ts             # Capa OPFS (Origin Private File System) para lectura/escritura de archivos .pcm
-│   │   └── pcmOptimizer.ts            # Conversor secuencial de Stems (IndexedDB -> AudioBuffer -> OPFS .pcm)
-│   ├── utils/
-│   │   └── fileImportHelper.ts        # Lectura ultrarrápida de cabeceras WAV (<1ms) y extracción de archivos por Drag & Drop
-│   └── components/
-│       ├── TopBar.tsx                 # Selector de vista, selector de modo ('buffer' | 'stream'), presupuesto RAM
-│       ├── TransportDeck.tsx          # Controles Play/Pause/Stop/Vamp, BPM, Pitch, Cuantización, Transición de Setlist
-│       ├── RepertoireTreeSidebar.tsx  # Árbol lateral de repertorio y cola del Setlist
-│       ├── SetlistPageView.tsx        # Vista principal del Setlist con badges de estado en RAM / OPFS y botón de optimización
-│       ├── TimelineArranger.tsx       # Línea de tiempo con ondas, secciones (mm:ss) y playhead a 60fps
-│       ├── MultitrackMixer.tsx        # Consola de mezcla multipista con medidores RMS/Peak y ruteo Main/Cue
-│       ├── StageRemoteView.tsx        # Control remoto táctil sincronizado entre pestañas/tablets
-│       └── LibraryAndModals.tsx       # Modales de importación, progreso de optimización OPFS y edición de secciones
+```mermaid
+graph TD
+    subgraph Frontend["Frontend Compartido (React 19 + TypeScript + Vite)"]
+        UI[Vistas: Setlist / En vivo / Arreglo / Mezcla / Biblioteca]
+        App[src/App.tsx - Orquestador Global de Estado]
+        Sidebar[RepertoireTreeSidebar.tsx - Árbol de Biblioteca y +Set]
+        SetlistPage[SetlistPageView.tsx - Vista Principal de Sesión]
+        Mixer[MultitrackMixer.tsx - Faders, Pan, Buses, Mute, Solo]
+        Transport[TransportDeck.tsx - Play/Pausa, BPM, Pitch, Cuantización]
+    end
+
+    subgraph DesktopIPC["Puente IPC Tauri v2"]
+        NativeDialog[nativeDialog.ts - Diálogos de Windows e IPC]
+        DesktopLib[desktopLibrary.ts - Cliente de library_*]
+    end
+
+    subgraph RustBackend["Backend Nativo en Rust (desktop/src-tauri)"]
+        TauriMain[src/main.rs - Inicialización y Comandos Tauri]
+        LibStore[src/library/mod.rs - library.json y omnitracks.project.json]
+        AudioMod[src/audio/mod.rs - Comandos audio_*]
+        AudioOutput[src/audio/output.rs - Stream CPAL / WASAPI / Hot-Plug]
+        AudioPlayback[src/audio/playback.rs - Feeder rtrb / Rubato / Jumps / Vamp / Click]
+        AudioCache[src/audio/cache.rs - Caché PCM 16-bit / pcm/song_id/]
+        AudioImport[src/audio/import.rs - Symphonia Decoders Paralelos]
+        LanServer[src/lan.rs - Servidor HTTP/WebSocket TCP 8765]
+    end
+
+    subgraph WebEngine["Motor Web Audio (src/audio - Navegadores)"]
+        WebAudioEngine[audioEngine.ts - Web Audio API]
+        StreamingTrack[streamingTrack.ts - Ring Buffer OPFS]
+        PcmWorker[pcmReader.worker.ts - Web Worker SyncAccessHandle]
+    end
+
+    subgraph Storage["Almacenamiento Físico"]
+        LibJson["%LOCALAPPDATA%/org.omnitracks.desktop/library.json"]
+        SidecarJson["Carpeta de Canción / omnitracks.project.json"]
+        PcmCache["%LOCALAPPDATA%/org.omnitracks.desktop/pcm/<id>/*.pcm"]
+        UserAudio["Archivos de Audio Originales del Usuario (Solo Lectura)"]
+    end
+
+    App --> UI
+    UI --> Sidebar
+    UI --> SetlistPage
+    UI --> Mixer
+    UI --> Transport
+    App --> DesktopIPC
+    DesktopIPC --> RustBackend
+    TauriMain --> LibStore
+    TauriMain --> AudioMod
+    AudioMod --> AudioPlayback
+    AudioPlayback --> AudioOutput
+    AudioPlayback --> AudioCache
+    AudioMod --> AudioImport
+    LibStore --> LibJson
+    LibStore --> SidecarJson
+    AudioCache --> PcmCache
+    AudioImport --> UserAudio
+    TauriMain --> LanServer
+    App -.-> WebEngine
 ```
 
 ---
 
-## 3. Cómo Funciona Actualmente el Sistema
+## 3. Explicación Detallada de Archivos por Capa
 
-### 3.1. Flujo de Importación (`handleInstantImportFiles` en `src/App.tsx`)
-El sistema importa canciones en 2 fases sin bloquear la interfaz:
-1. **Fase 1 (Montaje instantáneo < 5 ms):**
-   - Inspecciona los primeros bytes de cada archivo WAV (`parseWavHeaderFast`) para conocer la duración sin decodificar.
-   - Crea el objeto `SongProject` y sus `TrackChannel[]`.
-   - Monta el "cascarón" en el motor (`audioEngine.prepareProjectShell`) para que los canales aparezcan de inmediato en la UI.
-   - Guarda los `File` originales directamente como **Blobs nativos en IndexedDB** (`saveStemsBatchToDb` en `projectDb.ts`) sin recodificar.
-2. **Fase 2 (Hidratación y Decodificación en lotes de 4):**
-   - Decodifica los archivos de 4 en 4 mediante `ctx.decodeAudioData()`.
-   - Extrae los picos de onda (`peaks`) y monta cada `AudioBuffer` en el motor (`audioEngine.mountDecodedTrack`).
+### 3.1. Capa de Presentación y Frontend (`src/`)
 
-### 3.2. Los Dos Modos del Motor de Audio (`src/audio/audioEngine.ts`)
-El motor `OmniTracksAudioEngine` cuenta con dos modos seleccionables en el `TopBar`:
-
-#### A. Modo `buffer` (Por defecto)
-- **Cómo funciona:** Decodifica todas las pistas de la canción completa en objetos `AudioBuffer` de Web Audio API en la memoria RAM (`projectBufferCache: Map<projectId, Map<trackId, AudioBuffer>>`).
-- **Reproducción:** Al dar Play, crea un `AudioBufferSourceNode` por pista apuntando al `AudioBuffer` completo en RAM.
-- **Presupuesto de RAM (`maxCacheBytes`):** Por defecto es **1200 MB** (`DEFAULT_RAM_BUDGET_MB = 1200`).
-
-#### B. Modo `stream` (Estilo REAPER desde OPFS)
-- **Requisito previo:** La canción debe haber pasado por `optimizeProjectForStreaming` (`src/storage/pcmOptimizer.ts`), lo cual genera archivos `.pcm` crudos en el disco privado del navegador (`OPFS: pcm/{projectId}/{trackId}.pcm`). Si una canción no tiene archivos `.pcm`, el motor hace *fallback* automático a modo `buffer`.
-- **Cómo funciona:**
-  - En lugar de subir toda la canción a RAM, cada pista se envuelve en una instancia de `StreamingTrack` (`src/audio/streamingTrack.ts`).
-  - El audio se divide en bloques (`CHUNK_SEC = 2` segundos).
-  - Mantiene en RAM únicamente una ventana deslizante de **10 segundos hacia adelante** (`TARGET_AHEAD_SEC = 10`) y descarta los bloques que ya sonaron (`discardBefore = currentChunk - 1`).
-  - Un Web Worker dedicado (`pcmReader.worker.ts`) lee los bloques desde OPFS usando `FileSystemSyncAccessHandle` con cola de prioridades (`seek > active > next`).
-  - **Staging de siguiente canción:** Pre-carga únicamente los primeros **6 segundos** (`NEXT_SONG_STAGE_SEC = 6`) de la siguiente canción (~12 MB en RAM) para permitir un cambio instantáneo (`FAST SWAP < 2 ms`).
-
-### 3.3. Reloj y Scheduler Musical
-- Un Web Worker interno (`schedulerWorker` en `audioEngine.ts`) emite un `tick` cada **25 ms** (inmune al *throttling* de pestañas en segundo plano).
-- En cada tick se ejecuta `runLookaheadSchedulerTick()` con una ventana de anticipación de **120 ms** (`SCHEDULER_LOOKAHEAD_SEC = 0.12`), programando con precisión de muestras:
-  - Clicks del metrónomo y avisos de guía.
-  - Saltos cuantizados entre secciones (`1-bar`, `2-bars`, `section-end`) con micro-crossfades de **8 ms** (`FADE_DURATION_SEC = 0.008`) para evitar chasquidos.
-  - Loops de sección (*Vamp*).
-  - Recarga de chunks si el motor está en modo `stream`.
+| Archivo | Responsabilidad y Funcionamiento |
+|---|---|
+| [`src/main.tsx`](file:///c:/Users/jpuerta/Documents/ChatGPT/Multi-chatgpt/multitrack-google/src/main.tsx) | Punto de entrada del bundle React. Monta `<App />` en el DOM (`#root`). |
+| [`src/App.tsx`](file:///c:/Users/jpuerta/Documents/ChatGPT/Multi-chatgpt/multitrack-google/src/App.tsx) | **Centro neurálgico del frontend:**<br>1. Almacena el estado de la biblioteca (`projects`), canción montada (`currentProject`), setlist (`setlistQueue`), transporte y medidores.<br>2. Gestiona las acciones de setlist: `handleAddToSetlist`, `handleRemoveFromSetlist`, `handleClearSetlist` y `handleReorderSetlist`.<br>3. Orquesta la importación nativa por carpetas o archivos de audio y la resolución de ambigüedad de canciones.<br>4. Escucha atajos globales de teclado (Barra espaciadora para Play/Pausa, Escape para mixer flotante). |
+| [`src/types/project.ts`](file:///c:/Users/jpuerta/Documents/ChatGPT/Multi-chatgpt/multitrack-google/src/types/project.ts) | Definiciones TypeScript para `SongProject` (canción completa), `TrackChannel` (pista/stem individual), `SongSection` (marcador de sección con tiempo y color), `TransportState`, `OutputBus` (`main` \| `cue-click` \| `both`), y `QuantizeMode` (`immediate` \| `1-bar` \| `2-bars` \| `section-end`). |
+| [`src/components/TopBar.tsx`](file:///c:/Users/jpuerta/Documents/ChatGPT/Multi-chatgpt/multitrack-google/src/components/TopBar.tsx) | Barra de navegación superior con pestañas: `Setlist`, `En vivo`, `Arreglo`, `Mezcla`, `Control rápido`, `Biblioteca`. Integra el acceso al panel de conexión remota LAN y diagnóstico de audio. |
+| [`src/components/TransportDeck.tsx`](file:///c:/Users/jpuerta/Documents/ChatGPT/Multi-chatgpt/multitrack-google/src/components/TransportDeck.tsx) | Barra de transporte inferior. Incluye botones de Play/Pause, Stop, Vamp (repetición en bucle de la sección actual), selectores de BPM y afinación (Pitch en semitonos), cuantización y reloj con formato `mm:ss:ms`. |
+| [`src/components/RepertoireTreeSidebar.tsx`](file:///c:/Users/jpuerta/Documents/ChatGPT/Multi-chatgpt/multitrack-google/src/components/RepertoireTreeSidebar.tsx) | Panel lateral izquierdo retráctil que lista todas las canciones indexadas en la biblioteca. Permite arrastrar canciones al DAW o setlist, pulsar `+ Set` para sumarlas a la sesión, hacer clic en el `✓` (que al pasar el ratón se convierte en `✕`) para quitarlas de la sesión, y vaciar todo el setlist con el botón «Limpiar sesión actual». |
+| [`src/components/SetlistPageView.tsx`](file:///c:/Users/jpuerta/Documents/ChatGPT/Multi-chatgpt/multitrack-google/src/components/SetlistPageView.tsx) | Vista de trabajo para armar el show: muestra la forma de onda maestra, las secciones de la canción activa y el orden de reproducción interactivo. Si no hay canciones en el setlist, muestra un estado limpio «Setlist vacío». Contiene el botón «Limpiar sesión» con confirmación modal. |
+| [`src/components/LiveSetView.tsx`](file:///c:/Users/jpuerta/Documents/ChatGPT/Multi-chatgpt/multitrack-google/src/components/LiveSetView.tsx) | Vista optimizada para directores musicales durante el concierto: botones grandes con feedback táctil para saltar a cualquier sección, visualización de compases restantes y temporizadores de cuenta regresiva. |
+| [`src/components/TimelineArranger.tsx`](file:///c:/Users/jpuerta/Documents/ChatGPT/Multi-chatgpt/multitrack-google/src/components/TimelineArranger.tsx) | Vista tradicional de secuenciador / DAW multipista con pistas apiladas horizontalmente, renderizado de formas de onda por pista, zoom y posicionamiento de marcadores de sección con precisión de milisegundos. |
+| [`src/components/MultitrackMixer.tsx`](file:///c:/Users/jpuerta/Documents/ChatGPT/Multi-chatgpt/multitrack-google/src/components/MultitrackMixer.tsx) | Mesa de mezclas completa con faders de volumen logarítmicos en dB, perillas de paneo estéreo, botones Mute y Solo, asignación de canal a buses (`MAIN`, `CUE/CLICK`, `BOTH`) y medidores estéreo con caída balística a 60 fps. |
+| [`src/components/LibraryAndModals.tsx`](file:///c:/Users/jpuerta/Documents/ChatGPT/Multi-chatgpt/multitrack-google/src/components/LibraryAndModals.tsx) | Agrupa los componentes de gestión de biblioteca y modales emergentes: `LibraryView`, `SongMetadataEditModal` (editor de BPM, tono, artista y título), `ConfirmSongActionModal`, `SongFingerprintPromptModal` y `SectionEditorModal`. |
 
 ---
 
-## 4. Diagnóstico Detallado de los Problemas Actuales
+### 3.2. Capa de Persistencia y Almacenamiento
 
-Durante las pruebas reales con canciones multipista (~183 MB por canción y un Setlist de 3 canciones), se identificaron dos grandes problemas arquitectónicos. A continuación se documenta la **causa raíz exacta en el código** para cada uno:
-
----
-
-### PROBLEMA 1: ¿Por qué una canción de 183 MB pasa a ocupar ~800 MB tras OPFS (y en estimaciones de RAM)?
-
-Existen **4 factores acumulativos** en el código actual que inflan el peso entre **4x y 4.5x**:
-
-#### Causa 1.1: Conversión forzada de pistas MONO a ESTÉREO en OPFS (Duplica el peso 2x innecesariamente)
-- **Dónde ocurre:** `src/storage/opfsStorage.ts` (líneas 124–179, función `writeTrackPcmFromAudioBuffer`).
-- **Qué hace el código actual:**
-  ```ts
-  const leftChannel = audioBuffer.getChannelData(0);
-  const rightChannel = numChannels > 1 ? audioBuffer.getChannelData(1) : leftChannel;
-  // ... escribe siempre 2 canales intercalados (L, R) en Int16 (4 bytes por frame)
-  ```
-- **Por qué infla el peso:** En una sesión multipista típica (Click, Guía, Bajo, Bombo, Caja, Voces, Guitarras mono), muchas o la mayoría de las pistas son **Mono (1 canal)** o están comprimidas (FLAC/MP3/WAV 16-bit mono). Al convertir a OPFS, el código **duplica el canal izquierdo en el derecho para forzar que todas las pistas sean Estéreo de 2 canales**. Una pista mono pasa inmediatamente a pesar **el doble (2x)** en disco sin aportar ninguna información estéreo real.
-
-#### Causa 1.2: Resampleo automático a 48,000 Hz al decodificar
-- **Dónde ocurre:** `src/storage/pcmOptimizer.ts` (líneas 118–122).
-- **Qué hace el código actual:** Crea un `new AudioContext()` sin especificar la frecuencia de muestreo original del archivo (`sampleRate`). En la mayoría de las tarjetas de sonido y navegadores, `AudioContext` opera a **48,000 Hz**.
-- **Por qué infla el peso:** Si las pistas originales están a **44,100 Hz**, `decodeAudioData` las remuestrea a **48,000 Hz**, aumentando el número de frames en un **+8.84%** adicional. Si además los archivos originales eran formatos comprimidos sin pérdida (`.flac`) o con pérdida (`.mp3`, `.m4a`, `.ogg`), al expandirlos a PCM crudo sin comprimir el tamaño se multiplica entre **2x y 8x**.
-
-#### Causa 1.3: Duplicación total de almacenamiento entre IndexedDB y OPFS (No se borran ni compactan los Blobs originales)
-- **Dónde ocurre:** `src/storage/pcmOptimizer.ts` (líneas 33 y 69–75).
-- **Qué hace el código actual:**
-  - Al importar la canción, los **183 MB originales** se guardan en IndexedDB (`OmniTracksWebDB -> store: audioBuffers`).
-  - Al optimizar a OPFS, se escriben los archivos `.pcm` en OPFS (~400–600 MB), **pero se conservan intactos los 183 MB originales en IndexedDB**.
-  - Resultado en el almacenamiento del navegador (`navigator.storage.estimate()`): El navegador suma **IndexedDB (183 MB) + OPFS (~600 MB) = ~783 MB (~800 MB)** consumidos en el origen.
-
-#### Causa 1.4: Expansión a Float32 (32-bit) en Web Audio API y sobreestimación en `estimateProjectBytes`
-- **Dónde ocurre:** `src/audio/audioEngine.ts` (líneas 398–406 y 437–454).
-- **Qué hace el código actual:**
-  - En memoria RAM (`AudioBuffer` nativo de C++ en el navegador), cada muestra se almacena obligatoriamente en **Float32 (4 bytes por muestra)**, no en 16-bit (2 bytes) ni 24-bit (3 bytes).
-  - Además, `estimateProjectBytes(project)` calcula el peso estimado con la fórmula fija:
-    ```ts
-    Math.ceil(durationSec * sampleRate * 2 * 4 * project.tracks.length);
-    ```
-  - Es decir, asume que **todas las pistas son Estéreo (2 canales) a 4 bytes (32 bits) y 48,000 Hz**.
-  - **Matemática exacta del caso real (183 MB -> ~800 MB):**
-    - Si una canción de 183 MB está compuesta por WAVs en 16-bit (2 bytes por muestra) o 24-bit (3 bytes) con varias pistas mono:
-    - Al pasar a `Float32` (4 bytes por muestra) + asumir 2 canales en `estimateProjectBytes` + pasar de 44.1kHz a 48kHz, `183 MB` se convierte en **~732 MB a ~800 MB** en RAM y en el indicador de caché de la interfaz.
+| Archivo | Responsabilidad |
+|---|---|
+| [`src/storage/desktopLibrary.ts`](file:///c:/Users/jpuerta/Documents/ChatGPT/Multi-chatgpt/multitrack-google/src/storage/desktopLibrary.ts) | Comunica el frontend con el módulo nativo de Rust (`library_*`). Gestiona la carga y guardado de `library.json`, eliminación segura de canciones y sincronización del sidecar `omnitracks.project.json`. |
+| [`src/storage/projectDb.ts`](file:///c:/Users/jpuerta/Documents/ChatGPT/Multi-chatgpt/multitrack-google/src/storage/projectDb.ts) | Capa intermedia que bifurca la persistencia: en escritorio utiliza `desktopLibrary.ts`, mientras que en navegadores web utiliza IndexedDB (`OmniTracksWebDB`). |
+| [`src/utils/trackFingerprint.ts`](file:///c:/Users/jpuerta/Documents/ChatGPT/Multi-chatgpt/multitrack-google/src/utils/trackFingerprint.ts) | Genera la huella digital de una canción basándose en el número de pistas ($\pm 1$) y la coincidencia de tamaño en bytes y duración ($\ge 80\%$). Si se detecta una coincidencia exacta, vincula la carpeta sin duplicar; si hay ambigüedad, lanza una solicitud de confirmación al usuario. |
+| [`src/utils/titleCleaning.ts`](file:///c:/Users/jpuerta/Documents/ChatGPT/Multi-chatgpt/multitrack-google/src/utils/titleCleaning.ts) | Limpia automáticamente títulos sucios como `"Multitrack _ERES BENDITO_ ORIGINAL Jaime Murrel - G major - 108bpm - 440hz"` transformándolos en: Título: `"Eres Bendito"`, Artista: `"Jaime Murrel"`, BPM: `108`, Tono: `"G Major"`. |
 
 ---
 
-### PROBLEMA 2: ¿Por qué al cargar 3 canciones y tocar la 1ª, la 2ª no estaba en RAM, y al terminar la 2ª la 3ª tampoco estaba en RAM?
+### 3.3. Capa de Backend Nativo en Rust (`desktop/src-tauri/`)
 
-El usuario cargó 3 canciones. Cuando tocó la Canción 1, la Canción 2 no estaba lista en RAM; y cuando terminó la Canción 2, la Canción 3 tampoco estaba en RAM. Esto ocurre por **4 fallos en la lógica de caché y precarga**:
+El backend de Rust proporciona aislamiento del motor de audio frente a la recolección de basura de JavaScript y el throttling de los navegadores.
 
-#### Causa 2.1: `evictBeforeDecode` borra agresivamente todas las demás canciones aunque sobre RAM
-- **Dónde ocurre:** `src/audio/audioEngine.ts` (líneas 482–500).
-- **Qué hace el código actual:**
-  ```ts
-  private evictBeforeDecode(incomingBytes: number, protectedIds: string[] = []) {
-    const activeId = this.project?.id;
-    const protectedSet = new Set<string>(protectedIds.filter(Boolean));
-    if (activeId) protectedSet.add(activeId);
+#### Submódulo de Biblioteca (`desktop/src-tauri/src/library/mod.rs`)
+- **`library.json`:** Estructura atómica con control de versión y copia de respaldo automática (`library.backup.json`). Se escribe primero en un archivo temporal `.tmp` y se renombra atómicamente para prevenir corrupción si el equipo pierde energía.
+- **Sidecar Canónico (`omnitracks.project.json`):** Se escribe directamente en la carpeta de origen de los stems. Contiene las secciones, colores, balance de mezcla y tonalidad. Si existe el nombre heredado `.omnitracks.json`, el sistema lo lee por compatibilidad pero guarda siempre el nombre canónico visible.
+- **`library_save_song`:** Sincroniza bidireccionalmente el array `active_setlist` en `library.json`: cuando una canción se marca con `in_setlist: false`, se purga automáticamente de la lista activa del show.
 
-    // First pass: evict any song not in protectedSet (oldest first)
-    for (const candidateId of [...this.cacheOrder]) {
-      if (candidateId === activeId) continue;
-      if (!protectedSet.has(candidateId)) {
-        // ¡EXPULSA INCONDICIONALMENTE CUALQUIER CANCIÓN QUE NO ESTÉ EN protectedSet,
-        // SIN IMPORTAR SI CABE EN EL PRESUPUESTO DE RAM!
-        this.projectBufferCache.delete(candidateId);
-      }
-    }
-  ```
-- **Qué provoca esto:**
-  1. Cuando el usuario importa la Canción 1, queda en RAM.
-  2. Cuando importa la Canción 2, `mountDecodedTrack` (línea 1457) llama a `this.evictBeforeDecode(incomingBytes, [this.project.id])` pasando **únicamente** la canción recién importada como protegida. El *First pass* **borra inmediatamente la Canción 1 de la RAM**.
-  3. Cuando importa la Canción 3, **borra inmediatamente la Canción 2 de la RAM**, dejando únicamente la Canción 3 en RAM.
-  4. Luego, cuando el usuario selecciona la Canción 1 para empezar a tocar, `loadProject` (línea 749) llama a `this.evictBeforeDecode(estimatedBytes, [project.id])` pasando solo `[Cancion1.id]`, lo cual **borra la Canción 3 de la RAM** antes de decodificar la Canción 1.
-
-#### Causa 2.2: Condición de carrera entre `activateProject` y el `useEffect` de precarga en `App.tsx`
-- **Dónde ocurre:** `src/App.tsx` (líneas 176–202 y 301–328).
-- **Qué pasa paso a paso cuando el usuario selecciona la Canción 1:**
-  1. En `activateProject` (línea 301), se llama a `setCurrentProject(normalizedProj)` **antes** de que `await audioEngine.loadProject(normalizedProj)` termine de cargar la Canción 1.
-  2. Ese `setCurrentProject` dispara el `useEffect` de precarga (línea 176), que lanza un `setTimeout(..., 100ms)` para llamar a `audioEngine.preloadProject(Cancion2)`.
-  3. A los 100 ms, la Canción 1 **todavía se está decodificando** desde IndexedDB (tarda ~1–2 segundos).
-  4. Por tanto, `decodeProjectIntoCache(Cancion1)` y `preloadProject(Cancion2)` compiten al mismo tiempo por `ctx.decodeAudioData()` y por `evictBeforeDecode()`, o bien el cálculo de presupuesto falla.
-
-#### Causa 2.3: El presupuesto de RAM por defecto (1200 MB) rechaza la 2ª canción porque cada canción se estima en ~750–800 MB
-- **Dónde ocurre:** `src/audio/audioEngine.ts` (líneas 754–773).
-- **Qué hace el código actual:**
-  ```ts
-  // Check if active song + estimated next song fits within MAX_CACHE_BYTES
-  if (activeBytes + estimatedBytes > this.maxCacheBytes) {
-    this.skippedByRamBudgetIds.add(project.id);
-    // ¡ABORTA LA PRECARGA DE LA SIGUIENTE CANCIÓN!
-    return new Map<string, AudioBuffer>();
-  }
-  ```
-- **Por qué bloquea la Canción 2 y la Canción 3:**
-  - Como vimos en el Problema 1.4, una canción de 183 MB en disco ocupa o se estima en **~750–800 MB** en `AudioBuffer` Float32 en RAM.
-  - El presupuesto por defecto (`DEFAULT_RAM_BUDGET_MB`) es de **1200 MB**.
-  - Al intentar precargar la Canción 2 mientras la Canción 1 está activa:
-    `activeBytes (~780 MB) + estimatedBytes (~780 MB) = ~1560 MB > 1200 MB`.
-  - Como `1560 MB > 1200 MB`, el motor **aborta silenciosamente la precarga de la Canción 2** y la marca con `skippedByRamBudget = true`.
-  - Cuando termina la Canción 1 y pasa a la Canción 2, la Canción 2 no estaba en RAM (tuvo que cargarse en ese instante). Y al intentar precargar la Canción 3 mientras suena la Canción 2, vuelve a ocurrir lo mismo: `Canción 2 (~780 MB) + Canción 3 (~780 MB) > 1200 MB`, por lo que **tampoco precarga la Canción 3**.
-
-#### Causa 2.4: La optimización OPFS es hoy 100% manual y el modo por defecto es `'buffer'`
-- **Dónde ocurre:** `src/audio/audioEngine.ts` (línea 82: `return 'buffer';`) y `src/App.tsx` (`handleStartOptimizeProject`).
-- **Qué pasa:** Al importar 3 canciones, ninguna se optimiza automáticamente en OPFS en segundo plano, y aunque se optimicen manualmente, el motor sigue en modo `'buffer'` a menos que el usuario cambie manualmente el selector a `'stream'` en la barra superior.
+#### Submódulo de Audio (`desktop/src-tauri/src/audio/`)
+1. **`output.rs` (Control de Dispositivo y Stream CPAL):**
+   - Configura streams de audio mediante CPAL (Windows WASAPI compartido o exclusivo).
+   - El hilo de audio se configura con prioridad de tiempo real (`AvSetMmThreadCharacteristicsW` en Windows para perfil `"Pro Audio"`).
+   - **Manejo de Hot-Unplug en caliente:** Si la interfaz física (por ejemplo, Focusrite Scarlett) se desconecta durante el concierto, el motor detecta el fallo en el callback, conmuta a estado desconectado conservando la posición exacta del cursor (`playback_sample`), y permite reabrir el stream sin reiniciar la app.
+   - **Regla estricta:** Cero alocaciones de memoria y cero llamadas a `tracing::info!` dentro del callback de audio.
+2. **`playback.rs` (Procesamiento y Renderizado de Audio):**
+   - **`PlaybackFeeder`:** Hilo secundario que lee la caché PCM desde disco y llena un búfer circular en anillo *lock-free* (`rtrb`) de tamaño acotado.
+   - **Varispeed Continuo (`Rubato`):** Cada pista posee una instancia persistente de `rubato::SincFixedIn`. Al cambiar la afinación en tiempo real (por ejemplo +1 semitono), se ajusta el ratio con `set_resample_ratio_relative` conservando los remanentes de muestras entre bloques, eliminando cualquier chasquido o discontinuidad acústica.
+   - **Saltos de Sección Cuantizados y Vamp:** Al solicitar un salto de sección, el motor calcula el compás de destino y aplica un micro-crossfade de 8 ms para evitar clics. En modo Vamp, el motor entra en bucle cerrado continuo de la sección sin interrupción.
+   - **Metrónomo y Cues:** Generación analítica de pulsos sinusoidales de metrónomo (1000 Hz en pulso fuerte, 800 Hz en pulsos débiles) y síntesis de campanadas guía sin sobrecarga de CPU.
+   - **Ruteo Split-Mono:** Distribución independiente de pistas hacia canal izquierdo (música) y canal derecho (click y guía) según el bus asignado (`OutputBus`).
+3. **`cache.rs` (Caché PCM Nativa en Disco):**
+   - Almacena audio decodificado en formato PCM crudo con enteros de 16 bits (`i16`) en `%LOCALAPPDATA%\org.omnitracks.desktop\pcm\<song_id>\<track_id>.pcm`.
+   - **Preservación Mono Real:** Las pistas mono se detectan y almacenan con 1 solo canal (reduciendo el consumo de disco y RAM al 50%).
+4. **`import.rs` (Decodificación Multihilo con Symphonia):**
+   - Decodifica archivos MP3, WAV, FLAC, M4A, etc., en paralelo usando todos los núcleos de CPU disponibles con `rayon` / `tokio`.
+   - Remuestrea al vuelo a la frecuencia de muestreo del dispositivo de salida si difiere de la del archivo original.
 
 ---
 
-## 5. Arquitectura Propuesta por el Usuario (Hoja de Ruta para la Siguiente IA)
+## 4. Ciclo de Vida de una Canción (End-to-End)
 
-El usuario ha diseñado una estrategia híbrida muy sólida para resolver ambos problemas:
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Usuario
+    participant UI as Frontend (React)
+    participant RustLib as Rust (library/mod.rs)
+    participant RustImport as Rust (audio/import.rs)
+    participant Disk as Disco Duro
 
-> **Idea Central del Usuario:**
-> 1. **Solucionar primero el sobrepeso en OPFS** (por qué 183 MB pasan a 800 MB).
-> 2. **Estrategia Híbrida de Setlist:** Mantener las **2 primeras canciones siempre precargadas en RAM** para ejecución inmediata, y **a partir de la 3ª canción (o desde la 2ª en adelante), procesar y operar automáticamente en segundo plano vía OPFS (Streaming)** sin intervención manual del usuario.
+    Usuario->>UI: Importa carpeta de canción
+    UI->>RustImport: audio_scan_folder (analiza archivos)
+    RustImport-->>UI: Lista de archivos, duración y metadatos limpios
+    UI->>UI: Calcula Huella Digital (Track Fingerprint)
+    alt Es canción nueva
+        UI->>RustLib: library_save_song (guarda en library.json con inSetlist=false)
+        RustLib->>Disk: Escribe omnitracks.project.json en la carpeta
+        UI->>UI: Muestra la canción en el panel lateral con "+ Set"
+    else Coincide >= 80% con canción existente
+        UI->>Usuario: Muestra modal de confirmación / desambiguación
+    end
 
----
+    Usuario->>UI: Pulsa "+ Set" en la canción
+    UI->>RustImport: audio_import_tracks (genera caché PCM nativa)
+    RustImport->>Disk: Escribe pcm/<song_id>/*.pcm (16-bit)
+    UI->>RustLib: library_save_song (inSetlist=true)
+    UI->>UI: Canción ingresa al Setlist de hoy
 
-### Paso 1: Reducir drásticamente el peso en OPFS (De ~800 MB a ~150–183 MB)
-
-Para que una canción de 183 MB no se infle a 800 MB al pasar a OPFS, la siguiente IA debe aplicar estas mejoras en `src/storage/opfsStorage.ts`, `src/storage/pcmOptimizer.ts` y `src/audio/pcmReader.worker.ts`:
-
-1. **Respetar el número real de canales (Mono vs. Estéreo) por pista (`channels: 1 | 2`):**
-   - En `writeTrackPcmFromAudioBuffer` (`opfsStorage.ts`), inspeccionar `audioBuffer.numberOfChannels` (o incluso detectar si el canal L y R de un WAV estéreo son idénticos: *dual-mono* con diferencia RMS < `1e-5`).
-   - Si la pista es Mono (o dual-mono), guardarla en OPFS como **1 solo canal Int16 (`2 bytes por frame` en vez de `4 bytes por frame`)** y registrar `channels: 1` en `TrackPcmMetadata`.
-   - En `pcmReader.worker.ts`, si `channels === 1`, leer `requestedFrames * 2` bytes y copiar el mismo `Float32Array` a `leftChannel` (o construir un `AudioBuffer` de 1 canal en `StreamingTrack`, ya que Web Audio API soporta `ctx.createBuffer(1, frameCount, sampleRate)` de forma nativa y el `StereoPannerNode` lo panea en estéreo automáticamente).
-   - **Impacto directo:** Reduce a la **mitad (50% menos de RAM y 50% menos de disco OPFS)** todas las pistas mono (Click, Guide, Bass, Kick, Snare, Voces, Guitarras mono).
-
-2. **Preservar el `sampleRate` original o usar el del encabezado WAV:**
-   - Al decodificar en `pcmOptimizer.ts`, usar `OfflineAudioContext` o `AudioContext({ sampleRate: detectedWavSampleRate })` (por ejemplo, 44,100 Hz si los WAVs vienen a 44.1 kHz) para no inflar un +8.8% extra de muestras.
-
-3. **Eliminar los Blobs duplicados de IndexedDB una vez verificado el archivo OPFS:**
-   - En `optimizeProjectForStreaming` (`pcmOptimizer.ts`), después de verificar con `isProjectPcmComplete(updatedProject)` que el `.pcm` de una pista está 100% escrito e íntegro en OPFS, **eliminar el Blob crudo duplicado de esa pista en IndexedDB (`STORE_AUDIO`)** (o ofrecer una función `deleteProjectStemsFromDb(projectId)`).
-   - **Impacto directo:** Elimina los **183 MB duplicados** en IndexedDB una vez que la canción ya vive en OPFS.
-
----
-
-### Paso 2: Implementar el Motor Híbrido Automático (Canciones 1 y 2 en RAM + Resto en OPFS Background)
-
-Para cumplir exactamente el flujo que pide el usuario:
-
-1. **Precarga garantizada de las 2 primeras canciones (o Canción Activa + Siguiente Canción) en RAM:**
-   - **Corregir `evictBeforeDecode` (`src/audio/audioEngine.ts`):**
-     - Eliminar el "First pass" destructivo que borra canciones aunque no se haya superado el límite de RAM, o proteger explícitamente siempre la pareja `[activeSongId, nextSetlistSongId]`.
-     - Garantizar que las **2 canciones prioritarias del Setlist** (Canción 1 y Canción 2 al inicio; o Canción Actual y Canción Siguiente) **jamás sean bloqueadas por el estimador de presupuesto**, permitiendo que siempre haya 2 canciones listas para reproducirse con latencia 0 ms.
-   - **Esperar a que termine `loadProject(activeSong)` antes de disparar `preloadProject(nextSong)`:**
-     - En `App.tsx`, no disparar `preloadProject(nextSong)` a los 100 ms mientras `loadProject` aún está decodificando la canción activa. Dispararlo justo al finalizar `await audioEngine.loadProject(...)` para que no compitan por CPU/disco y la transición sea determinista.
-   - **Usar `AudioBuffer` de 1 canal para pistas mono también en Modo Buffer:**
-     - Si una pista es mono (o sus canales L y R son idénticos tras `decodeAudioData`), conservar solo 1 canal en el `AudioBuffer` en RAM (`ctx.createBuffer(1, buf.length, buf.sampleRate)`). Esto reduce el consumo de RAM por canción de ~750 MB a ~375 MB, permitiendo que 2 o 3 canciones quepan holgadamente en RAM sin picos de memoria.
-
-2. **Cola de Optimización Automática en Background hacia OPFS para las canciones restantes (Canción 3+ o desde la 2ª en segundo plano):**
-   - Crear un gestor de cola en segundo plano (`BackgroundOpfsQueue` en `pcmOptimizer.ts` o `App.tsx`) que observe `setlistQueue`:
-     - **Canción 1 y Canción 2:** Se mantienen listas en RAM de inmediato al importarse.
-     - **Canciones 3 en adelante (y opcionalmente la 2 en baja prioridad cuando el motor esté en reposo):** Se encolan automáticamente en segundo plano para convertirse a OPFS (`optimizeProjectForStreaming`) una pista a la vez, cediendo el hilo entre chunks (`requestIdleCallback` o `setTimeout`) y pausando la conversión si el usuario está en los primeros segundos críticos de una carga.
-   - **Selección Híbrida Automática por Canción (`getEffectiveEngineModeForProject`):**
-     - Si la canción ya está 100% en caché RAM (`hasFullProjectInCache(project)`), usar sus `AudioBuffers` en RAM instantáneamente.
-     - Si la canción (ej. Canción 3, 4, 5...) ya fue optimizada automáticamente en OPFS (`isProjectPcmReady(project)`), reproducirla directamente con el motor de **Streaming OPFS** (que solo usa ~12 MB de staging para los primeros 6 segundos y ~40 MB durante la reproducción), asegurando que al pasar de la Canción 1 -> 2 -> 3 -> N **todas estén siempre listas al instante (< 2 ms) sin importar cuántas canciones tenga el Setlist**.
+    Usuario->>UI: Pulsa Play en la canción
+    UI->>RustBackend: audio_load_project + audio_play
+    RustBackend->>Disk: PlaybackFeeder carga PCM a memoria intermedia
+    RustBackend->>Usuario: Audio suena por la interfaz física (WASAPI)
+```
 
 ---
 
-## 6. Comandos de Desarrollo y Verificación
+## 5. Protocolo y Servidor LAN (`desktop/src-tauri/src/lan.rs`)
 
-- **Instalar dependencias:** `npm install`
-- **Servidor de desarrollo (Puerto 3000):** `npm run dev`
-- **Verificar tipos y linting:** `npm run lint` (ejecuta `tsc --noEmit`)
-- **Compilar para producción:** `npm run build`
-- **Inspección de telemetría en consola del navegador:**
-  - Los logs de caché RAM llevan el prefijo `[AudioEngine][RAM]`.
-  - Los logs de streaming OPFS llevan el prefijo `[AudioEngine][Stream]` y `[AudioEngine][Staging]`.
-  - En la consola de DevTools se puede invocar `window.__pcmReaderClient.getMetrics()` para inspeccionar tiempos de lectura (`avgReadMs`, `p95ReadMs`, `syncHandlesSupported`).
+OmniTracks incluye un servidor HTTP y WebSocket autónomo en Rust que permite a los miembros de la banda conectarse desde sus teléfonos móviles sin instalar ninguna aplicación.
+
+- **Puerto:** TCP `8765` en la interfaz IPv4 seleccionada de la computadora.
+- **Rutas Servidas:**
+  - `http://<IP>:8765/monitor`: Interfaz ligera de solo lectura para músicos en el escenario. Muestra el título actual, sección en curso, cuenta regresiva de compases, BPM y tonalidad.
+  - `http://<IP>:8765/mezclador`: Interfaz táctil interactiva para el sonidista o monitores personales. Permite regular faders de volumen, paneos, mute y solo por pista.
+- **Seguridad y Aislamiento:**
+  - El servidor valida la sesión mediante token temporal y restringe a un máximo de 16 conexiones concurrentes.
+  - El cliente solo puede enviar comandos acotados de mezcla (`setTrackGain`, `setTrackPan`, `setTrackMute`, `setTrackSolo`). No tiene acceso al transporte principal (no puede pausar ni detener la canción desde un teléfono no autorizado).
+
+---
+
+## 6. Procedimientos de Mantenimiento y Extensión
+
+### 6.1. Agregar un Nuevo Comando IPC a Tauri
+1. Declarar la función asíncrona con el atributo `#[tauri::command]` en el archivo correspondiente (`desktop/src-tauri/src/audio/mod.rs` o `library/mod.rs`).
+2. Registrar el comando en la macro `tauri::generate_handler![...]` en [`desktop/src-tauri/src/main.rs`](file:///c:/Users/jpuerta/Documents/ChatGPT/Multi-chatgpt/multitrack-google/desktop/src-tauri/src/main.rs).
+3. Añadir el identificador del comando al array `"permissions"` en [`desktop/src-tauri/capabilities/desktop-remote.json`](file:///c:/Users/jpuerta/Documents/ChatGPT/Multi-chatgpt/multitrack-google/desktop/src-tauri/capabilities/desktop-remote.json).
+4. Invocar el comando desde el frontend usando:
+   ```ts
+   const invoke = (window as any).__TAURI__?.core?.invoke;
+   if (invoke) {
+     const result = await invoke('mi_nuevo_comando', { parametro: valor });
+   }
+   ```
+
+### 6.2. Reglas Obligatorias para Modificaciones de Audio
+- Nunca alojar memoria en el callback de renderizado de CPAL.
+- Los cambios de ratio de velocidad o afinación deben reutilizar el remuestreador Rubato activo; nunca instanciar un nuevo remuestreador mientras una pista está sonando.
+- Todo salto o seek debe iniciar con un desvanecimiento cruzado rápido para eliminar cualquier artefacto en los transitorios.
+
+---
+
+## 7. Verificación del Sistema y Tests
+
+El proyecto cuenta con suites de pruebas automatizadas que deben ejecutarse antes de cada entrega:
+
+1. **Frontend Linting:**
+   ```powershell
+   npm.cmd run lint
+   ```
+2. **Pruebas Unitarias de Lógica Frontend:**
+   ```powershell
+   npm.cmd test
+   ```
+   Verifica heurísticas de limpieza de títulos y coincidencia de huellas digitales de canciones.
+3. **Pruebas Unitarias de Rust y Audio Nativo:**
+   ```powershell
+   cargo test --manifest-path desktop/src-tauri/Cargo.toml --target x86_64-pc-windows-msvc --release
+   ```
+   Ejecuta 40+ pruebas que cubren: lectura y escritura de caché PCM, detección mono/estéreo, estabilidad ante desconexión de hardware, continuidad de varispeed sin clics, alineación del click a nivel de muestra, ruteo Split-Mono y protocolo de red LAN.
