@@ -79,7 +79,7 @@ El comando ejecuta Tauri v2 desde `desktop/`. Su hook genera `desktop/dist/`, in
 
 ### 3. Probar lo que se va a entregar
 
-Instala **ese mismo archivo** en una sesión de prueba de Windows y abre **OmniTracks** desde Inicio. Comprueba que el acceso apunta a la versión recién construida, aparece la interfaz y la LAN comienza apagada. El destino predeterminado es `%LOCALAPPDATA%\OmniTracks\omnitracks-desktop.exe`. La variante sin clave omite el botón de actualizaciones. Si ya existe LibreTracks Desktop, cierra esa ventana antes de abrir OmniTracks. Windows puede mostrar las dos instalaciones y ambas comparten el perfil del mismo usuario. Conserva los datos de aplicación si se desinstala la antigua.
+Instala **ese mismo archivo** en una sesión de prueba de Windows y abre **OmniTracks** desde Inicio. Comprueba que el acceso apunta a la versión recién construida, aparece la interfaz y la LAN comienza apagada. El destino predeterminado es `%LOCALAPPDATA%\OmniTracks\omnitracks-desktop.exe`. La variante sin clave omite el botón de actualizaciones. Si ya existe una versión previa en ejecución, cierra esa ventana antes de abrir OmniTracks. Windows conserva los datos de aplicación en `%LOCALAPPDATA%\org.omnitracks.desktop`.
 
 Al entregar, indica **commit, versión, ruta absoluta del `*-setup.exe` y qué arranque probaste**. Si el entorno solo permite compilar, marca la instalación y el arranque como **no medidos**. Los binarios y sus logs son artefactos locales. GitHub y Netlify reciben código, y GitHub Releases recibe el instalador únicamente al publicar una versión de escritorio.
 
@@ -139,10 +139,10 @@ $startupLog = Join-Path $env:TEMP 'omnitracks-arranque.log'
 
 ### Contratos a conservar
 
-- Mantén el motor en `src/audio/` y la persistencia en `src/storage/` salvo que el objetivo requiera tocarlos. Conserva `org.libretracks.desktop.poc`, el origen `https://tauri.localhost` e IndexedDB `LibreTracksWebDB` para que el cambio de nombre no cree un perfil vacío. Los JSON antiguos `.libretracks.json` siguen siendo importables. Los JSON transportan metadatos, secciones y mezcla. Las pistas locales viajan por separado.
-- El build web usa `dist/`. Solo el hook de escritorio activa `VITE_LIBRETRACKS_DESKTOP=1` y produce `desktop/dist/`. El panel LAN pertenece al shell Tauri. El despliegue web se comprueba en el sitio o en Netlify. Un push por sí solo confirma GitHub.
+- Mantén el motor en `src/audio/` y la persistencia en `src/storage/` salvo que el objetivo requiera tocarlos. El identificador de la app es `org.omnitracks.desktop`, el origen `https://tauri.localhost` e IndexedDB `OmniTracksWebDB`. Los archivos de proyecto usan extensión `.omnitracks.json`. Los JSON transportan metadatos, secciones y mezcla. Las pistas locales viajan por separado.
+- El build web usa `dist/`. Solo el hook de escritorio activa `VITE_OMNITRACKS_DESKTOP=1` y produce `desktop/dist/`. El panel LAN pertenece al shell Tauri. El despliegue web se comprueba en el sitio o en Netlify. Un push por sí solo confirma GitHub.
 - La LAN arranca apagada. El servidor escucha en la IPv4 privada elegida y puerto TCP `8765`. `/monitor` es de solo lectura. `/mezclador` admite exclusivamente `setTrackGain`, `setTrackPan`, `setTrackMute` y `setTrackSolo` por pista. Preserva sesiones por rol, validación del servidor, revisión de pistas, límites y colas acotadas. El puente aplica ajustes fuera del scheduler y sondea cada 100 ms como máximo cuando está activo. El control táctil envía al soltar la bolita. La ganancia remota es 0–3.1623 (−40 a +10 dB) y el paneo −1 a +1.
-- Si un celular falla, comprueba primero el QR vigente, la IPv4 del portátil y si otro equipo abre `http://<IPv4>:8765/monitor` en la misma LAN. En un Android se resolvió dando al navegador permiso de **Dispositivos cercanos** o **Red local**. Si el puerto está ocupado, comprueba si sigue abierto otro ejecutable de OmniTracks o LibreTracks. Evita cambiar firewall o antivirus como primera prueba.
+- Si un celular falla, comprueba primero el QR vigente, la IPv4 del portátil y si otro equipo abre `http://<IPv4>:8765/monitor` en la misma LAN. En un Android se resolvió dando al navegador permiso de **Dispositivos cercanos** o **Red local**. Si el puerto está ocupado, comprueba si sigue abierto otro ejecutable de OmniTracks. Evita cambiar firewall o antivirus como primera prueba.
 
 ## Validación según el cambio
 

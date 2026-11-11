@@ -407,11 +407,11 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
                   draggable
                   onDragStart={(e) => {
                     e.dataTransfer.setData(
-                      'application/x-libretracks-setlist-index',
+                      'application/x-omnitracks-setlist-index',
                       String(idx)
                     );
                     e.dataTransfer.setData(
-                      'application/x-libretracks-song-id',
+                      'application/x-omnitracks-song-id',
                       song.id
                     );
                   }}
@@ -422,13 +422,13 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
                   onDragLeave={() => setDragOverCardIdx(null)}
                   onDrop={(e) => {
                     e.preventDefault();
-                    if (e.dataTransfer.types.includes('application/x-libretracks-setlist-index')) e.stopPropagation();
+                    if (e.dataTransfer.types.includes('application/x-omnitracks-setlist-index')) e.stopPropagation();
                     setDragOverCardIdx(null);
                     const fromIdxStr = e.dataTransfer.getData(
-                      'application/x-libretracks-setlist-index'
+                      'application/x-omnitracks-setlist-index'
                     );
                     const droppedSongId = e.dataTransfer.getData(
-                      'application/x-libretracks-song-id'
+                      'application/x-omnitracks-song-id'
                     );
                     if (fromIdxStr !== '') {
                       const fromIdx = Number(fromIdxStr);
@@ -645,7 +645,7 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
             onDrop={async (e) => {
               e.preventDefault();
               const songId = e.dataTransfer.getData(
-                'application/x-libretracks-song-id'
+                'application/x-omnitracks-song-id'
               );
               if (songId) {
                 onAddToSetlist(songId);

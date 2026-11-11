@@ -158,7 +158,7 @@ export const RepertoireTreeSidebar: React.FC<RepertoireTreeSidebarProps> = ({
     e: React.DragEvent<HTMLDivElement>,
     song: SongProject
   ) => {
-    e.dataTransfer.setData('application/x-libretracks-song-id', song.id);
+    e.dataTransfer.setData('application/x-omnitracks-song-id', song.id);
     e.dataTransfer.effectAllowed = 'copyMove';
   };
 

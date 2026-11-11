@@ -82,11 +82,11 @@ import {
   StemImporterModal,
 } from './components/LibraryAndModals';
 
-const DesktopRemoteBridge = import.meta.env.VITE_LIBRETRACKS_DESKTOP === '1'
+const DesktopRemoteBridge = import.meta.env.VITE_OMNITRACKS_DESKTOP === '1'
   ? React.lazy(() => import('../desktop/frontend/RemoteConnectionBridge'))
   : null;
 
-const DesktopAudioSettings = import.meta.env.VITE_LIBRETRACKS_DESKTOP === '1'
+const DesktopAudioSettings = import.meta.env.VITE_OMNITRACKS_DESKTOP === '1'
   ? React.lazy(() => import('../desktop/frontend/DesktopAudioSettings'))
   : null;
 
@@ -822,7 +822,7 @@ export default function App() {
   // Setup BroadcastChannel for multi-tab / tablet Stage Remote control
   useEffect(() => {
     if (typeof BroadcastChannel === 'undefined') return;
-    const bc = new BroadcastChannel('libretracks_remote_sync');
+    const bc = new BroadcastChannel('omnitracks_remote_sync');
     channelRef.current = bc;
 
     bc.onmessage = (ev: MessageEvent<RemoteSyncMessage>) => {
@@ -1959,8 +1959,8 @@ export default function App() {
   const handleDragOverDaw = (e: React.DragEvent) => {
     e.preventDefault();
     if (
-      e.dataTransfer.types.includes('application/x-libretracks-song-id') &&
-      !e.dataTransfer.types.includes('application/x-libretracks-setlist-index')
+      e.dataTransfer.types.includes('application/x-omnitracks-song-id') &&
+      !e.dataTransfer.types.includes('application/x-omnitracks-setlist-index')
     ) {
       setDragOverlayMode('repertoire-song');
     } else if (e.dataTransfer.types.includes('Files')) {
@@ -1978,7 +1978,7 @@ export default function App() {
     e.preventDefault();
     setDragOverlayMode(null);
 
-    const songId = e.dataTransfer.getData('application/x-libretracks-song-id');
+    const songId = e.dataTransfer.getData('application/x-omnitracks-song-id');
     if (songId) {
       handleAddToSetlist(songId);
       handleLoadProjectImmediately(songId, false);

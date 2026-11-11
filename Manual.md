@@ -57,7 +57,7 @@ El sistema importa canciones en 2 fases sin bloquear la interfaz:
    - Extrae los picos de onda (`peaks`) y monta cada `AudioBuffer` en el motor (`audioEngine.mountDecodedTrack`).
 
 ### 3.2. Los Dos Modos del Motor de Audio (`src/audio/audioEngine.ts`)
-El motor `LibreTracksAudioEngine` cuenta con dos modos seleccionables en el `TopBar`:
+El motor `OmniTracksAudioEngine` cuenta con dos modos seleccionables en el `TopBar`:
 
 #### A. Modo `buffer` (Por defecto)
 - **Cómo funciona:** Decodifica todas las pistas de la canción completa en objetos `AudioBuffer` de Web Audio API en la memoria RAM (`projectBufferCache: Map<projectId, Map<trackId, AudioBuffer>>`).
@@ -111,7 +111,7 @@ Existen **4 factores acumulativos** en el código actual que inflan el peso entr
 #### Causa 1.3: Duplicación total de almacenamiento entre IndexedDB y OPFS (No se borran ni compactan los Blobs originales)
 - **Dónde ocurre:** `src/storage/pcmOptimizer.ts` (líneas 33 y 69–75).
 - **Qué hace el código actual:**
-  - Al importar la canción, los **183 MB originales** se guardan en IndexedDB (`LibreTracksWebDB -> store: audioBuffers`).
+  - Al importar la canción, los **183 MB originales** se guardan en IndexedDB (`OmniTracksWebDB -> store: audioBuffers`).
   - Al optimizar a OPFS, se escriben los archivos `.pcm` en OPFS (~400–600 MB), **pero se conservan intactos los 183 MB originales en IndexedDB**.
   - Resultado en el almacenamiento del navegador (`navigator.storage.estimate()`): El navegador suma **IndexedDB (183 MB) + OPFS (~600 MB) = ~783 MB (~800 MB)** consumidos en el origen.
 

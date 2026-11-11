@@ -18,7 +18,7 @@ export function getRegisteredSidecar(file: File): SongProject | undefined {
 }
 
 /**
- * Checks whether a file name corresponds to an OmniTracks / LibreTracks sidecar metadata file.
+ * Checks whether a file name corresponds to an OmniTracks sidecar metadata file.
  */
 export function isProjectSidecarFileName(name: string): boolean {
   if (!name) return false;
@@ -27,8 +27,7 @@ export function isProjectSidecarFileName(name: string): boolean {
   const lower = trimmed.toLowerCase();
   return (
     lower === PROJECT_SIDECAR_FILENAME ||
-    lower.endsWith('.omnitracks.json') ||
-    lower.endsWith('.libretracks.json')
+    lower.endsWith('.omnitracks.json')
   );
 }
 

@@ -8,7 +8,7 @@ use std::time::Instant;
 
 #[tokio::test]
 async fn verify_full_flow_user_request() {
-    let app_data_dir = PathBuf::from(r"C:\Users\jpuerta\AppData\Local\org.libretracks.desktop.poc");
+    let app_data_dir = PathBuf::from(r"C:\Users\jpuerta\AppData\Local\org.omnitracks.desktop");
     let pcm_dir = app_data_dir.join("pcm");
     let mp3_folder = PathBuf::from(r"C:\Users\jpuerta\Downloads\Eres Bendigo - Jaime Murrel");
     assert!(mp3_folder.exists(), "Carpeta de MP3 original debe existir");

@@ -1,5 +1,5 @@
 (async () => {
-  const probeName = 'libretracks-poc-' + crypto.randomUUID();
+  const probeName = 'omnitracks-poc-' + crypto.randomUUID();
   const result = {
     origin: location.origin,
     secureContext: isSecureContext,

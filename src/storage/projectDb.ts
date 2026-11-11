@@ -8,7 +8,7 @@ import {
   writeProjectSidecarToDirectory,
 } from './sourceFiles';
 
-const DB_NAME = 'LibreTracksWebDB';
+const DB_NAME = 'OmniTracksWebDB';
 const DB_VERSION = 1;
 const STORE_PROJECTS = 'projects';
 const STORE_AUDIO = 'audioBuffers';

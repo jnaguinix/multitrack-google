@@ -84,7 +84,7 @@ function readInitialEngineMode(): AudioEngineMode {
   return 'stream';
 }
 
-export class LibreTracksAudioEngine {
+export class OmniTracksAudioEngine {
   private ctx: AudioContext | null = null;
   private masterGainNode: GainNode | null = null;
   private mainBusGain: GainNode | null = null;
@@ -2617,14 +2617,14 @@ export class LibreTracksAudioEngine {
 
 import { nativeAudioEngine } from './nativeAudioEngine';
 
-export const webAudioEngine = new LibreTracksAudioEngine();
+export const webAudioEngine = new OmniTracksAudioEngine();
 const isDesktopEnvironment = typeof window !== 'undefined' && Boolean((window as any).__TAURI__);
-export const audioEngine: LibreTracksAudioEngine = (isDesktopEnvironment ? nativeAudioEngine : webAudioEngine) as unknown as LibreTracksAudioEngine;
+export const audioEngine: OmniTracksAudioEngine = (isDesktopEnvironment ? nativeAudioEngine : webAudioEngine) as unknown as OmniTracksAudioEngine;
 
 if (typeof window !== 'undefined') {
   const win = window as unknown as {
-    __streamStats: () => ReturnType<LibreTracksAudioEngine['getGlobalStreamStats']>;
-    __audioEngine: LibreTracksAudioEngine;
+    __streamStats: () => ReturnType<OmniTracksAudioEngine['getGlobalStreamStats']>;
+    __audioEngine: OmniTracksAudioEngine;
   };
   win.__streamStats = () => {
     const stats = webAudioEngine.getGlobalStreamStats();
