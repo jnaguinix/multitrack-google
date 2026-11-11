@@ -1,6 +1,21 @@
 import React, { memo, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Sliders, Volume2, Check, AlertTriangle, Info, RefreshCw, X, Activity, Play, Pause, Square, Flame, FolderOpen, HardDriveDownload } from 'lucide-react';
+import {
+  Sliders,
+  Volume2,
+  Check,
+  AlertTriangle,
+  Info,
+  RefreshCw,
+  X,
+  Activity,
+  Play,
+  Pause,
+  Square,
+  FolderOpen,
+  ChevronDown,
+  RotateCcw,
+} from 'lucide-react';
 import { loadAllProjectsFromDb, loadProjectStemsFromDb, extractStemArrayBuffer } from '../../src/storage/projectDb';
 import { SongProject } from '../../src/types/project';
 import './connection.css';
@@ -34,7 +49,6 @@ interface AudioStreamStatsSnapshot {
   maxCallbackDurationUs: number;
   minRingBufferLevelMs?: number | null;
 }
-
 
 interface PlaybackStateSnapshot {
   isPlaying: boolean;
@@ -73,6 +87,7 @@ export default memo(function DesktopAudioSettings({ triggerHost }: Props) {
   const [savingNotice, setSavingNotice] = useState('');
   const [statusNotice, setStatusNotice] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+
   const [stats, setStats] = useState<AudioStreamStatsSnapshot>({
     underruns: 0,
     callbacks: 0,
@@ -101,7 +116,6 @@ export default memo(function DesktopAudioSettings({ triggerHost }: Props) {
     }
   };
 
-
   const [songProjects, setSongProjects] = useState<SongProject[]>([]);
   const [selectedProjectId, setSelectedProjectId] = useState<string>('');
   const [playbackState, setPlaybackState] = useState<PlaybackStateSnapshot>({
@@ -124,6 +138,9 @@ export default memo(function DesktopAudioSettings({ triggerHost }: Props) {
   const [isGeneratingCache, setIsGeneratingCache] = useState(false);
   const [cacheProgressText, setCacheProgressText] = useState('');
   const [cacheProgressPercent, setCacheProgressPercent] = useState(0);
+
+  const [splitMono, setSplitMono] = useState(() => localStorage.getItem('omnitracks_split_mono') === 'true');
+  const [isDiagnosticsOpen, setIsDiagnosticsOpen] = useState(false);
 
   const activeDevice = devices.find((d) => d.name === selectedDeviceName) || devices.find((d) => d.isDefault) || devices[0];
 
@@ -157,7 +174,6 @@ export default memo(function DesktopAudioSettings({ triggerHost }: Props) {
         // ignore
       }
 
-
       if (savedConfig.deviceName && availableDevices.some((d) => d.name === savedConfig.deviceName)) {
         setSelectedDeviceName(savedConfig.deviceName);
       } else {
@@ -178,22 +194,29 @@ export default memo(function DesktopAudioSettings({ triggerHost }: Props) {
     }
   };
 
-  useEffect(() => {
-    if (invoke) {
-      void loadAudioConfig();
-      void pollStats();
-      const interval = setInterval(() => {
-        void pollStats();
-      }, 1500);
-      return () => clearInterval(interval);
+  const handleHostChange = async (hostName: string) => {
+    setSelectedHost(hostName);
+    if (!invoke) return;
+    try {
+      const devList = await invoke<AudioDeviceInfo[]>('audio_list_devices', { host: hostName });
+      setDevices(devList);
+      const def = devList.find((d) => d.isDefault) || devList[0];
+      if (def) setSelectedDeviceName(def.name);
+    } catch {
+      // ignore
     }
-  }, []);
+  };
 
   const handleDeviceChange = (deviceName: string) => {
     setSelectedDeviceName(deviceName);
     setSelectedChannel(0);
   };
 
+  useEffect(() => {
+    if (invoke) {
+      void loadAudioConfig();
+    }
+  }, []);
 
   useEffect(() => {
     let timer: number | null = null;
@@ -221,12 +244,12 @@ export default memo(function DesktopAudioSettings({ triggerHost }: Props) {
 
   const handleNativeLoad = async () => {
     if (!invoke || !selectedProjectId) return;
-    setNativeNotice('Cargando pistas en motor nativo...');
+    setNativeNotice('Cargando pistas...');
     setLoadErrorDetails(null);
     try {
       const res: any = await invoke('audio_load_project', { projectId: selectedProjectId });
       setIsNativeLoaded(true);
-      setNativeNotice(`Cargadas ${res.trackCount} pistas (${res.durationSec.toFixed(1)}s) a ${res.sampleRate} Hz`);
+      setNativeNotice(`Cargadas ${res.trackCount} pistas (${res.durationSec.toFixed(1)}s)`);
       pollStats();
     } catch (err: any) {
       const errMsg = String(err);
@@ -239,12 +262,12 @@ export default memo(function DesktopAudioSettings({ triggerHost }: Props) {
     if (!invoke || !selectedProjectId) return;
     setIsGeneratingCache(true);
     setCacheProgressPercent(0);
-    setCacheProgressText('Leyendo stems de la canción en la biblioteca...');
+    setCacheProgressText('Leyendo stems de la biblioteca...');
     setLoadErrorDetails(null);
     try {
       const stems = await loadProjectStemsFromDb(selectedProjectId);
       if (!stems || stems.length === 0) {
-        setLoadErrorDetails('No se encontraron stems guardados en IndexedDB para este proyecto. Usa el botón «Seleccionar carpeta de la canción» para importarla directamente desde el disco.');
+        setLoadErrorDetails('No se encontraron stems en memoria para este proyecto. Usa el botón de carpeta para decodificar desde disco.');
         setIsGeneratingCache(false);
         return;
       }
@@ -261,7 +284,6 @@ export default memo(function DesktopAudioSettings({ triggerHost }: Props) {
 
         const arrayBuf = await extractStemArrayBuffer(stem);
         if (!arrayBuf || arrayBuf.byteLength === 0) {
-          console.warn(`[NativeCache] Stem ${stem.trackId} sin buffer disponible en IndexedDB`);
           continue;
         }
 
@@ -277,19 +299,19 @@ export default memo(function DesktopAudioSettings({ triggerHost }: Props) {
       }
 
       if (completed === 0) {
-        setLoadErrorDetails('Los stems almacenados no tenían audio en memoria. Usa «Seleccionar carpeta de la canción» para leer los archivos originales desde disco.');
+        setLoadErrorDetails('Los stems almacenados no tenían buffer en memoria. Selecciona la carpeta original desde disco.');
         setIsGeneratingCache(false);
         return;
       }
 
       setCacheProgressPercent(100);
-      setCacheProgressText(`¡Caché nativa generada para ${completed} pistas! Cargando...`);
+      setCacheProgressText(`¡Caché generada para ${completed} pistas!`);
       setTimeout(() => {
         setIsGeneratingCache(false);
         void handleNativeLoad();
       }, 500);
     } catch (err: any) {
-      setLoadErrorDetails(`Error generando caché nativa: ${err}`);
+      setLoadErrorDetails(`Error generando caché: ${err}`);
       setIsGeneratingCache(false);
     }
   };
@@ -313,7 +335,7 @@ export default memo(function DesktopAudioSettings({ triggerHost }: Props) {
       if (!folderPath) return;
 
       setIsGeneratingCache(true);
-      setCacheProgressText(`Escaneando y decodificando archivos en "${folderPath}"...`);
+      setCacheProgressText(`Decodificando archivos en "${folderPath}"...`);
       setCacheProgressPercent(25);
       setLoadErrorDetails(null);
 
@@ -325,7 +347,7 @@ export default memo(function DesktopAudioSettings({ triggerHost }: Props) {
       });
 
       setCacheProgressPercent(100);
-      setCacheProgressText(`¡${res.tracks?.length || 0} pistas procesadas y cacheadas con éxito! Cargando...`);
+      setCacheProgressText(`¡${res.tracks?.length || 0} pistas procesadas!`);
       setTimeout(() => {
         setIsGeneratingCache(false);
         void handleNativeLoad();
@@ -340,9 +362,9 @@ export default memo(function DesktopAudioSettings({ triggerHost }: Props) {
     if (!invoke) return;
     try {
       await invoke('audio_play');
-      setNativeNotice('Reproduciendo por motor nativo...');
+      setNativeNotice('Reproduciendo');
     } catch (err: any) {
-      setNativeNotice(`Error al reproducir: ${err}`);
+      setNativeNotice(`Error: ${err}`);
     }
   };
 
@@ -352,7 +374,7 @@ export default memo(function DesktopAudioSettings({ triggerHost }: Props) {
       await invoke('audio_pause');
       setNativeNotice('En pausa');
     } catch (err: any) {
-      setNativeNotice(`Error en pausa: ${err}`);
+      setNativeNotice(`Error: ${err}`);
     }
   };
 
@@ -362,7 +384,7 @@ export default memo(function DesktopAudioSettings({ triggerHost }: Props) {
       await invoke('audio_stop');
       setNativeNotice('Detenido');
     } catch (err: any) {
-      setNativeNotice(`Error al detener: ${err}`);
+      setNativeNotice(`Error: ${err}`);
     }
   };
 
@@ -370,15 +392,14 @@ export default memo(function DesktopAudioSettings({ triggerHost }: Props) {
     if (!invoke) return;
     try {
       await invoke('audio_seek', { positionSec: sec });
-      setNativeNotice(`Saltado a ${sec.toFixed(1)}s`);
     } catch (err: any) {
-      setNativeNotice(`Error en salto: ${err}`);
+      setNativeNotice(`Error seek: ${err}`);
     }
   };
 
   const handleStressTest = () => {
     setIsStressTesting(true);
-    setStressNotice('Bloqueando el hilo de la UI del WebView por 3 segundos para probar aislamiento...');
+    setStressNotice('Probando aislamiento de hilo UI (3s)...');
     setTimeout(() => {
       const t0 = performance.now();
       let operations = 0;
@@ -387,7 +408,7 @@ export default memo(function DesktopAudioSettings({ triggerHost }: Props) {
       }
       pollStats().then(() => {
         setIsStressTesting(false);
-        setStressNotice(`Bloqueo finalizado (${Math.round(operations).toLocaleString()} ops). Comprueba que el audio nativo continuó sin cortes ni nuevos underruns.`);
+        setStressNotice(`Carga completada (${Math.round(operations).toLocaleString()} ops). Comprueba si hubo cortes.`);
       });
     }, 60);
   };
@@ -402,7 +423,7 @@ export default memo(function DesktopAudioSettings({ triggerHost }: Props) {
   const handleTestTone = async () => {
     if (!invoke || !activeDevice) return;
     setIsPlayingTestTone(true);
-    setStatusNotice(`Reproduciendo tono senoidal de 440 Hz en Salida ${selectedChannel + 1} (${activeDevice.name})...`);
+    setStatusNotice(`Tono 440 Hz en Salida ${selectedChannel + 1}...`);
 
     try {
       await invoke<TestToneResult>('audio_test_tone', {
@@ -438,14 +459,13 @@ export default memo(function DesktopAudioSettings({ triggerHost }: Props) {
       };
 
       await invoke('audio_set_config', { settings: settingsToSave });
-      setSavingNotice('Configuración guardada en audio_settings.json');
-      setTimeout(() => setSavingNotice(''), 3000);
+      setSavingNotice('Guardado');
+      setTimeout(() => setSavingNotice(''), 2500);
     } catch (err) {
-      setSavingNotice(`Error al guardar: ${err instanceof Error ? err.message : String(err)}`);
+      setSavingNotice(`Error: ${err instanceof Error ? err.message : String(err)}`);
     }
   };
 
-  // Determine Case A, B, or C according to PROMPT_MOTOR_NATIVO.md Section 6 & refined directives
   const isCaseA = Boolean(activeDevice && activeDevice.channels >= 4);
 
   const isCaseB = (() => {
@@ -482,8 +502,8 @@ export default memo(function DesktopAudioSettings({ triggerHost }: Props) {
           <button
             type="button"
             className="lt-control lt-icon-control"
-            aria-label="Salidas y Tarjeta de Sonido (WASAPI)"
-            title="Salidas y Tarjeta de Sonido (WASAPI)"
+            aria-label="Audio"
+            title="Audio"
             onClick={() => {
               dialogRef.current?.showModal();
               void loadAudioConfig();
@@ -497,409 +517,366 @@ export default memo(function DesktopAudioSettings({ triggerHost }: Props) {
       <dialog
         ref={dialogRef}
         id="desktop-audio-dialog"
-        className="lt-remote-dialog"
+        className="fixed inset-0 m-auto z-50 bg-studio-panel border border-neutral-800 rounded-2xl w-full max-w-xl p-5 space-y-3 shadow-2xl backdrop:bg-black/70 text-neutral-100 overflow-hidden"
         aria-labelledby="desktop-audio-title"
         onKeyDown={(e) => e.stopPropagation()}
       >
-        <header className="flex justify-between items-center pb-3 border-b border-neutral-800">
+        {/* 1. Cabecera: título «Audio» y botón de cerrar */}
+        <div className="flex items-center justify-between pb-2.5 border-b border-neutral-800">
           <div className="flex items-center gap-2">
-            <Sliders size={20} className="text-amber-500" />
-            <h2 id="desktop-audio-title" className="text-lg font-bold text-neutral-100">
-              Dispositivos de Audio (WASAPI Nativo)
+            <Volume2 className="w-4 h-4 text-studio-ink" />
+            <h2 id="desktop-audio-title" className="text-base font-bold text-neutral-100">
+              Audio
             </h2>
           </div>
           <button
             type="button"
-            className="lt-control p-1 rounded-lg text-neutral-400 hover:text-white"
             onClick={() => dialogRef.current?.close()}
+            className="text-neutral-400 hover:text-white p-1 cursor-pointer rounded-lg hover:bg-neutral-800 transition-colors"
+            aria-label="Cerrar modal"
           >
-            <X size={18} />
+            <X className="w-4 h-4" />
           </button>
-        </header>
+        </div>
 
-        <p className="text-xs text-neutral-400 mt-2 mb-4 leading-relaxed">
-          Configuración del motor nativo en Rust para OmniTracks Escritorio. Emite sonido multicanal de baja latencia a través de Windows WASAPI.
-        </p>
-
-        <div className="space-y-4">
-          {/* Driver Host Selector */}
-          <div className="flex flex-col gap-1.5">
-            <label className="text-xs font-semibold text-neutral-300">Driver / Host de Audio</label>
-            <div className="flex items-center gap-2">
-              <select
-                value={selectedHost}
-                onChange={(e) => setSelectedHost(e.target.value)}
-                className="w-full bg-studio-ground border border-neutral-800 rounded-lg px-3 py-2 text-xs text-neutral-100 focus:outline-none"
-              >
-                {hosts.map((h) => (
-                  <option key={h} value={h}>
-                    {h} (Predeterminado de Windows)
-                  </option>
-                ))}
-              </select>
-              <button
-                type="button"
-                onClick={() => void loadAudioConfig()}
-                className="lt-control px-2.5 py-2 text-xs flex items-center gap-1"
-                title="Actualizar lista de dispositivos"
-                disabled={isLoading}
-              >
-                <RefreshCw size={13} className={isLoading ? 'animate-spin' : ''} />
-              </button>
-            </div>
+        {/* 2. Dispositivo, en una sola fila: driver (estrecho), dispositivo (ancho) y refrescar */}
+        <div className="flex items-center gap-2">
+          <div className="w-24 shrink-0">
+            <select
+              value={selectedHost}
+              onChange={(e) => void handleHostChange(e.target.value)}
+              className="w-full bg-studio-strip border border-studio-line rounded-lg px-2.5 py-1.5 text-xs text-neutral-200 focus:outline-none focus:border-neutral-500 cursor-pointer"
+            >
+              {hosts.map((h) => (
+                <option key={h} value={h}>
+                  {h}
+                </option>
+              ))}
+            </select>
           </div>
+          <div className="flex-1 min-w-0">
+            <select
+              value={selectedDeviceName}
+              onChange={(e) => handleDeviceChange(e.target.value)}
+              className="w-full bg-studio-strip border border-studio-line rounded-lg px-2.5 py-1.5 text-xs text-neutral-200 focus:outline-none focus:border-neutral-500 truncate cursor-pointer"
+            >
+              {devices.map((d) => (
+                <option key={d.name} value={d.name}>
+                  {d.name} {d.isDefault ? '(Predeterminado)' : ''}
+                </option>
+              ))}
+            </select>
+          </div>
+          <button
+            type="button"
+            onClick={() => void loadAudioConfig()}
+            title="Refrescar lista de dispositivos"
+            className="p-2 rounded-lg bg-studio-strip hover:bg-neutral-800 border border-studio-line text-neutral-400 hover:text-white shrink-0 cursor-pointer transition-colors"
+          >
+            <RefreshCw size={13} className={isLoading ? 'animate-spin' : ''} />
+          </button>
+        </div>
 
-          {/* Device Selector */}
-          <div className="flex flex-col gap-1.5">
-            <label className="text-xs font-semibold text-neutral-300">Dispositivo de Salida</label>
-            {devices.length === 0 ? (
-              <p className="text-xs text-amber-400">No se encontraron dispositivos de salida disponibles.</p>
-            ) : (
-              <select
-                value={activeDevice?.name || ''}
-                onChange={(e) => handleDeviceChange(e.target.value)}
-                className="w-full bg-studio-ground border border-neutral-800 rounded-lg px-3 py-2 text-xs text-neutral-100 focus:outline-none"
-              >
-                {devices.map((dev) => (
-                  <option key={dev.id} value={dev.name}>
-                    {dev.name} {dev.isDefault ? '· (Predeterminado)' : ''} · {dev.channels} {dev.channels === 1 ? 'canal' : 'canales'}
-                  </option>
-                ))}
-              </select>
+        {/* 3. Resumen del dispositivo, en una sola línea de texto pequeño */}
+        {activeDevice && (
+          <div className="text-[11px] text-neutral-400 font-mono">
+            {activeDevice.channels} salidas · {activeDevice.defaultSampleRate.toLocaleString('es-ES')} Hz · búfer {activeDevice.minBufferSize ?? 480} ({Math.round(((activeDevice.minBufferSize ?? 480) / (activeDevice.defaultSampleRate || 48000)) * 1000)} ms) · {activeDevice.sampleFormat || 'f32'}
+          </div>
+        )}
+
+        {/* 4. Aviso del caso A, B o C: una sola línea con icono pequeño */}
+        {activeDevice && (
+          <div className="flex items-center justify-between text-xs text-neutral-300 min-h-[22px]">
+            {isCaseA && (
+              <div className="flex items-center gap-1.5">
+                <Check size={13} className="text-emerald-400 shrink-0" />
+                <span>Caso A: Dispositivo multicanal unificado ({activeDevice.channels} salidas disponibles).</span>
+              </div>
+            )}
+            {isCaseB && (
+              <div className="flex items-center gap-1.5">
+                <AlertTriangle size={13} className="text-amber-400 shrink-0" />
+                <span>Caso B: Salidas estéreo separadas. Usa ASIO para todas simultáneas.</span>
+              </div>
+            )}
+            {isCaseC && (
+              <>
+                <div className="flex items-center gap-1.5">
+                  <Info size={13} className="text-neutral-400 shrink-0" />
+                  <span>Caso C: Salida estéreo (2 canales).</span>
+                </div>
+                <label className="flex items-center gap-1.5 text-xs text-neutral-300 cursor-pointer select-none ml-auto">
+                  <input
+                    type="checkbox"
+                    checked={splitMono}
+                    onChange={(e) => {
+                      const checked = e.target.checked;
+                      setSplitMono(checked);
+                      localStorage.setItem('omnitracks_split_mono', String(checked));
+                    }}
+                    className="rounded border-neutral-700 bg-neutral-900 text-studio-ink focus:ring-0 cursor-pointer"
+                  />
+                  <span>Split-Mono</span>
+                </label>
+              </>
             )}
           </div>
+        )}
 
-          {/* Active Device Technical Details */}
-          {activeDevice && (
-            <div className="bg-studio-ground/80 border border-neutral-800 rounded-xl p-3.5 space-y-2 text-xs">
-              <div className="flex justify-between items-center text-neutral-300">
-                <span>Canales físicos detectados:</span>
-                <span className="font-semibold text-white">{activeDevice.channels} salidas</span>
-              </div>
-              <div className="flex justify-between items-center text-neutral-300">
-                <span>Frecuencia fijada por Windows:</span>
-                <span className="font-semibold text-white">{activeDevice.defaultSampleRate} Hz</span>
-              </div>
-              <div className="flex justify-between items-center text-neutral-300">
-                <span>Frecuencias soportadas reportadas:</span>
-                <span className="font-mono text-neutral-400">
-                  {activeDevice.supportedSampleRates.join(', ')} Hz
-                </span>
-              </div>
-              <div className="flex justify-between items-center text-neutral-300">
-                <span>Formato de muestra:</span>
-                <span className="font-mono text-neutral-400">{activeDevice.sampleFormat}</span>
-              </div>
-              {activeDevice.minBufferSize && (
-                <div className="flex justify-between items-center text-neutral-300">
-                  <span>Búfer de Windows (WASAPI):</span>
-                  <span className="font-mono text-neutral-300">
-                    {activeDevice.minBufferSize} muestras (~{((activeDevice.minBufferSize / (activeDevice.defaultSampleRate || 48000)) * 1000).toFixed(1)} ms)
-                  </span>
-                </div>
-              )}
+        {/* 5. Prueba de salida: en la misma fila, selector de canal y botón «Probar» */}
+        {activeDevice && (
+          <div className="flex items-center gap-2 pt-0.5">
+            <span className="text-xs text-neutral-400 shrink-0">Prueba de salida:</span>
+            <select
+              value={selectedChannel}
+              onChange={(e) => setSelectedChannel(Number(e.target.value))}
+              className="bg-studio-strip border border-studio-line rounded-lg px-2.5 py-1 text-xs text-neutral-200 focus:outline-none focus:border-neutral-500 cursor-pointer"
+            >
+              {Array.from({ length: activeDevice.channels }).map((_, idx) => (
+                <option key={idx} value={idx}>
+                  Salida {idx + 1} ({idx === 0 ? 'Left' : idx === 1 ? 'Right' : `Canal ${idx + 1}`})
+                </option>
+              ))}
+            </select>
+            <button
+              type="button"
+              onClick={() => void handleTestTone()}
+              disabled={isPlayingTestTone}
+              className="px-3 py-1 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-neutral-200 text-xs font-medium flex items-center gap-1.5 cursor-pointer disabled:opacity-50 transition-colors shrink-0"
+            >
+              <Play size={11} className={isPlayingTestTone ? 'animate-pulse text-amber-400' : ''} />
+              <span>{isPlayingTestTone ? 'Probando...' : 'Probar'}</span>
+            </button>
+            {statusNotice && (
+              <span className="text-[11px] text-neutral-400 truncate flex-1">{statusNotice}</span>
+            )}
+          </div>
+        )}
+
+        {/* 6. Sección plegable «Diagnóstico», cerrada por defecto (Se retirará en Fase 6) */}
+        <div className="border-t border-neutral-800 pt-2 space-y-2">
+          <button
+            type="button"
+            onClick={() => setIsDiagnosticsOpen(!isDiagnosticsOpen)}
+            className="flex items-center justify-between w-full text-xs font-semibold text-neutral-400 hover:text-neutral-200 py-0.5 cursor-pointer select-none transition-colors"
+          >
+            <div className="flex items-center gap-1.5">
+              <Activity size={13} className="text-neutral-400" />
+              <span>Diagnóstico</span>
             </div>
-          )}
+            <ChevronDown
+              size={13}
+              className={`text-neutral-400 transition-transform ${isDiagnosticsOpen ? 'rotate-180' : ''}`}
+            />
+          </button>
 
-          {/* Cases A, B, and C Alerts */}
-          {isCaseA && (
-            <div className="flex items-start gap-2.5 p-3 rounded-xl bg-emerald-950/40 border border-emerald-800/60 text-emerald-200 text-xs">
-              <Check size={16} className="text-emerald-400 shrink-0 mt-0.5" />
-              <div>
-                <strong className="block font-semibold">Caso A · Tarjeta Multicanal Unificada</strong>
-                <span>Esta interfaz expone {activeDevice.channels} canales simultáneos. Tienes ruteo libre directo para Main L/R, Click, Guía y salidas individuales.</span>
-              </div>
-            </div>
-          )}
-
-          {isCaseB && (
-            <div className="flex items-start gap-2.5 p-3 rounded-xl bg-amber-950/40 border border-amber-800/60 text-amber-200 text-xs">
-              <AlertTriangle size={16} className="text-amber-400 shrink-0 mt-0.5" />
-              <div>
-                <strong className="block font-semibold">Caso B · Salidas Estéreo Separadas</strong>
-                <span>Esta interfaz expone sus salidas como dispositivos separados en Windows. Por WASAPI sólo es posible utilizar un par estéreo a la vez. Para habilitar todas las salidas simultáneas y rutear en vivo, se requerirá el driver ASIO.</span>
-              </div>
-            </div>
-          )}
-
-          {isCaseC && (
-            <div className="flex items-start gap-2.5 p-3 rounded-xl bg-blue-950/40 border border-blue-800/60 text-blue-200 text-xs">
-              <Info size={16} className="text-blue-400 shrink-0 mt-0.5" />
-              <div>
-                <strong className="block font-semibold">Caso C · Salida Estéreo (2 Canales)</strong>
-                <span>Dispositivo de 2 salidas. Modo Split-Mono disponible para separar Click en Canal 1 y Pistas en Canal 2.</span>
-              </div>
-            </div>
-          )}
-
-          {/* Test Tone Section */}
-          {activeDevice && (
-            <div className="border border-neutral-800 rounded-xl p-3.5 space-y-3 bg-studio-ground/40">
+          {isDiagnosticsOpen && (
+            <div className="space-y-2 pt-1">
+              {/* Fila 1: Canción + Cargar + Botones de Caché + Estado */}
               <div className="flex items-center gap-2">
-                <Volume2 size={16} className="text-amber-400" />
-                <h3 className="text-xs font-semibold text-neutral-200">Prueba de Salida Física (Tono 440 Hz)</h3>
-              </div>
-
-              <div className="flex items-center gap-3">
-                <label className="text-xs text-neutral-400 shrink-0">Canal a probar:</label>
                 <select
-                  value={selectedChannel}
-                  onChange={(e) => setSelectedChannel(Number(e.target.value))}
-                  className="bg-studio-ground border border-neutral-800 rounded-lg px-3 py-1.5 text-xs text-neutral-100 focus:outline-none flex-1"
+                  value={selectedProjectId}
+                  onChange={(e) => {
+                    setSelectedProjectId(e.target.value);
+                    setIsNativeLoaded(false);
+                    setLoadErrorDetails(null);
+                    setNativeNotice('');
+                  }}
+                  className="flex-1 min-w-0 bg-studio-strip border border-studio-line rounded-lg px-2.5 py-1 text-xs text-neutral-200 truncate cursor-pointer"
                 >
-                  {Array.from({ length: activeDevice.channels }, (_, i) => (
-                    <option key={i} value={i}>
-                      Salida {i + 1} {i === 0 ? '(L)' : i === 1 ? '(R)' : ''}
+                  <option value="">Seleccionar canción...</option>
+                  {songProjects.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.title}
                     </option>
                   ))}
                 </select>
                 <button
                   type="button"
-                  onClick={() => void handleTestTone()}
-                  disabled={isPlayingTestTone}
-                  className={`lt-primary px-3 py-1.5 text-xs font-semibold rounded-lg flex items-center gap-1.5 transition-all cursor-pointer ${
-                    isPlayingTestTone ? 'opacity-70 animate-pulse' : ''
-                  }`}
+                  onClick={handleNativeLoad}
+                  disabled={!selectedProjectId}
+                  className="px-2.5 py-1 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-xs font-medium text-neutral-200 cursor-pointer disabled:opacity-50 shrink-0"
                 >
-                  <Volume2 size={14} />
-                  <span>{isPlayingTestTone ? 'Sonando...' : 'Probar'}</span>
+                  Cargar
                 </button>
-              </div>
-
-              {statusNotice && (
-                <p className="text-[11px] text-neutral-300 bg-neutral-900/60 px-2.5 py-1.5 rounded-lg border border-neutral-800">
-                  {statusNotice}
-                </p>
-              )}
-            </div>
-          )}
-
-
-          {/* Panel Temporal: Prueba del Motor Nativo (Fase 3) */}
-          <div className="border border-emerald-800/80 rounded-xl p-3.5 space-y-3 bg-emerald-950/20">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <Activity size={16} className="text-emerald-400" />
-                <h3 className="text-xs font-semibold text-emerald-200">
-                  Prueba del Motor Nativo (Fase 3 · Se retirará en Fase 6)
-                </h3>
-              </div>
-              <span className="text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded-full bg-emerald-900/60 border border-emerald-700/60 text-emerald-300">
-                {playbackState.isPlaying ? 'Reproduciendo' : isNativeLoaded ? 'Listo / Pausa' : 'Sin cargar'}
-              </span>
-            </div>
-
-            {/* Song selection & Load */}
-            <div className="flex items-center gap-2">
-              <select
-                value={selectedProjectId}
-                onChange={(e) => {
-                  setSelectedProjectId(e.target.value);
-                  setIsNativeLoaded(false);
-                  setLoadErrorDetails(null);
-                }}
-                className="bg-studio-ground border border-neutral-800 rounded-lg px-2.5 py-1.5 text-xs text-neutral-100 focus:outline-none flex-1 truncate"
-              >
-                {songProjects.length === 0 ? (
-                  <option value="">Sin canciones importadas en biblioteca</option>
-                ) : (
-                  songProjects.map((p) => (
-                    <option key={p.id} value={p.id}>
-                      {p.title} ({p.tracks.length} stems)
-                    </option>
-                  ))
+                {selectedProjectId && !isNativeLoaded && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={handleGenerateNativeCache}
+                      disabled={isGeneratingCache}
+                      className="px-2.5 py-1 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-xs text-neutral-300 cursor-pointer disabled:opacity-50 shrink-0"
+                      title="Generar caché nativa a 48 kHz desde IndexedDB"
+                    >
+                      {isGeneratingCache ? 'Generando...' : 'Generar caché'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleImportFromFolder}
+                      disabled={isGeneratingCache}
+                      className="p-1 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-neutral-300 cursor-pointer disabled:opacity-50 shrink-0"
+                      title="Seleccionar carpeta de la canción multitrack en disco"
+                    >
+                      <FolderOpen size={13} />
+                    </button>
+                  </>
                 )}
-              </select>
-              <button
-                type="button"
-                onClick={handleNativeLoad}
-                disabled={!selectedProjectId || isGeneratingCache}
-                className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-emerald-700 hover:bg-emerald-600 disabled:opacity-40 text-white cursor-pointer shrink-0"
-              >
-                Cargar
-              </button>
-            </div>
+                {nativeNotice && (
+                  <span className="text-[11px] text-neutral-400 truncate shrink-0 max-w-[140px]">
+                    {nativeNotice}
+                  </span>
+                )}
+              </div>
 
-            {/* Alerta de Error de Carga / Falta de Caché con Acciones de Generación */}
-            {loadErrorDetails && (
-              <div className="p-2.5 rounded-lg bg-amber-950/60 border border-amber-700/80 space-y-2">
-                <div className="flex items-start gap-2">
-                  <AlertTriangle size={15} className="text-amber-400 shrink-0 mt-0.5" />
-                  <div className="flex-1 text-[11px] text-amber-200 leading-relaxed font-mono">
-                    {loadErrorDetails}
+              {/* Progreso de generación si está activa */}
+              {isGeneratingCache && (
+                <div className="space-y-1">
+                  <div className="flex justify-between text-[10px] text-neutral-400">
+                    <span className="truncate">{cacheProgressText}</span>
+                    <span>{cacheProgressPercent}%</span>
+                  </div>
+                  <div className="h-1 bg-neutral-800 rounded-full overflow-hidden">
+                    <div
+                      className="h-full bg-studio-ink transition-all duration-200"
+                      style={{ width: `${cacheProgressPercent}%` }}
+                    />
                   </div>
                 </div>
-                <div className="flex items-center gap-2 pt-1 border-t border-amber-800/60">
+              )}
+
+              {/* Detalle de error si existe */}
+              {loadErrorDetails && (
+                <div className="text-[11px] text-rose-400 bg-rose-950/20 border border-rose-900/40 rounded px-2 py-1 truncate">
+                  {loadErrorDetails}
+                </div>
+              )}
+
+              {/* Fila 2: Transporte + Barra de posición + Carga UI */}
+              <div className="flex items-center gap-2">
+                <div className="flex items-center gap-1 shrink-0">
                   <button
                     type="button"
-                    onClick={handleGenerateNativeCache}
-                    disabled={isGeneratingCache}
-                    className="px-2.5 py-1 text-xs font-semibold rounded-lg bg-emerald-700 hover:bg-emerald-600 text-white flex items-center gap-1.5 cursor-pointer shadow"
+                    onClick={handleNativePlay}
+                    disabled={!isNativeLoaded}
+                    className="p-1 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-neutral-200 disabled:opacity-40 cursor-pointer"
+                    title="Play"
                   >
-                    <HardDriveDownload size={13} />
-                    <span>Generar caché nativa</span>
+                    <Play size={12} className={playbackState.isPlaying ? 'text-emerald-400' : ''} />
                   </button>
                   <button
                     type="button"
-                    onClick={handleImportFromFolder}
-                    disabled={isGeneratingCache}
-                    className="px-2.5 py-1 text-xs font-semibold rounded-lg bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 text-neutral-200 flex items-center gap-1.5 cursor-pointer"
+                    onClick={handleNativePause}
+                    disabled={!isNativeLoaded}
+                    className="p-1 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-neutral-200 disabled:opacity-40 cursor-pointer"
+                    title="Pausa"
                   >
-                    <FolderOpen size={13} />
-                    <span>Seleccionar carpeta de la canción</span>
+                    <Pause size={12} />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleNativeStop}
+                    disabled={!isNativeLoaded}
+                    className="p-1 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-neutral-200 disabled:opacity-40 cursor-pointer"
+                    title="Detener"
+                  >
+                    <Square size={12} />
                   </button>
                 </div>
-              </div>
-            )}
 
-            {/* Barra de Progreso de Generación de Caché Nativa */}
-            {isGeneratingCache && (
-              <div className="p-2.5 rounded-lg bg-emerald-950/70 border border-emerald-700/80 space-y-1.5">
-                <div className="flex items-center justify-between text-xs text-emerald-300">
-                  <span className="font-medium truncate max-w-[340px]">{cacheProgressText}</span>
-                  <span className="font-mono font-bold">{cacheProgressPercent}%</span>
-                </div>
-                <div className="w-full h-1.5 bg-neutral-800 rounded-full overflow-hidden">
-                  <div
-                    className="h-full bg-emerald-500 transition-all duration-200 ease-out"
-                    style={{ width: `${cacheProgressPercent}%` }}
-                  />
-                </div>
-              </div>
-            )}
-
-            {/* Transport Controls */}
-            <div className="flex items-center gap-2 pt-1">
-              <button
-                type="button"
-                onClick={handleNativePlay}
-                disabled={!isNativeLoaded || playbackState.isPlaying}
-                className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-white flex items-center gap-1 cursor-pointer"
-              >
-                <Play size={13} />
-                <span>Play</span>
-              </button>
-              <button
-                type="button"
-                onClick={handleNativePause}
-                disabled={!playbackState.isPlaying}
-                className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-neutral-800 hover:bg-neutral-700 disabled:opacity-40 text-neutral-200 flex items-center gap-1 cursor-pointer"
-              >
-                <Pause size={13} />
-                <span>Pausa</span>
-              </button>
-              <button
-                type="button"
-                onClick={handleNativeStop}
-                disabled={!isNativeLoaded && !playbackState.isPlaying}
-                className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-neutral-800 hover:bg-neutral-700 disabled:opacity-40 text-neutral-200 flex items-center gap-1 cursor-pointer"
-              >
-                <Square size={13} />
-                <span>Stop</span>
-              </button>
-
-              <div className="flex-1 flex items-center gap-2 pl-2">
                 <input
                   type="range"
                   min={0}
-                  max={Math.max(1, playbackState.durationSec)}
-                  step={0.5}
+                  max={playbackState.durationSec || 100}
+                  step={0.1}
                   value={seekInputSec}
                   onChange={(e) => {
-                    const val = Number(e.target.value);
-                    setSeekInputSec(val);
-                    handleNativeSeek(val);
+                    const v = Number(e.target.value);
+                    setSeekInputSec(v);
+                    void handleNativeSeek(v);
                   }}
                   disabled={!isNativeLoaded}
-                  className="flex-1 cursor-pointer accent-emerald-500"
+                  className="flex-1 h-1 bg-neutral-800 rounded appearance-none cursor-pointer accent-studio-ink"
                 />
-                <span className="font-mono text-[11px] text-neutral-300 shrink-0">
+
+                <span className="font-mono text-[10px] text-neutral-400 shrink-0 tabular-nums">
                   {formatTime(playbackState.positionSec)} / {formatTime(playbackState.durationSec)}
                 </span>
+
+                <button
+                  type="button"
+                  onClick={handleStressTest}
+                  disabled={isStressTesting}
+                  className="px-2 py-1 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-[10px] text-neutral-300 shrink-0 cursor-pointer disabled:opacity-50"
+                  title="Congela el hilo WebView por 3s para probar aislamiento del audio"
+                >
+                  {isStressTesting ? 'Probando...' : 'Carga UI (3s)'}
+                </button>
               </div>
-            </div>
 
-            {/* Stress Test Button */}
-            <div className="pt-1 flex items-center justify-between border-t border-emerald-900/50">
-              <button
-                type="button"
-                onClick={handleStressTest}
-                disabled={isStressTesting}
-                className="px-2.5 py-1 text-[11px] font-semibold rounded-lg bg-amber-900/50 hover:bg-amber-800/60 border border-amber-700/60 text-amber-200 flex items-center gap-1.5 cursor-pointer"
-                title="Congela el hilo de la UI durante 3s mientras el audio nativo suena"
-              >
-                <Flame size={12} className={isStressTesting ? 'animate-bounce text-amber-400' : 'text-amber-400'} />
-                <span>{isStressTesting ? 'Bloqueando UI (3s)...' : 'Probar carga pesada en UI (3s)'}</span>
-              </button>
-
-              {nativeNotice && (
-                <span className="text-[11px] text-emerald-300 truncate max-w-[280px]">
-                  {nativeNotice}
-                </span>
+              {/* Resultado de carga pesada UI como texto de una línea */}
+              {stressNotice && (
+                <div className="text-[10px] text-neutral-400 truncate">
+                  {stressNotice}
+                </div>
               )}
-            </div>
 
-            {stressNotice && (
-              <p className="text-[10px] text-amber-200 bg-amber-950/40 p-2 rounded-lg border border-amber-800/60 mt-1">
-                {stressNotice}
-              </p>
-            )}
-          </div>
-
-          {/* Telemetría del Callback en Tiempo Real */}
-          <div className="border border-neutral-800 rounded-xl p-3 bg-studio-ground/50 space-y-2">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-1.5 text-xs font-semibold text-neutral-200">
-                <Activity size={14} className="text-cyan-400" />
-                <span>Rendimiento del Callback (Rust / WASAPI)</span>
-              </div>
-              <button
-                type="button"
-                onClick={() => void handleResetStats()}
-                className="text-[11px] text-neutral-400 hover:text-white flex items-center gap-1"
-                title="Reiniciar contadores a cero"
-              >
-                <RefreshCw size={11} />
-                <span>Reiniciar contadores</span>
-              </button>
-            </div>
-            <div className="grid grid-cols-4 gap-2 text-center text-xs pt-1">
-              <div className="p-2 rounded-lg bg-black/30 border border-neutral-800/80">
-                <div className="text-[10px] text-neutral-400 uppercase tracking-wider">Callbacks</div>
-                <div className="font-mono font-semibold text-neutral-200 mt-0.5">
-                  {stats.callbacks.toLocaleString()}
+              {/* Fila de 4 contadores pequeños + botón reiniciar */}
+              <div className="flex items-center justify-between gap-2 p-2 rounded-lg bg-studio-strip border border-studio-line text-xs">
+                <div className="flex items-center gap-3.5 flex-1 min-w-0">
+                  <div className="truncate">
+                    <span className="text-[10px] text-neutral-400 mr-1 uppercase tracking-wider">Callbacks:</span>
+                    <span className="font-mono text-neutral-200">{stats.callbacks.toLocaleString()}</span>
+                  </div>
+                  <div className="truncate">
+                    <span className="text-[10px] text-neutral-400 mr-1 uppercase tracking-wider">Underruns:</span>
+                    <span className={`font-mono ${stats.underruns === 0 ? 'text-emerald-400' : 'text-rose-400 font-bold'}`}>
+                      {stats.underruns}
+                    </span>
+                  </div>
+                  <div className="truncate">
+                    <span className="text-[10px] text-neutral-400 mr-1 uppercase tracking-wider">Duración máx:</span>
+                    <span className="font-mono text-neutral-200">
+                      {stats.maxCallbackDurationUs > 0 ? `${stats.maxCallbackDurationUs} µs` : '0 µs'}
+                    </span>
+                  </div>
+                  <div className="truncate">
+                    <span className="text-[10px] text-neutral-400 mr-1 uppercase tracking-wider">Búfer mín:</span>
+                    <span className="font-mono text-emerald-400">
+                      {stats.minRingBufferLevelMs != null ? `${stats.minRingBufferLevelMs} ms` : '—'}
+                    </span>
+                  </div>
                 </div>
-              </div>
-              <div className="p-2 rounded-lg bg-black/30 border border-neutral-800/80">
-                <div className="text-[10px] text-neutral-400 uppercase tracking-wider">Underruns</div>
-                <div className={`font-mono font-semibold mt-0.5 ${stats.underruns === 0 ? 'text-emerald-400' : 'text-rose-400 animate-pulse font-bold'}`}>
-                  {stats.underruns}
-                </div>
-              </div>
-              <div className="p-2 rounded-lg bg-black/30 border border-neutral-800/80">
-                <div className="text-[10px] text-neutral-400 uppercase tracking-wider">Duración Máx.</div>
-                <div className={`font-mono font-semibold mt-0.5 ${stats.maxCallbackDurationUs < 5000 ? 'text-emerald-400' : 'text-amber-400'}`}>
-                  {stats.maxCallbackDurationUs > 0 ? `${stats.maxCallbackDurationUs} µs` : '0 µs'}
-                </div>
-              </div>
-              <div className="p-2 rounded-lg bg-black/30 border border-neutral-800/80">
-                <div className="text-[10px] text-neutral-400 uppercase tracking-wider">Búfer Mínimo</div>
-                <div className="font-mono font-semibold text-emerald-400 mt-0.5">
-                  {stats.minRingBufferLevelMs != null ? `${stats.minRingBufferLevelMs} ms` : '—'}
-                </div>
+                <button
+                  type="button"
+                  onClick={() => void handleResetStats()}
+                  className="text-[10px] text-neutral-400 hover:text-white flex items-center gap-1 cursor-pointer shrink-0 transition-colors"
+                  title="Reiniciar contadores a cero"
+                >
+                  <RotateCcw size={10} />
+                  <span>Reiniciar</span>
+                </button>
               </div>
             </div>
-          </div>
+          )}
+        </div>
 
-          {/* Save / Status Actions */}
-          <div className="pt-2 flex items-center justify-between border-t border-neutral-800">
-            <span className="text-xs text-neutral-400">{savingNotice}</span>
+        {/* 7. Pie: «Cancelar» y «Guardar», alineados a la derecha */}
+        <div className="flex items-center justify-between pt-2.5 border-t border-neutral-800">
+          <span className="text-xs text-neutral-400">{savingNotice}</span>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => dialogRef.current?.close()}
+              className="px-4 py-2 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-xs font-medium text-neutral-300 cursor-pointer transition-colors"
+            >
+              Cancelar
+            </button>
             <button
               type="button"
               onClick={() => void handleSaveConfig()}
-              className="lt-primary px-4 py-2 text-xs font-semibold rounded-lg"
+              className="px-4 py-2 rounded-lg bg-studio-ink hover:bg-neutral-200 text-studio-ground text-xs font-semibold cursor-pointer transition-colors"
             >
-              Guardar Configuración
+              Guardar
             </button>
           </div>
         </div>
