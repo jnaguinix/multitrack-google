@@ -42,6 +42,7 @@ export interface TrackChannel {
   isCustomAudio?: boolean;
   fileName?: string;
   filePath?: string;
+  fileSize?: number;
   durationSec?: number;
   pcm?: TrackPcmMetadata;
 }

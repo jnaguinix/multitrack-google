@@ -81,8 +81,14 @@ import {
   LibraryView,
   OptimizationProgressModal,
   SectionEditorModal,
+  SongFingerprintPromptModal,
   StemImporterModal,
 } from './components/LibraryAndModals';
+import {
+  findSongFingerprintMatches,
+  FingerprintCandidate,
+  TrackSummary,
+} from './audio/fingerprint';
 
 const DesktopRemoteBridge = import.meta.env.VITE_OMNITRACKS_DESKTOP === '1'
   ? React.lazy(() => import('../desktop/frontend/RemoteConnectionBridge'))
@@ -194,6 +200,12 @@ export default function App() {
 
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
   const [importStatusText, setImportStatusText] = useState<string | null>(null);
+  const [fingerprintPrompt, setFingerprintPrompt] = useState<{
+    candidates: FingerprintCandidate[];
+    incomingTrackCount: number;
+    sourceLabel: string;
+    resolve: (choice: SongProject | null | 'cancel') => void;
+  } | null>(null);
   const [dragOverlayMode, setDragOverlayMode] = useState<'files' | 'repertoire-song' | null>(
     null
   );
@@ -1478,17 +1490,72 @@ export default function App() {
           return;
         }
 
-        const existingCandidate = scanned.folderPath
-          ? projectsRef.current.find(
-              (p) =>
-                p.folderPath &&
-                scanned.folderPath &&
-                p.folderPath.toLowerCase() === scanned.folderPath.toLowerCase()
-            )
-          : null;
+        // Track fingerprinting check:
+        // Rule: Only considers two songs to be the same if track count matches within ±1
+        // and at least 80% (>= 0.80) of tracks match in size and duration.
+        // If match is partial (0.80 <= ratio < 1.0) or multiple candidates, prompt the user.
+        const incomingSummaries: TrackSummary[] = scanned.files.map((f) => ({
+          fileSize: f.fileSize ?? undefined,
+          durationSec: f.estDurationSec ?? undefined,
+          name: f.trackName,
+          fileName: f.fileName,
+        }));
 
-        if (effectiveMode === 'new-song' && existingCandidate) {
-          targetProjectId = existingCandidate.id;
+        let existingCandidate: SongProject | null = null;
+
+        if (effectiveMode === 'new-song') {
+          const fingerprintCandidates = findSongFingerprintMatches(
+            incomingSummaries,
+            projectsRef.current
+          );
+
+          if (fingerprintCandidates.length > 0) {
+            const topCandidate = fingerprintCandidates[0];
+            const isExactSingleMatch =
+              fingerprintCandidates.length === 1 && topCandidate.matchRatio === 1.0;
+
+            if (isExactSingleMatch) {
+              // 100% exact match and unique candidate: update existing song without prompt
+              existingCandidate = topCandidate.song;
+            } else {
+              // Partial match (80% <= ratio < 100%) OR multiple candidates: ask user!
+              const sourceLabel =
+                scanned.folderName || scanned.title || (scanned.files[0]?.trackName ?? 'Audio');
+              const userChoice = await new Promise<SongProject | null | 'cancel'>((resolve) => {
+                setFingerprintPrompt({
+                  candidates: fingerprintCandidates,
+                  incomingTrackCount: scanned.files.length,
+                  sourceLabel,
+                  resolve,
+                });
+              });
+
+              if (userChoice === 'cancel') {
+                return;
+              } else if (userChoice !== null) {
+                existingCandidate = userChoice;
+              } else {
+                existingCandidate = null;
+              }
+            }
+          } else {
+            // Secondary fallback: check by exact folderPath
+            const folderMatch = scanned.folderPath
+              ? projectsRef.current.find(
+                  (p) =>
+                    p.folderPath &&
+                    scanned.folderPath &&
+                    p.folderPath.toLowerCase() === scanned.folderPath.toLowerCase()
+                )
+              : null;
+            if (folderMatch) {
+              existingCandidate = folderMatch;
+            }
+          }
+
+          if (existingCandidate) {
+            targetProjectId = existingCandidate.id;
+          }
         }
 
         const bpm = scanned.bpm || (effectiveMode === 'current-song' ? currentProjectRef.current?.bpm || 120 : 120);
@@ -1518,6 +1585,7 @@ export default function App() {
             isCustomAudio: true,
             fileName: file.fileName,
             filePath: file.filePath,
+            fileSize: file.fileSize ?? undefined,
             durationSec: estDuration > 0 ? estDuration : undefined,
           };
         });
@@ -1558,6 +1626,10 @@ export default function App() {
                   bus: prev.bus,
                   role: prev.role,
                   color: prev.color,
+                  filePath: it.filePath || prev.filePath,
+                  fileName: it.fileName || prev.fileName,
+                  fileSize: it.fileSize ?? prev.fileSize,
+                  durationSec: it.durationSec ?? prev.durationSec,
                 };
               }
               return it;
@@ -1682,6 +1754,7 @@ export default function App() {
                     ...t,
                     peaks: meta.peaks || t.peaks,
                     durationSec: meta.durationSec || t.durationSec,
+                    fileSize: t.fileSize,
                     pcm: {
                       sampleRate: meta.targetSampleRate,
                       channels: meta.channels,
@@ -2771,6 +2844,30 @@ export default function App() {
         }}
         onConfirmAddToSetlist={(songId) => handleAddToSetlist(songId)}
       />
+
+      {/* Song Fingerprint Ambiguity / Confirmation Modal */}
+      {fingerprintPrompt && (
+        <SongFingerprintPromptModal
+          candidates={fingerprintPrompt.candidates}
+          incomingTrackCount={fingerprintPrompt.incomingTrackCount}
+          sourceLabel={fingerprintPrompt.sourceLabel}
+          onConfirmMatch={(chosenSong) => {
+            const cb = fingerprintPrompt.resolve;
+            setFingerprintPrompt(null);
+            cb(chosenSong);
+          }}
+          onImportAsNew={() => {
+            const cb = fingerprintPrompt.resolve;
+            setFingerprintPrompt(null);
+            cb(null);
+          }}
+          onCancel={() => {
+            const cb = fingerprintPrompt.resolve;
+            setFingerprintPrompt(null);
+            cb('cancel');
+          }}
+        />
+      )}
 
       {/* Stem Importer Modal */}
       <StemImporterModal

@@ -9,7 +9,7 @@
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit",
-    "test": "tsx test/titleCleaning.test.ts"
+    "test": "tsx test/titleCleaning.test.ts && tsx test/trackFingerprint.test.ts"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",

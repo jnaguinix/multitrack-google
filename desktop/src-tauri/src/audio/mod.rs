@@ -628,6 +628,7 @@ pub struct ScannedAudioFile {
     pub track_name: String,
     pub track_id: String,
     pub est_duration_sec: Option<f64>,
+    pub file_size: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -748,6 +749,7 @@ pub async fn audio_scan_folder(
                     };
 
                     let est_duration_sec = probe_wav_header_duration(&path);
+                    let file_size = path.metadata().ok().map(|m| m.len());
 
                     files.push(ScannedAudioFile {
                         file_path: path.to_string_lossy().to_string(),
@@ -755,6 +757,7 @@ pub async fn audio_scan_folder(
                         track_name: file_stem,
                         track_id,
                         est_duration_sec,
+                        file_size,
                     });
                 }
             }
@@ -806,6 +809,7 @@ pub async fn audio_scan_files(
                     auto_idx += 1;
                     let track_id = format!("stem-{:02}", auto_idx);
                     let est_duration_sec = probe_wav_header_duration(path);
+                    let file_size = path.metadata().ok().map(|m| m.len());
 
                     files.push(ScannedAudioFile {
                         file_path: fp,
@@ -813,6 +817,7 @@ pub async fn audio_scan_files(
                         track_name: file_stem,
                         track_id,
                         est_duration_sec,
+                        file_size,
                     });
                 }
             }

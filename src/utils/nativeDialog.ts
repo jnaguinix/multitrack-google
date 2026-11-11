@@ -15,6 +15,7 @@ export interface ScannedAudioFile {
   trackName: string;
   trackId: string;
   estDurationSec?: number | null;
+  fileSize?: number | null;
 }
 
 export interface ScannedFolderInfo {
