@@ -22,6 +22,7 @@ import { OutputBus, SongProject, SongSection, TrackChannel } from '../types/proj
 import { audioEngine } from '../audio/audioEngine';
 import { PcmOptimizationProgress } from '../storage/pcmOptimizer';
 import { isFsAccessSupported, pickAudioSources } from '../storage/sourceFiles';
+import { isDesktopApp, pickNativeFiles, pickNativeFolder } from '../utils/nativeDialog';
 import { formatMmSs } from './TransportDeck';
 
 interface LibraryViewProps {
@@ -467,12 +468,24 @@ interface StemImporterModalProps {
     defaultBus: OutputBus,
     importMode: 'new-song' | 'current-song'
   ) => void;
+  onImportNativeFolder?: (
+    folderPath: string,
+    defaultBus: OutputBus,
+    importMode: 'new-song' | 'current-song'
+  ) => void;
+  onImportNativeFiles?: (
+    filePaths: string[],
+    defaultBus: OutputBus,
+    importMode: 'new-song' | 'current-song'
+  ) => void;
 }
 
 export const StemImporterModal: React.FC<StemImporterModalProps> = ({
   isOpen,
   onClose,
   onImportFiles,
+  onImportNativeFolder,
+  onImportNativeFiles,
 }) => {
   const [defaultBus, setDefaultBus] = useState<OutputBus>('main');
   const [importMode, setImportMode] = useState<'new-song' | 'current-song'>('new-song');
@@ -551,6 +564,16 @@ export const StemImporterModal: React.FC<StemImporterModalProps> = ({
           {/* Multi-file Picker */}
           <label
             onClick={(e) => {
+              if (isDesktopApp()) {
+                e.preventDefault();
+                pickNativeFiles().then((paths) => {
+                  if (paths && paths.length > 0) {
+                    onClose();
+                    onImportNativeFiles?.(paths, defaultBus, importMode);
+                  }
+                });
+                return;
+              }
               if (!isFsAccessSupported()) return;
               e.preventDefault();
               pickAudioSources('files', null, (files) => {
@@ -586,12 +609,21 @@ export const StemImporterModal: React.FC<StemImporterModalProps> = ({
           {/* Directory / Folder Picker */}
           <button
             type="button"
-            onClick={() =>
+            onClick={() => {
+              if (isDesktopApp()) {
+                pickNativeFolder().then((folderPath) => {
+                  if (folderPath) {
+                    onClose();
+                    onImportNativeFolder?.(folderPath, defaultBus, importMode);
+                  }
+                });
+                return;
+              }
               pickAudioSources('folder', folderInputRef.current, (files) => {
                 onClose();
                 onImportFiles(files, defaultBus, importMode);
-              })
-            }
+              });
+            }}
             className="border-2 border-dashed border-neutral-700 hover:border-studio-line rounded-xl p-6 flex flex-col items-center justify-center text-center cursor-pointer transition-colors bg-studio-ground/60"
           >
             <FolderPlus className="w-7 h-7 text-studio-ink mb-2" />

@@ -45,6 +45,12 @@ import { TimelineArranger } from './components/TimelineArranger';
 import { MultitrackMixer } from './components/MultitrackMixer';
 import { StageRemoteView } from './components/StageRemoteView';
 import {
+  scanNativeFolder,
+  scanNativeFiles,
+  importTrackBytesRaw,
+  ScannedFolderInfo,
+} from './utils/nativeDialog';
+import {
   cleanOrphanPcmDirectories,
   ensureStoragePersist,
   isOpfsSupported,
@@ -360,7 +366,7 @@ export default function App() {
   // Copies a song's audio into OPFS once (sequential queue, silent, in the background)
   const runAutoOptimize = useCallback(
     (projectId: string) => {
-      if (!isOpfsSupported()) return;
+      if (isDesktopApp || !isOpfsSupported()) return;
       if (queuedOptimizeIdsRef.current.has(projectId)) return;
       queuedOptimizeIdsRef.current.add(projectId);
       setPreparingIds(new Set(queuedOptimizeIdsRef.current));
@@ -1060,14 +1066,8 @@ export default function App() {
                 const trackId = initialTracks[idx].id;
                 try {
                   const arrayBuf = await file.arrayBuffer();
-                  const bytes = Array.from(new Uint8Array(arrayBuf));
-                  const meta: any = await invoke('audio_import_track_bytes', {
-                    projectId: targetProjectId,
-                    trackId,
-                    fileName: file.name,
-                    bytes,
-                    targetSampleRate: null,
-                  });
+                  const rawBytes = new Uint8Array(arrayBuf);
+                  const meta: any = await importTrackBytesRaw(targetProjectId, trackId, file.name, rawBytes);
                   const matchedTrack = initialTracks.find((t) => t.id === trackId);
                   if (matchedTrack && meta) {
                     matchedTrack.peaks = meta.peaks;
@@ -1338,6 +1338,218 @@ export default function App() {
     },
     [projects.length, showToast]
   );
+
+  // Desktop Native Import: Passes folder/file paths directly to Rust native engine.
+  // JavaScript never reads audio file bytes; song appears immediately in the library (< 5 ms)
+  // and conversion executes non-blocking in the background.
+  const handleImportNative = useCallback(
+    async (
+      source: { folderPath?: string; filePaths?: string[] },
+      defaultBus: OutputBus = 'main',
+      importMode: 'new-song' | 'current-song' = 'new-song'
+    ) => {
+      const invoke = (window as any).__TAURI__?.core?.invoke;
+      if (!invoke) return;
+
+      const t0 = performance.now();
+      const baseTimestamp = Date.now();
+      const effectiveMode =
+        importMode === 'current-song' && !currentProjectRef.current ? 'new-song' : importMode;
+      const targetProjectId =
+        effectiveMode === 'new-song'
+          ? `song-${baseTimestamp}`
+          : currentProjectRef.current!.id;
+
+      try {
+        let scanned: ScannedFolderInfo;
+        if (source.folderPath) {
+          scanned = await scanNativeFolder(source.folderPath);
+        } else if (source.filePaths && source.filePaths.length > 0) {
+          scanned = await scanNativeFiles(source.filePaths);
+        } else {
+          return;
+        }
+
+        if (scanned.files.length === 0) {
+          showToast('No se encontraron pistas de audio compatibles en la selección.');
+          return;
+        }
+
+        const bpm = scanned.bpm || (effectiveMode === 'current-song' ? currentProjectRef.current?.bpm || 120 : 120);
+        const beatsPerBar = 4;
+        const secPerBar = (60 / bpm) * beatsPerBar;
+
+        let maxDurationSec = 0;
+        const initialTracks: TrackChannel[] = scanned.files.map((file, idx) => {
+          const trackLabel = file.trackName;
+          const inferred = inferTrackRoleAndColor(trackLabel, idx);
+          const estDuration = file.estDurationSec || 0;
+          if (estDuration > maxDurationSec) {
+            maxDurationSec = estDuration;
+          }
+
+          return {
+            id: file.trackId,
+            name: trackLabel,
+            role: inferred.role,
+            color: inferred.color,
+            gain: 1.0,
+            pan: 0,
+            muted: false,
+            soloed: false,
+            bus: inferred.bus === 'cue-click' ? 'cue-click' : defaultBus,
+            peaks: [],
+            isCustomAudio: true,
+            fileName: file.fileName,
+            durationSec: estDuration > 0 ? estDuration : undefined,
+          };
+        });
+
+        const initialDurationSec = maxDurationSec > 1 ? maxDurationSec : 180;
+        const initialBars = Math.max(4, Math.ceil(initialDurationSec / secPerBar));
+
+        const initialSections: SongSection[] = scanned.sections.map((s, idx) => ({
+          id: s.id || `sec-${idx}`,
+          name: s.name,
+          code: s.code || `S${idx + 1}`,
+          color: MARKER_PALETTE[idx % MARKER_PALETTE.length],
+          startTimeSec: s.startSec,
+          endTimeSec: s.endSec,
+          vampByDefault: false,
+          cueName: s.name,
+        }));
+
+        let newSongProject: SongProject;
+        if (effectiveMode === 'new-song') {
+          newSongProject = {
+            id: targetProjectId,
+            title: scanned.title || 'Nueva Sesión',
+            artist: scanned.artist || 'Sesión Importada',
+            folder: 'imported',
+            inSetlist: true,
+            setlistOrder: projects.length,
+            bpm,
+            beatsPerBar,
+            beatUnit: 4,
+            keySignature: scanned.key || 'C Major',
+            totalBars: initialBars,
+            durationSec: initialDurationSec,
+            quantizeMode: 'immediate',
+            splitRoutingMode: 'stereo',
+            clickEnabled: false,
+            clickGain: 1.0,
+            clickSubdivision: 1,
+            guideCuesEnabled: true,
+            guideVoiceReadout: true,
+            guideGain: 1.0,
+            masterGain: 1.0,
+            cueMasterGain: 1.0,
+            pitchSemitones: 0,
+            sections: initialSections,
+            tracks: initialTracks,
+            updatedAt: Date.now(),
+          };
+
+          audioEngine.prepareProjectShell(newSongProject);
+          setCurrentProject(newSongProject);
+          setProjects((prev) => [newSongProject, ...prev]);
+          saveProjectToDb(newSongProject).catch(() => {});
+        } else {
+          const current = currentProjectRef.current!;
+          const combinedTracks = [...current.tracks, ...initialTracks];
+          const nextDurationSec = Math.max(current.durationSec || 0, initialDurationSec);
+          const nextTotalBars = Math.max(current.totalBars, initialBars);
+
+          newSongProject = {
+            ...current,
+            totalBars: nextTotalBars,
+            durationSec: nextDurationSec,
+            tracks: combinedTracks,
+            updatedAt: Date.now(),
+          };
+
+          audioEngine.updateProjectConfig(newSongProject);
+          setCurrentProject(newSongProject);
+          setProjects((prev) =>
+            prev.map((p) => (p.id === newSongProject.id ? newSongProject : p))
+          );
+          saveProjectToDb(newSongProject).catch(() => {});
+        }
+
+        const mountMs = performance.now() - t0;
+        console.info(
+          `[NativeImport] "${newSongProject.title}" montada en UI en ${mountMs.toFixed(1)} ms. Decodificando ${scanned.files.length} pistas en segundo plano...`
+        );
+
+        setImportStatusText(`Convirtiendo ${scanned.files.length} pistas en segundo plano (0%)...`);
+        showToast(`"${newSongProject.title}": montada en biblioteca. Decodificando pistas...`);
+
+        const filesToImport = scanned.files.map((f) => ({
+          filePath: f.filePath,
+          trackId: f.trackId,
+        }));
+
+        invoke('audio_import_tracks', {
+          projectId: targetProjectId,
+          files: filesToImport,
+          targetSampleRate: null,
+        })
+          .then((importResult: any) => {
+            setImportStatusText(null);
+            if (importResult?.tracks) {
+              let updatedDuration = newSongProject.durationSec || 0;
+              const updatedTracks = newSongProject.tracks.map((t) => {
+                const meta = importResult.tracks.find((m: any) => m.trackId === t.id);
+                if (meta) {
+                  if (meta.durationSec > updatedDuration) {
+                    updatedDuration = meta.durationSec;
+                  }
+                  return {
+                    ...t,
+                    peaks: meta.peaks || t.peaks,
+                    durationSec: meta.durationSec || t.durationSec,
+                    pcm: {
+                      sampleRate: meta.targetSampleRate,
+                      channels: meta.channels,
+                      frames: meta.frameCount,
+                      version: 1 as const,
+                    },
+                  };
+                }
+                return t;
+              });
+
+              const completedProject: SongProject = {
+                ...newSongProject,
+                durationSec: updatedDuration,
+                tracks: updatedTracks,
+                updatedAt: Date.now(),
+              };
+
+              setCurrentProject((prev) => (prev?.id === targetProjectId ? completedProject : prev));
+              setProjects((prev) =>
+                prev.map((p) => (p.id === targetProjectId ? completedProject : p))
+              );
+              saveProjectToDb(completedProject).catch(() => {});
+              audioEngine.updateProjectConfig(completedProject);
+
+              showToast(`"${completedProject.title}": pistas listas para reproducir.`);
+              console.info(`[NativeImport] "${completedProject.title}" lista para reproducir.`);
+            }
+          })
+          .catch((importErr: any) => {
+            console.error('[NativeImport] Error en decodificación de pistas:', importErr);
+            setImportStatusText(null);
+            showToast(`Error al decodificar pistas: ${importErr}`);
+          });
+      } catch (scanErr) {
+        console.error('[NativeImport] Error escaneando audio:', scanErr);
+        showToast(`Error al leer carpeta/archivos: ${scanErr}`);
+      }
+    },
+    [projects.length, showToast]
+  );
+
 
   // Add a Section Marker directly at the current playhead time (mm:ss.d)
   const handleAddMarkerAtPlayhead = () => {
@@ -1708,6 +1920,14 @@ export default function App() {
     const handleFiles = await withHandles;
     const audioFiles = handleFiles.length > 0 ? handleFiles : await classic;
     if (audioFiles.length > 0) {
+      const hasPaths = audioFiles.some((f) => Boolean((f as any).path));
+      if (isDesktopApp && hasPaths) {
+        const filePaths = audioFiles.map((f) => (f as any).path as string).filter(Boolean);
+        if (filePaths.length > 0) {
+          handleImportNative({ filePaths }, 'main', 'new-song');
+          return;
+        }
+      }
       handleInstantImportFiles(audioFiles, 'main', 'new-song');
     } else {
       showToast('No se encontraron archivos de audio compatibles (.wav, .mp3, .ogg, .flac, .m4a)');
@@ -1835,6 +2055,12 @@ export default function App() {
             onQuickImportNewSongFiles={(files) =>
               handleInstantImportFiles(files, 'main', 'new-song')
             }
+            onQuickImportNativeFolder={(folder) =>
+              handleImportNative({ folderPath: folder }, 'main', 'new-song')
+            }
+            onQuickImportNativeFiles={(paths) =>
+              handleImportNative({ filePaths: paths }, 'main', 'new-song')
+            }
             onOpenNewSongModal={() => handleSelectView('library')}
           />
         )}
@@ -1912,6 +2138,12 @@ export default function App() {
               onQuickImportNewSongFiles={(files) =>
                 handleInstantImportFiles(files, 'main', 'new-song')
               }
+              onQuickImportNativeFolder={(folder) =>
+                handleImportNative({ folderPath: folder }, 'main', 'new-song')
+              }
+              onQuickImportNativeFiles={(paths) =>
+                handleImportNative({ filePaths: paths }, 'main', 'new-song')
+              }
               onToggleTrackMute={handleToggleTrackMute}
               onToggleTrackSolo={handleToggleTrackSolo}
               onChangeTrackGain={handleChangeTrackGain}
@@ -1985,6 +2217,9 @@ export default function App() {
                   onDeleteTrack={handleDeleteTrack}
                   onAddStemsToCurrentSong={(files) =>
                     handleInstantImportFiles(files, 'main', 'current-song')
+                  }
+                  onAddNativeStemsToCurrentSong={(paths) =>
+                    handleImportNative({ filePaths: paths }, 'main', 'current-song')
                   }
                   onAddMarkerAtPlayhead={handleAddMarkerAtPlayhead}
                   onOpenImportModal={() => setIsImportModalOpen(true)}
@@ -2223,6 +2458,12 @@ export default function App() {
         onClose={() => setIsImportModalOpen(false)}
         onImportFiles={(files, defaultBus, importMode) =>
           handleInstantImportFiles(files, defaultBus, importMode)
+        }
+        onImportNativeFolder={(folder, defaultBus, importMode) =>
+          handleImportNative({ folderPath: folder }, defaultBus, importMode)
+        }
+        onImportNativeFiles={(paths, defaultBus, importMode) =>
+          handleImportNative({ filePaths: paths }, defaultBus, importMode)
         }
       />
 

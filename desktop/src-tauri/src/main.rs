@@ -191,7 +191,13 @@ async fn remote_exchange(
 }
 
 fn main() {
-    tracing_subscriber::fmt().with_target(false).init();
+    let filter = tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+        tracing_subscriber::EnvFilter::new("info,symphonia=warn,symphonia_bundle_mp3=warn,symphonia_codec_aac=warn,symphonia_core=warn,symphonia_default=warn")
+    });
+    tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_target(false)
+        .init();
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(RemoteState::default())
@@ -245,7 +251,10 @@ fn main() {
             omnitracks_desktop::audio::audio_preload_project,
             omnitracks_desktop::audio::audio_set_master_gains,
             omnitracks_desktop::audio::audio_switch_to_preloaded,
-            omnitracks_desktop::audio::audio_reopen_stream
+            omnitracks_desktop::audio::audio_reopen_stream,
+            omnitracks_desktop::audio::audio_scan_folder,
+            omnitracks_desktop::audio::audio_scan_files,
+            omnitracks_desktop::audio::audio_import_track_bytes_raw
         ])
         .run(tauri::generate_context!())
         .expect("OmniTracks");

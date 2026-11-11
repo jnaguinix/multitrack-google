@@ -43,6 +43,9 @@
     "allow-audio-preload-project",
     "allow-audio-set-master-gains",
     "allow-audio-switch-to-preloaded",
-    "allow-audio-reopen-stream"
+    "allow-audio-reopen-stream",
+    "allow-audio-scan-folder",
+    "allow-audio-scan-files",
+    "allow-audio-import-track-bytes-raw"
   ]
 }

@@ -280,13 +280,22 @@ pub fn decode_and_cache_track(
     target_sample_rate: u32,
     cancel_flag: Option<&AtomicBool>,
 ) -> Result<TrackPcmMetadata, String> {
+    let t_total_start = std::time::Instant::now();
+
     // 0. Cache hit check: if file is already converted and original file hasn't changed, reuse!
     if !should_reconvert_track(base_dir, project_id, target_sample_rate, track_id, input_file_path) {
         if let Ok(cached_meta) = read_track_metadata(base_dir, project_id, target_sample_rate, track_id) {
+            tracing::info!(
+                "[Import Perf] Pista '{}' ({}): CACHE HIT en {:.2?}",
+                track_id,
+                input_file_path.file_name().unwrap_or_default().to_string_lossy(),
+                t_total_start.elapsed()
+            );
             return Ok(cached_meta);
         }
     }
 
+    let t_read_start = std::time::Instant::now();
     let fs_meta = std::fs::metadata(input_file_path)
         .map_err(|e| format!("No se pudo leer metadatos de archivo fuente {:?}: {e}", input_file_path))?;
     let original_file_size = fs_meta.len();
@@ -297,8 +306,11 @@ pub fn decode_and_cache_track(
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0);
     let original_path = input_file_path.to_string_lossy().to_string();
+    let dur_read = t_read_start.elapsed();
 
+    let t_decode_start = std::time::Instant::now();
     let decoded_info = decode_audio_file(input_file_path, cancel_flag)?;
+    let dur_decode = t_decode_start.elapsed();
     let decoded_channels = decoded_info.channels;
     let original_sample_rate = decoded_info.sample_rate;
     let original_channels = decoded_info.original_channels;
@@ -315,6 +327,7 @@ pub fn decode_and_cache_track(
         }
     }
 
+    let t_resample_start = std::time::Instant::now();
     // 1. Mono / Effectively-Mono detection
     let (is_eff_mono, working_channels) = if decoded_channels.len() >= 2 {
         let eff_mono = is_effectively_mono(&decoded_channels[0], &decoded_channels[1]);
@@ -343,6 +356,7 @@ pub fn decode_and_cache_track(
     } else {
         working_channels
     };
+    let dur_resample = t_resample_start.elapsed();
 
     if let Some(flag) = cancel_flag {
         if flag.load(Ordering::Relaxed) {
@@ -351,6 +365,7 @@ pub fn decode_and_cache_track(
         }
     }
 
+    let t_write_start = std::time::Instant::now();
     let channels_count = resampled.len() as u16;
     let frame_count = resampled[0].len() as u64;
     let duration_sec = frame_count as f64 / target_sample_rate as f64;
@@ -424,6 +439,19 @@ pub fn decode_and_cache_track(
 
     // 5. Atomic write to disk
     write_track_pcm_and_metadata(base_dir, project_id, &metadata, &pcm_samples)?;
+    let dur_write = t_write_start.elapsed();
+    let dur_total = t_total_start.elapsed();
+
+    tracing::info!(
+        "[Import Perf] Pista '{}' ({}): lectura={:?}, decodificación={:?}, remuestreo={:?}, escritura={:?}, total={:?}",
+        track_id,
+        input_file_path.file_name().unwrap_or_default().to_string_lossy(),
+        dur_read,
+        dur_decode,
+        dur_resample,
+        dur_write,
+        dur_total
+    );
 
     Ok(metadata)
 }
@@ -439,6 +467,7 @@ pub fn decode_and_cache_track_bytes(
     target_sample_rate: u32,
     cancel_flag: Option<&AtomicBool>,
 ) -> Result<TrackPcmMetadata, String> {
+    let t_total_start = std::time::Instant::now();
     let original_file_size = bytes.len() as u64;
     let original_path = format!("memory://{file_name}");
     let original_modified_ms = std::time::SystemTime::now()
@@ -446,7 +475,9 @@ pub fn decode_and_cache_track_bytes(
         .unwrap_or_default()
         .as_millis() as u64;
 
+    let t_decode_start = std::time::Instant::now();
     let decoded_info = decode_audio_bytes(bytes, file_name, cancel_flag)?;
+    let dur_decode = t_decode_start.elapsed();
     let decoded_channels = decoded_info.channels;
     let original_sample_rate = decoded_info.sample_rate;
     let original_channels = decoded_info.original_channels;
@@ -463,6 +494,7 @@ pub fn decode_and_cache_track_bytes(
         }
     }
 
+    let t_resample_start = std::time::Instant::now();
     // 1. Mono / Effectively-Mono detection
     let (is_eff_mono, working_channels) = if decoded_channels.len() >= 2 {
         let eff_mono = is_effectively_mono(&decoded_channels[0], &decoded_channels[1]);
@@ -491,6 +523,8 @@ pub fn decode_and_cache_track_bytes(
         working_channels
     };
 
+    let dur_resample = t_resample_start.elapsed();
+
     if let Some(flag) = cancel_flag {
         if flag.load(Ordering::Relaxed) {
             delete_track_cache(base_dir, project_id, target_sample_rate, track_id);
@@ -498,6 +532,7 @@ pub fn decode_and_cache_track_bytes(
         }
     }
 
+    let t_write_start = std::time::Instant::now();
     let channels_count = resampled.len() as u16;
     let frame_count = resampled[0].len() as u64;
     let duration_sec = frame_count as f64 / target_sample_rate as f64;
@@ -570,6 +605,18 @@ pub fn decode_and_cache_track_bytes(
 
     // 5. Atomic write to disk
     write_track_pcm_and_metadata(base_dir, project_id, &metadata, &pcm_samples)?;
+    let dur_write = t_write_start.elapsed();
+    let dur_total = t_total_start.elapsed();
+
+    tracing::info!(
+        "[Import Perf] Pista bytes '{}' ({}): lectura=0ms, decodificación={:?}, remuestreo={:?}, escritura={:?}, total={:?}",
+        track_id,
+        file_name,
+        dur_decode,
+        dur_resample,
+        dur_write,
+        dur_total
+    );
 
     Ok(metadata)
 }

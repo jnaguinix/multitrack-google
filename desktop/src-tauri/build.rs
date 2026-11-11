@@ -40,6 +40,9 @@ fn main() {
             "audio_set_master_gains",
             "audio_switch_to_preloaded",
             "audio_reopen_stream",
+            "audio_scan_folder",
+            "audio_scan_files",
+            "audio_import_track_bytes_raw",
         ]);
         tauri_build::try_build(tauri_build::Attributes::new().app_manifest(manifest))
             .expect("Tauri build configuration");

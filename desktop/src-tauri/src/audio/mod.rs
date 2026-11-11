@@ -1,3 +1,4 @@
+use serde::{Deserialize, Serialize};
 pub mod cache;
 pub mod import;
 pub mod metronome;
@@ -131,10 +132,15 @@ pub async fn audio_import_tracks(
     }
     cache::check_free_disk_space(&local_data, total_estimated_needed)?;
 
+    let start_all = std::time::Instant::now();
     let total_tracks = files.len();
     let cancel_flag = state.create_import_cancel_flag(&project_id).await;
 
-    let semaphore = Arc::new(tokio::sync::Semaphore::new(2)); // Max 2 concurrent track decoders
+    // Use up to 3-4 concurrent workers on multi-core systems to decode rapidly without starving I/O
+    let concurrency = std::thread::available_parallelism()
+        .map(|n| (n.get() / 2).clamp(2, 4))
+        .unwrap_or(2);
+    let semaphore = Arc::new(tokio::sync::Semaphore::new(concurrency));
     let mut tasks = Vec::new();
 
     for (idx, file) in files.into_iter().enumerate() {
@@ -145,13 +151,13 @@ pub async fn audio_import_tracks(
         let proj_id_clone = project_id.clone();
 
         tasks.push(tokio::spawn(async move {
-            let _permit = sem.acquire().await.map_err(|e| e.to_string())?;
+            let permit = sem.acquire_owned().await.map_err(|e| e.to_string())?;
 
             if flag.load(std::sync::atomic::Ordering::Relaxed) {
                 return Err("Cancelado por el usuario".to_string());
             }
 
-            let input_path = Path::new(&file.file_path);
+            let input_path = std::path::PathBuf::from(&file.file_path);
             let track_name = input_path
                 .file_stem()
                 .and_then(|s| s.to_str())
@@ -170,14 +176,19 @@ pub async fn audio_import_tracks(
                 },
             );
 
-            let res = import::decode_and_cache_track(
-                &local_data_clone,
-                &proj_id_clone,
-                &file.track_id,
-                input_path,
-                sample_rate,
-                Some(&flag),
-            );
+            let res = tokio::task::spawn_blocking(move || {
+                let _permit_guard = permit;
+                import::decode_and_cache_track(
+                    &local_data_clone,
+                    &proj_id_clone,
+                    &file.track_id,
+                    &input_path,
+                    sample_rate,
+                    Some(&flag),
+                )
+            })
+            .await
+            .map_err(|e| format!("Fallo en tarea blocking: {e}"))?;
 
             match res {
                 Ok(meta) => Ok(meta),
@@ -198,6 +209,14 @@ pub async fn audio_import_tracks(
     }
 
     state.clear_import_cancel_flag(&project_id).await;
+
+    let total_dur = start_all.elapsed();
+    tracing::info!(
+        "[Import Perf] Canción '{}' completada: {} pistas procesadas en {:?}",
+        project_id,
+        tracks.len(),
+        total_dur
+    );
 
     let is_cancelled = cancel_flag.load(std::sync::atomic::Ordering::Relaxed);
     if !is_cancelled {
@@ -578,4 +597,307 @@ pub async fn audio_reopen_stream(
     state: State<'_, AudioEngineState>,
 ) -> Result<(), String> {
     state.playback.reopen_stream(&state).await
+}
+
+
+fn probe_wav_header_duration(path: &Path) -> Option<f64> {
+    if let Ok(mut f) = std::fs::File::open(path) {
+        use std::io::Read;
+        let mut buf = [0u8; 44];
+        if f.read_exact(&mut buf).is_ok() && &buf[0..4] == b"RIFF" && &buf[8..12] == b"WAVE" {
+            let channels = u16::from_le_bytes([buf[22], buf[23]]) as u32;
+            let sample_rate = u32::from_le_bytes([buf[24], buf[25], buf[26], buf[27]]);
+            let bits = u16::from_le_bytes([buf[34], buf[35]]) as u32;
+            let data_size = u32::from_le_bytes([buf[40], buf[41], buf[42], buf[43]]);
+            if channels > 0 && sample_rate > 0 && bits > 0 && data_size > 0 {
+                let bytes_per_sec = sample_rate * channels * (bits / 8);
+                if bytes_per_sec > 0 {
+                    return Some(data_size as f64 / bytes_per_sec as f64);
+                }
+            }
+        }
+    }
+    None
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScannedAudioFile {
+    pub file_path: String,
+    pub file_name: String,
+    pub track_name: String,
+    pub track_id: String,
+    pub est_duration_sec: Option<f64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScannedFolderInfo {
+    pub folder_path: String,
+    pub folder_name: String,
+    pub title: String,
+    pub artist: String,
+    pub bpm: Option<f64>,
+    pub key: Option<String>,
+    pub sections: Vec<playback::NativeSongSection>,
+    pub files: Vec<ScannedAudioFile>,
+}
+
+#[tauri::command]
+pub async fn audio_scan_folder(
+    folder_path: String,
+) -> Result<ScannedFolderInfo, String> {
+    let p = Path::new(&folder_path);
+    if !p.exists() || !p.is_dir() {
+        return Err(format!("La carpeta '{}' no existe en disco", folder_path));
+    }
+
+    let folder_name = p
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("Canción")
+        .to_string();
+
+    let sidecar_path = p.join("omnitracks.project.json");
+    let mut title = folder_name.clone();
+    let mut artist = "Artista Desconocido".to_string();
+    let mut bpm = None;
+    let mut key = None;
+    let mut sections = Vec::new();
+    let mut sidecar_track_ids: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+
+    if sidecar_path.exists() {
+        if let Ok(content) = std::fs::read_to_string(&sidecar_path) {
+            if let Ok(json_val) = serde_json::from_str::<serde_json::Value>(&content) {
+                if let Some(t) = json_val.get("title").and_then(|v| v.as_str()) {
+                    title = t.to_string();
+                }
+                if let Some(a) = json_val.get("artist").and_then(|v| v.as_str()) {
+                    artist = a.to_string();
+                }
+                if let Some(b) = json_val.get("bpm").and_then(|v| v.as_f64()) {
+                    bpm = Some(b);
+                }
+                if let Some(k) = json_val.get("keySignature").and_then(|v| v.as_str()) {
+                    key = Some(k.to_string());
+                }
+                if let Some(sec_arr) = json_val.get("sections").and_then(|v| v.as_array()) {
+                    for s in sec_arr {
+                        if let (Some(id), Some(name), Some(start), Some(end)) = (
+                            s.get("id").and_then(|v| v.as_str()),
+                            s.get("name").and_then(|v| v.as_str()),
+                            s.get("startTimeSec").and_then(|v| v.as_f64()),
+                            s.get("endTimeSec").and_then(|v| v.as_f64()),
+                        ) {
+                            let code = s.get("code").and_then(|v| v.as_str()).map(|v| v.to_string());
+                            sections.push(playback::NativeSongSection {
+                                id: id.to_string(),
+                                name: name.to_string(),
+                                code,
+                                start_sec: start,
+                                end_sec: end,
+                            });
+                        }
+                    }
+                }
+                if let Some(tracks_arr) = json_val.get("tracks").and_then(|v| v.as_array()) {
+                    for t in tracks_arr {
+                        if let (Some(id), Some(name)) = (
+                            t.get("id").and_then(|v| v.as_str()),
+                            t.get("name").and_then(|v| v.as_str()),
+                        ) {
+                            sidecar_track_ids.insert(name.to_lowercase(), id.to_string());
+                        }
+                    }
+                }
+            }
+        }
+    } else {
+        let raw = folder_name.clone();
+        if let Some(bpm_idx) = raw.to_lowercase().find("bpm") {
+            let prefix = &raw[..bpm_idx];
+            let num_str: String = prefix.chars().rev().take_while(|c| c.is_ascii_digit()).collect();
+            if let Ok(parsed_bpm) = num_str.chars().rev().collect::<String>().parse::<f64>() {
+                bpm = Some(parsed_bpm);
+            }
+        }
+        if raw.contains(" - ") {
+            let parts: Vec<&str> = raw.split(" - ").collect();
+            title = parts[0].trim().to_string();
+            artist = parts[1].trim().to_string();
+        }
+    }
+
+    let audio_extensions = ["mp3", "wav", "ogg", "flac", "m4a", "aac"];
+    let mut files = Vec::new();
+    let entries = std::fs::read_dir(p).map_err(|e| format!("Error leyendo carpeta: {e}"))?;
+
+    let mut auto_idx = 0;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_file() {
+            if let Some(ext) = path.extension().and_then(|s| s.to_str()).map(|s| s.to_lowercase()) {
+                if audio_extensions.contains(&ext.as_str()) {
+                    let file_name = path.file_name().and_then(|s| s.to_str()).unwrap_or("").to_string();
+                    let file_stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("Pista").to_string();
+                    let file_stem_lower = file_stem.to_lowercase();
+
+                    let track_id = if let Some(matched_id) = sidecar_track_ids.get(&file_stem_lower) {
+                        matched_id.clone()
+                    } else {
+                        auto_idx += 1;
+                        format!("stem-{:02}", auto_idx)
+                    };
+
+                    let est_duration_sec = probe_wav_header_duration(&path);
+
+                    files.push(ScannedAudioFile {
+                        file_path: path.to_string_lossy().to_string(),
+                        file_name,
+                        track_name: file_stem,
+                        track_id,
+                        est_duration_sec,
+                    });
+                }
+            }
+        }
+    }
+
+    files.sort_by(|a, b| a.track_name.cmp(&b.track_name));
+
+    Ok(ScannedFolderInfo {
+        folder_path,
+        folder_name,
+        title,
+        artist,
+        bpm,
+        key,
+        sections,
+        files,
+    })
+}
+
+#[tauri::command]
+pub async fn audio_scan_files(
+    file_paths: Vec<String>,
+) -> Result<ScannedFolderInfo, String> {
+    if file_paths.is_empty() {
+        return Err("No se especificaron archivos".to_string());
+    }
+
+    let first_path = std::path::PathBuf::from(&file_paths[0]);
+    let parent = first_path.parent().map(|p| p.to_path_buf()).unwrap_or_else(|| std::path::PathBuf::from("."));
+    let folder_name = parent
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("Importado")
+        .to_string();
+
+    let audio_extensions = ["mp3", "wav", "ogg", "flac", "m4a", "aac"];
+    let mut files = Vec::new();
+
+    let mut auto_idx = 0;
+    for fp in file_paths {
+        let path = Path::new(&fp);
+        if path.is_file() {
+            if let Some(ext) = path.extension().and_then(|s| s.to_str()).map(|s| s.to_lowercase()) {
+                if audio_extensions.contains(&ext.as_str()) {
+                    let file_name = path.file_name().and_then(|s| s.to_str()).unwrap_or("").to_string();
+                    let file_stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("Pista").to_string();
+
+                    auto_idx += 1;
+                    let track_id = format!("stem-{:02}", auto_idx);
+                    let est_duration_sec = probe_wav_header_duration(path);
+
+                    files.push(ScannedAudioFile {
+                        file_path: fp,
+                        file_name,
+                        track_name: file_stem,
+                        track_id,
+                        est_duration_sec,
+                    });
+                }
+            }
+        }
+    }
+
+    files.sort_by(|a, b| a.track_name.cmp(&b.track_name));
+
+    let title = folder_name.clone();
+    let artist = "Artista Desconocido".to_string();
+
+    Ok(ScannedFolderInfo {
+        folder_path: parent.to_string_lossy().to_string(),
+        folder_name,
+        title,
+        artist,
+        bpm: None,
+        key: None,
+        sections: Vec::new(),
+        files,
+    })
+}
+
+#[tauri::command]
+pub async fn audio_import_track_bytes_raw(
+    app: tauri::AppHandle,
+    state: State<'_, AudioEngineState>,
+    request: tauri::ipc::Request<'_>,
+) -> Result<cache::TrackPcmMetadata, String> {
+    let bytes = match request.body() {
+        tauri::ipc::InvokeBody::Raw(bytes) => bytes.clone(),
+        tauri::ipc::InvokeBody::Json(_) => {
+            return Err("Se esperaba cuerpo binario crudo (InvokeBody::Raw)".into());
+        }
+    };
+    let headers = request.headers();
+    let project_id = headers
+        .get("x-project-id")
+        .and_then(|v| v.to_str().ok())
+        .ok_or_else(|| "Falta cabecera x-project-id".to_string())?
+        .to_string();
+    let track_id = headers
+        .get("x-track-id")
+        .and_then(|v| v.to_str().ok())
+        .ok_or_else(|| "Falta cabecera x-track-id".to_string())?
+        .to_string();
+    let file_name = headers
+        .get("x-file-name")
+        .and_then(|v| v.to_str().ok())
+        .map(|v| percent_encoding::percent_decode_str(v).decode_utf8_lossy().to_string())
+        .unwrap_or_else(|| "track.mp3".to_string());
+    let target_sample_rate = headers
+        .get("x-sample-rate")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.parse::<u32>().ok());
+
+    let local_data = app
+        .path()
+        .app_local_data_dir()
+        .unwrap_or_else(|_| PathBuf::from("."));
+
+    let sample_rate = if let Some(r) = target_sample_rate {
+        r
+    } else {
+        let settings = state.current_settings.lock().await;
+        settings.sample_rate.unwrap_or(48000)
+    };
+
+    cache::check_free_disk_space(&local_data, (bytes.len() as u64) * 4)?;
+
+    let cancel_flag = state.create_import_cancel_flag(&project_id).await;
+
+    tokio::task::spawn_blocking(move || {
+        import::decode_and_cache_track_bytes(
+            &local_data,
+            &project_id,
+            &track_id,
+            &file_name,
+            bytes,
+            sample_rate,
+            Some(cancel_flag.as_ref()),
+        )
+    })
+    .await
+    .map_err(|e| format!("Fallo en tarea blocking de bytes: {e}"))?
 }

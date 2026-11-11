@@ -1,5 +1,6 @@
 import React, { useMemo, useRef, useState } from 'react';
 import { pickAudioSources } from '../storage/sourceFiles';
+import { isDesktopApp, pickNativeFiles, pickNativeFolder } from '../utils/nativeDialog';
 import {
   Search,
   MoreHorizontal,
@@ -25,6 +26,8 @@ interface RepertoireTreeSidebarProps {
   onDeleteProject: (projectId: string) => void;
   onExportJson: (project: SongProject) => void;
   onQuickImportNewSongFiles: (files: FileList | File[]) => void;
+  onQuickImportNativeFolder?: (folderPath: string) => void;
+  onQuickImportNativeFiles?: (filePaths: string[]) => void;
   onOpenNewSongModal: () => void;
 }
 
@@ -47,6 +50,8 @@ export const RepertoireTreeSidebar: React.FC<RepertoireTreeSidebarProps> = ({
   onDeleteProject,
   onExportJson,
   onQuickImportNewSongFiles,
+  onQuickImportNativeFolder,
+  onQuickImportNativeFiles,
   onOpenNewSongModal,
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
@@ -83,7 +88,15 @@ export const RepertoireTreeSidebar: React.FC<RepertoireTreeSidebarProps> = ({
 
         <button
           type="button"
-          onClick={() => pickAudioSources('files', multiFileInputRef.current, onQuickImportNewSongFiles)}
+          onClick={() => {
+            if (isDesktopApp()) {
+              pickNativeFiles().then((paths) => {
+                if (paths && paths.length > 0) onQuickImportNativeFiles?.(paths);
+              });
+              return;
+            }
+            pickAudioSources('files', multiFileInputRef.current, onQuickImportNewSongFiles);
+          }}
           title="Importar Nueva Canción (Stems)"
           className="p-2 rounded-lg bg-studio-strip text-studio-ink hover:bg-neutral-700 cursor-pointer"
         >
@@ -92,7 +105,15 @@ export const RepertoireTreeSidebar: React.FC<RepertoireTreeSidebarProps> = ({
 
         <button
           type="button"
-          onClick={() => pickAudioSources('folder', folderInputRef.current, onQuickImportNewSongFiles)}
+          onClick={() => {
+            if (isDesktopApp()) {
+              pickNativeFolder().then((folder) => {
+                if (folder) onQuickImportNativeFolder?.(folder);
+              });
+              return;
+            }
+            pickAudioSources('folder', folderInputRef.current, onQuickImportNewSongFiles);
+          }}
           title="Importar Carpeta de Canción"
           className="p-2 rounded-lg bg-neutral-800 text-studio-ink hover:bg-neutral-700 border border-neutral-700 cursor-pointer"
         >
@@ -188,7 +209,15 @@ export const RepertoireTreeSidebar: React.FC<RepertoireTreeSidebarProps> = ({
         <div className="grid grid-cols-2 gap-1.5">
           <button
             type="button"
-            onClick={() => pickAudioSources('files', multiFileInputRef.current, onQuickImportNewSongFiles)}
+            onClick={() => {
+              if (isDesktopApp()) {
+                pickNativeFiles().then((paths) => {
+                  if (paths && paths.length > 0) onQuickImportNativeFiles?.(paths);
+                });
+                return;
+              }
+              pickAudioSources('files', multiFileInputRef.current, onQuickImportNewSongFiles);
+            }}
             className="px-2.5 py-1.5 rounded-lg bg-studio-strip hover:bg-neutral-700 text-studio-ink text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
             title="Selecciona los stems de una canción para guardarla en tu Repertorio"
           >
@@ -198,7 +227,15 @@ export const RepertoireTreeSidebar: React.FC<RepertoireTreeSidebarProps> = ({
 
           <button
             type="button"
-            onClick={() => pickAudioSources('folder', folderInputRef.current, onQuickImportNewSongFiles)}
+            onClick={() => {
+              if (isDesktopApp()) {
+                pickNativeFolder().then((folder) => {
+                  if (folder) onQuickImportNativeFolder?.(folder);
+                });
+                return;
+              }
+              pickAudioSources('folder', folderInputRef.current, onQuickImportNewSongFiles);
+            }}
             className="px-2.5 py-1.5 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-neutral-100 border border-neutral-700 text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
             title="Selecciona una carpeta completa de stems para convertirla en una sola canción"
           >

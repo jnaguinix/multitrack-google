@@ -33,6 +33,7 @@ import { extractAudioFilesFromDataTransfer } from '../utils/fileImportHelper';
 import { formatMmSs, formatTimecode } from './TransportDeck';
 import { getSongWaveformPeaks } from '../utils/songWaveform';
 import { MultitrackMixer, gainToDb } from './MultitrackMixer';
+import { isDesktopApp, pickNativeFiles, pickNativeFolder } from '../utils/nativeDialog';
 
 interface SetlistPageViewProps {
   project: SongProject | null;
@@ -62,6 +63,8 @@ interface SetlistPageViewProps {
   onOpenSectionEditor: () => void;
   onAddStemsToCurrentSong: (files: FileList | File[]) => void;
   onQuickImportNewSongFiles: (files: FileList | File[]) => void;
+  onQuickImportNativeFolder?: (folderPath: string) => void;
+  onQuickImportNativeFiles?: (filePaths: string[]) => void;
   onToggleTrackMute: (trackId: string) => void;
   onToggleTrackSolo: (trackId: string) => void;
   onChangeTrackGain: (trackId: string, gain: number) => void;
@@ -110,6 +113,8 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
   onOpenSectionEditor,
   onAddStemsToCurrentSong,
   onQuickImportNewSongFiles,
+  onQuickImportNativeFolder,
+  onQuickImportNativeFiles,
   onToggleTrackMute,
   onToggleTrackSolo,
   onChangeTrackGain,
@@ -707,6 +712,12 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
                     type="button"
                     onClick={(event) => {
                       closePopover(event);
+                      if (isDesktopApp()) {
+                        pickNativeFiles().then((paths) => {
+                          if (paths && paths.length > 0) onQuickImportNativeFiles?.(paths);
+                        });
+                        return;
+                      }
                       newSongFilesInputRef.current?.click();
                     }}
                     className="w-full px-2.5 py-1.5 rounded-lg bg-studio-strip hover:bg-neutral-700 text-studio-ink text-xs font-semibold flex items-center gap-2 cursor-pointer"
@@ -718,6 +729,12 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
                     type="button"
                     onClick={(event) => {
                       closePopover(event);
+                      if (isDesktopApp()) {
+                        pickNativeFolder().then((folder) => {
+                          if (folder) onQuickImportNativeFolder?.(folder);
+                        });
+                        return;
+                      }
                       newSongFolderInputRef.current?.click();
                     }}
                     className="w-full px-2.5 py-1.5 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-neutral-200 text-xs font-semibold flex items-center gap-2 cursor-pointer"

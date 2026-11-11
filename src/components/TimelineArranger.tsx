@@ -17,6 +17,7 @@ import {
 } from '../types/project';
 import { audioEngine } from '../audio/audioEngine';
 import { formatMmSs } from './TransportDeck';
+import { isDesktopApp, pickNativeFiles } from '../utils/nativeDialog';
 
 interface TimelineArrangerProps {
   project: SongProject;
@@ -34,6 +35,7 @@ interface TimelineArrangerProps {
   onChangeTrackBus: (trackId: string, bus: OutputBus) => void;
   onDeleteTrack: (trackId: string) => void;
   onAddStemsToCurrentSong: (files: FileList | File[]) => void;
+  onAddNativeStemsToCurrentSong?: (filePaths: string[]) => void;
   onAddMarkerAtPlayhead: () => void;
   onOpenImportModal: () => void;
   onOpenSectionEditor: () => void;
@@ -212,6 +214,7 @@ export const TimelineArranger: React.FC<TimelineArrangerProps> = ({
   onChangeTrackBus,
   onDeleteTrack,
   onAddStemsToCurrentSong,
+  onAddNativeStemsToCurrentSong,
   onAddMarkerAtPlayhead,
   onOpenImportModal,
   onOpenSectionEditor,
@@ -278,7 +281,15 @@ export const TimelineArranger: React.FC<TimelineArrangerProps> = ({
             <div className="flex items-center gap-2">
               <button
                 type="button"
-                onClick={() => addStemInputRef.current?.click()}
+                onClick={() => {
+                  if (isDesktopApp()) {
+                    pickNativeFiles().then((paths) => {
+                      if (paths && paths.length > 0) onAddNativeStemsToCurrentSong?.(paths);
+                    });
+                    return;
+                  }
+                  addStemInputRef.current?.click();
+                }}
                 className="text-xs font-bold text-studio-ink hover:text-studio-ink flex items-center gap-1 cursor-pointer whitespace-nowrap shrink-0"
                 title="Añadir archivo de audio a esta canción actual"
               >
