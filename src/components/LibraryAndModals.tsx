@@ -80,7 +80,9 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
               Biblioteca
             </h1>
             <p className="text-sm text-neutral-400 mt-1">
-              Canciones guardadas en este navegador.
+              {isDesktopApp()
+                ? 'Canciones indexadas en la biblioteca de OmniTracks (almacenadas en library.json).'
+                : 'Canciones guardadas en este navegador.'}
             </p>
           </div>
 
@@ -188,7 +190,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                       </button>
                       <div id={`library-song-${index}`} popover="auto" className="lt-popover lt-library-actions space-y-1">
                         {/* Relink original files (moved/renamed folder or permission lost) */}
-                        {!isPcmReady && onRelinkProject && isFsAccessSupported() && (
+                        {onRelinkProject && (isDesktopApp() || (!isPcmReady && isFsAccessSupported())) && (
                           <button
                             type="button"
                             onClick={(event) => {
@@ -199,7 +201,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                             className="px-3 py-2 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-neutral-200 border border-neutral-700 text-xs font-semibold flex items-center gap-1.5 cursor-pointer transition-colors"
                           >
                             <FolderPlus className="w-3.5 h-3.5 text-studio-ink" />
-                            <span>Reubicar archivos</span>
+                            <span>Ubicar carpeta</span>
                           </button>
                         )}
 

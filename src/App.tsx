@@ -4,7 +4,7 @@
  */
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Upload, Music, FolderOpen, AlertTriangle } from 'lucide-react';
+import { Upload, Music, FolderOpen, AlertTriangle, Trash2 } from 'lucide-react';
 import { audioEngine } from './audio/audioEngine';
 import { nativeAudioEngine } from './audio/nativeAudioEngine';
 import { inferSongMetadataFromFiles } from './audio/smartAnalyzer';
@@ -49,8 +49,10 @@ import {
   scanNativeFiles,
   importTrackBytesRaw,
   deleteProjectNativeCache,
+  pickNativeFolder,
   ScannedFolderInfo,
 } from './utils/nativeDialog';
+import { updateDesktopSongFolder } from './storage/desktopLibrary';
 import {
   cleanOrphanPcmDirectories,
   ensureStoragePersist,
@@ -554,6 +556,70 @@ export default function App() {
 
   const handleRelinkProject = useCallback(
     async (proj: SongProject) => {
+      if (isDesktopApp) {
+        try {
+          const folder = await pickNativeFolder();
+          if (!folder) return;
+          const scanned = await scanNativeFolder(folder);
+          if (scanned.files.length === 0) {
+            showToast(`No se encontraron pistas de audio compatibles en "${folder}".`);
+            return;
+          }
+          await updateDesktopSongFolder(proj.id, folder);
+          const updatedTracks = proj.tracks.map((t) => {
+            const match = scanned.files.find(
+              (f) =>
+                f.trackName.toLowerCase() === t.name.toLowerCase() ||
+                f.fileName.toLowerCase() === (t.fileName || '').toLowerCase()
+            );
+            if (match) {
+              return {
+                ...t,
+                filePath: match.filePath,
+                fileName: match.fileName,
+              };
+            }
+            return t;
+          });
+
+          const updatedProj: SongProject = {
+            ...proj,
+            folderPath: folder,
+            tracks: updatedTracks,
+            updatedAt: Date.now(),
+          };
+
+          setProjects((prev) =>
+            prev.map((p) => (p.id === proj.id ? updatedProj : p))
+          );
+          if (currentProjectRef.current?.id === proj.id) {
+            setCurrentProject(updatedProj);
+          }
+          await saveProjectToDb(updatedProj);
+          showToast(`Carpeta reubicada para "${proj.title}".`);
+
+          if (updatedProj.inSetlist) {
+            const filesToImport = updatedTracks
+              .filter((t) => t.filePath)
+              .map((t) => ({ filePath: t.filePath!, trackId: t.id }));
+            if (filesToImport.length > 0) {
+              const invoke = (window as any).__TAURI__?.core?.invoke;
+              if (invoke) {
+                invoke('audio_import_tracks', {
+                  projectId: updatedProj.id,
+                  files: filesToImport,
+                  targetSampleRate: null,
+                }).catch(() => {});
+              }
+            }
+          }
+        } catch (err) {
+          console.error('[Relink] Error reubicando carpeta en escritorio:', err);
+          showToast(`Error al reubicar carpeta: ${err}`);
+        }
+        return;
+      }
+
       if (!isFsAccessSupported()) {
         showToast('Tu navegador no permite reubicar carpetas (usa Chrome o Edge).');
         return;
@@ -581,7 +647,7 @@ export default function App() {
         }
       }
     },
-    [runAutoOptimize, showToast]
+    [isDesktopApp, runAutoOptimize, showToast]
   );
 
   const handleChangeEngineMode = useCallback(
@@ -1801,55 +1867,135 @@ export default function App() {
     showToast(`Canción montada en consola: ${found.title}`);
   };
 
+  const [songToDeleteFromLibrary, setSongToDeleteFromLibrary] = useState<SongProject | null>(null);
+  const [missingFolderSong, setMissingFolderSong] = useState<SongProject | null>(null);
+
   // Setlist Management Handlers
   const handleAddToSetlist = (projectId: string) => {
-    // Adding to the setlist = copy the audio into the OPFS cache once (in the background)
-    if (!isDesktopApp) {
-      const p = projectsRef.current.find((x) => x.id === projectId);
-      if (p) {
-        isProjectPcmComplete(p).then((complete) => {
+    const song = projectsRef.current.find((x) => x.id === projectId);
+    if (!song) return;
+
+    if (song.inSetlist) {
+      showToast(`"${song.title}" ya está en el Setlist`);
+      return;
+    }
+
+    const doAdd = () => {
+      // In desktop, ensure native PCM cache is generated for this song
+      if (isDesktopApp) {
+        const invoke = (window as any).__TAURI__?.core?.invoke;
+        if (invoke) {
+          invoke('audio_get_project_cache_status', { projectId: song.id })
+            .then((status: any) => {
+              if (!status?.isComplete) {
+                const filesToImport = song.tracks
+                  .filter((t) => t.filePath)
+                  .map((t) => ({ filePath: t.filePath!, trackId: t.id }));
+                if (filesToImport.length > 0) {
+                  showToast(`Generando caché para "${song.title}"...`);
+                  invoke('audio_import_tracks', {
+                    projectId: song.id,
+                    files: filesToImport,
+                    targetSampleRate: null,
+                  })
+                    .then(() => {
+                      showToast(`"${song.title}": lista para sonar.`);
+                    })
+                    .catch((err: any) => {
+                      console.warn('[Cache] Error generando caché al añadir al setlist:', err);
+                    });
+                }
+              }
+            })
+            .catch(() => {});
+        }
+      } else {
+        isProjectPcmComplete(song).then((complete) => {
           if (!complete) {
             ensureSourceAccess(projectId).then(() => runAutoOptimize(projectId));
           }
         });
       }
-    }
-    setProjects((prev) => {
-      const maxOrder = prev.reduce(
-        (max, item) =>
-          item.inSetlist ? Math.max(max, item.setlistOrder ?? 0) : max,
-        -1
-      );
-      return prev.map((p) => {
-        if (p.id !== projectId) return p;
-        const updated: SongProject = {
-          ...p,
-          inSetlist: true,
-          setlistOrder: p.inSetlist ? p.setlistOrder : maxOrder + 1,
-        };
-        saveProjectToDb(updated).catch(() => {});
-        if (currentProject?.id === projectId) {
-          setCurrentProject(updated);
-        }
-        showToast(`"${p.title}" añadida al Setlist`);
-        return updated;
+
+      setProjects((prev) => {
+        const maxOrder = prev.reduce(
+          (max, item) =>
+            item.inSetlist ? Math.max(max, item.setlistOrder ?? 0) : max,
+          -1
+        );
+        return prev.map((p) => {
+          if (p.id !== projectId) return p;
+          const updated: SongProject = {
+            ...p,
+            inSetlist: true,
+            setlistOrder: maxOrder + 1,
+          };
+          saveProjectToDb(updated).catch(() => {});
+          if (currentProject?.id === projectId) {
+            setCurrentProject(updated);
+          }
+          showToast(`"${p.title}" añadida al Setlist`);
+          return updated;
+        });
       });
-    });
+    };
+
+    if (isDesktopApp && song.folderPath) {
+      const invoke = (window as any).__TAURI__?.core?.invoke;
+      const filePaths = song.tracks.filter((t) => t.filePath).map((t) => t.filePath!);
+      if (invoke && filePaths.length > 0) {
+        invoke('audio_check_files_exist', { paths: filePaths })
+          .then((results: boolean[]) => {
+            const allExist = results.every(Boolean);
+            if (!allExist) {
+              setMissingFolderSong(song);
+            } else {
+              doAdd();
+            }
+          })
+          .catch(() => doAdd());
+        return;
+      }
+    }
+
+    doAdd();
   };
 
   const handleRemoveFromSetlist = (projectId: string) => {
+    const song = projectsRef.current.find((x) => x.id === projectId);
+
+    // 1. If currently playing this song, stop playback first
+    if (currentProjectRef.current?.id === projectId && transport.isPlaying) {
+      audioEngine.stop();
+    }
+
+    // 2. Clear native cache and RAM cache
+    audioEngine.evictSongFromRamCache(projectId);
+    if (isDesktopApp) {
+      deleteProjectNativeCache(projectId).catch((err: any) => {
+        console.warn('[Cache] Error eliminando caché al quitar del setlist:', err);
+      });
+    }
+
+    // 3. Mark inSetlist = false (remains in library intact!)
     setProjects((prev) =>
       prev.map((p) => {
         if (p.id !== projectId) return p;
         const updated: SongProject = { ...p, inSetlist: false };
         saveProjectToDb(updated).catch(() => {});
-        if (currentProject?.id === projectId) {
-          setCurrentProject(updated);
-        }
         return updated;
       })
     );
-    showToast('Canción quitada del Setlist');
+
+    if (currentProjectRef.current?.id === projectId) {
+      setCurrentProject((prev) => (prev ? { ...prev, inSetlist: false } : null));
+    }
+
+    showToast(
+      song
+        ? `"${song.title}" quitada del Setlist (conservada en biblioteca)`
+        : 'Canción quitada del Setlist'
+    );
   };
 
   const handleReorderSetlist = (fromIndex: number, toIndex: number) => {
@@ -1903,21 +2049,35 @@ export default function App() {
     showToast(`Nueva canción creada: ${title}`);
   };
 
-  const handleDeleteProject = async (projectId: string) => {
-    audioEngine.evictSongFromRamCache(projectId);
-    await deleteProjectFromDb(projectId);
+  const handleDeleteProject = (projectId: string) => {
+    const song = projectsRef.current.find((p) => p.id === projectId);
+    if (!song) return;
+    setSongToDeleteFromLibrary(song);
+  };
+
+  const confirmDeleteFromLibrary = async () => {
+    if (!songToDeleteFromLibrary) return;
+    const song = songToDeleteFromLibrary;
+    setSongToDeleteFromLibrary(null);
+
+    if (currentProjectRef.current?.id === song.id && transport.isPlaying) {
+      audioEngine.stop();
+    }
+
+    audioEngine.evictSongFromRamCache(song.id);
+    await deleteProjectFromDb(song.id);
     if (isDesktopApp) {
-      deleteProjectNativeCache(projectId).catch((err: any) => {
+      deleteProjectNativeCache(song.id).catch((err: any) => {
         console.error('[Cache] Error al eliminar carpeta de caché nativa:', err);
       });
     }
-    const remaining = projects.filter((p) => p.id !== projectId);
+
+    const remaining = projects.filter((p) => p.id !== song.id);
     setProjects(remaining);
-    if (currentProject?.id === projectId) {
-      audioEngine.stop();
+    if (currentProject?.id === song.id) {
       setCurrentProject(null);
     }
-    showToast('Canción quitada de la biblioteca (tus archivos en disco no se modifican)');
+    showToast(`"${song.title}" eliminada de la biblioteca (archivos originales intactos)`);
   };
 
   const handleExportJson = (proj: SongProject) => {
@@ -2571,6 +2731,99 @@ export default function App() {
           setOptimizationProgress(null);
         }}
       />
+
+      {/* Delete From Library Confirmation Modal */}
+      {songToDeleteFromLibrary && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4"
+        >
+          <div className="bg-neutral-900 border border-neutral-700 rounded-2xl max-w-md w-full p-6 space-y-4 shadow-2xl">
+            <div className="flex items-start gap-3">
+              <div className="w-10 h-10 rounded-full bg-red-500/20 text-red-400 flex items-center justify-center shrink-0">
+                <Trash2 className="w-5 h-5" />
+              </div>
+              <div className="space-y-1">
+                <h2 className="text-base font-bold text-neutral-100">
+                  ¿Eliminar de la biblioteca?
+                </h2>
+                <p className="text-sm text-neutral-300">
+                  Se eliminará <strong className="text-white">"{songToDeleteFromLibrary.title}"</strong> del índice permanente y se liberará su espacio de caché.
+                </p>
+                <p className="text-xs text-neutral-400">
+                  Tus archivos de audio originales en disco nunca se tocarán ni modificarán.
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center justify-end gap-3 pt-2">
+              <button
+                type="button"
+                onClick={() => setSongToDeleteFromLibrary(null)}
+                className="px-4 py-2 rounded-xl bg-neutral-800 hover:bg-neutral-700 text-sm font-semibold text-neutral-200 cursor-pointer"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={confirmDeleteFromLibrary}
+                className="px-4 py-2 rounded-xl bg-red-600 hover:bg-red-500 text-sm font-semibold text-white cursor-pointer"
+              >
+                Eliminar de la biblioteca
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Missing Folder Notice Modal */}
+      {missingFolderSong && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4"
+        >
+          <div className="bg-neutral-900 border border-neutral-700 rounded-2xl max-w-md w-full p-6 space-y-4 shadow-2xl">
+            <div className="flex items-start gap-3">
+              <div className="w-10 h-10 rounded-full bg-amber-500/20 text-amber-400 flex items-center justify-center shrink-0">
+                <AlertTriangle className="w-5 h-5" />
+              </div>
+              <div className="space-y-1">
+                <h2 className="text-base font-bold text-neutral-100">
+                  No se encuentran los archivos
+                </h2>
+                <p className="text-sm text-neutral-300">
+                  No se encontraron las pistas de audio para <strong className="text-white">"{missingFolderSong.title}"</strong> en la ruta guardada.
+                </p>
+                <p className="text-xs text-neutral-400">
+                  Es posible que la carpeta haya sido movida, renombrada o esté en una unidad desconectada.
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center justify-end gap-3 pt-2">
+              <button
+                type="button"
+                onClick={() => setMissingFolderSong(null)}
+                className="px-4 py-2 rounded-xl bg-neutral-800 hover:bg-neutral-700 text-sm font-semibold text-neutral-200 cursor-pointer"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const target = missingFolderSong;
+                  setMissingFolderSong(null);
+                  handleRelinkProject(target);
+                }}
+                className="px-4 py-2 rounded-xl bg-amber-600 hover:bg-amber-500 text-sm font-semibold text-white cursor-pointer flex items-center gap-1.5"
+              >
+                <FolderOpen className="w-4 h-4" />
+                <span>Ubicar carpeta</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {DesktopRemoteBridge && remoteTriggerRef && (
         <React.Suspense fallback={null}>

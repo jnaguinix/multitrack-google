@@ -74,13 +74,13 @@ export const RepertoireTreeSidebar: React.FC<RepertoireTreeSidebarProps> = ({
   if (isCollapsed) {
     return (
       <aside
-        aria-label="Repertorio Colapsado"
+        aria-label="Biblioteca Colapsada"
         className="lt-repertoire-rail w-12 shrink-0 bg-studio-panel border-r border-neutral-800 flex flex-col items-center py-2.5 gap-2.5 select-none"
       >
         <button
           type="button"
           onClick={onToggleCollapse}
-          title="Expandir Repertorio"
+          title="Expandir Biblioteca"
           className="p-2 rounded-lg text-neutral-300 hover:bg-neutral-800 cursor-pointer"
         >
           <PanelLeftOpen className="w-4 h-4" />
@@ -164,13 +164,13 @@ export const RepertoireTreeSidebar: React.FC<RepertoireTreeSidebarProps> = ({
 
   return (
     <aside
-      aria-label="Árbol de Repertorio"
+      aria-label="Biblioteca de Canciones"
       className="lt-repertoire shrink-0 bg-studio-panel border-r border-neutral-800 flex flex-col h-full select-none"
     >
       {/* Sidebar Header */}
       <div className="px-4 py-3.5 flex items-center justify-between shrink-0">
         <span className="text-sm font-semibold text-neutral-100">
-          <span>Repertorio ({projects.length})</span>
+          <span>Biblioteca ({projects.length})</span>
         </span>
 
         <div className="flex items-center gap-1">
@@ -334,10 +334,10 @@ export const RepertoireTreeSidebar: React.FC<RepertoireTreeSidebarProps> = ({
                     </button>
                   ) : (
                     <span
-                      title="En el Setlist"
-                      className="px-1.5 py-0.5 rounded bg-studio-strip text-studio-ink border border-studio-line text-[11px] font-bold"
+                      title="En el Setlist de hoy"
+                      className="text-emerald-400 text-xs px-1.5 font-bold"
                     >
-                      SET
+                      ✓
                     </span>
                   )}
 
@@ -345,6 +345,20 @@ export const RepertoireTreeSidebar: React.FC<RepertoireTreeSidebarProps> = ({
                     <MoreHorizontal size={16} />
                   </button>
                   <div id={`repertoire-song-${index}`} popover="auto" className="lt-popover lt-library-actions space-y-1" onClick={(event) => event.stopPropagation()}>
+                    {!isInSetlist && (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.currentTarget.closest<HTMLElement>('[popover]')?.hidePopover();
+                          onAddToSetlist(song.id);
+                        }}
+                        title="Añadir al Setlist"
+                        className="lt-control"
+                      >
+                        <Plus className="w-3.5 h-3.5" /> Añadir al Setlist
+                      </button>
+                    )}
+
                     <button
                       type="button"
                       onClick={(e) => {
@@ -355,18 +369,6 @@ export const RepertoireTreeSidebar: React.FC<RepertoireTreeSidebarProps> = ({
                       className="lt-control"
                     >
                       <Download className="w-3.5 h-3.5" /> Exportar JSON
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.currentTarget.closest<HTMLElement>('[popover]')?.hidePopover();
-                        onDeleteProject(song.id);
-                      }}
-                      title="Quitar de la biblioteca"
-                      className="lt-control text-red-300"
-                    >
-                      <Trash2 className="w-3.5 h-3.5" /> Eliminar canción
                     </button>
                   </div>
                 </div>
