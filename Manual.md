@@ -1,238 +1,327 @@
-# Manual Técnico y de Arquitectura — OmniTracks (DAW & Setlist Multitrack Player)
+# Manual Técnico y de Arquitectura — OmniTracks
 
-Este documento es la **guía técnica de referencia y transferencia arquitectónica (Handoff Manual)** de OmniTracks. Su propósito es permitir que cualquier desarrollador o sistema de inteligencia artificial comprenda en profundidad el funcionamiento del sistema, cómo se interconectan todos sus archivos, el ciclo de vida del audio y los datos, y cómo extenderlo de forma segura y consistente.
+Referencia técnica de **OmniTracks** (reproductor multipista / DAW en vivo). Su objetivo es que cualquier desarrollador o IA pueda entender el sistema, localizar cualquier pieza y extenderlo con seguridad.
 
----
+- Para empezar rápido (estado del repo, mapa de archivos, comandos, reglas): [`instrucciones.md`](instrucciones.md).
+- Diseño detallado del motor de audio: [`docs/MOTOR_NATIVO_DISENO.md`](docs/MOTOR_NATIVO_DISENO.md).
+- Empaquetado, firma y publicación: [`desktop/README.md`](desktop/README.md).
 
-## 1. Visión General y Propósito del Sistema
-
-**OmniTracks** es una estación de trabajo de audio digital (DAW) y reproductor multipista especializado para escenarios y conciertos en vivo (estilo *Ableton Live / Playback / Prime / Reaper*).
-
-### Capacidades Principales
-- **Reproducción multipista con sincronización absoluta:** Admite múltiples pistas simultáneas (stems) en formatos WAV, MP3, FLAC, M4A, OGG y AAC.
-- **Motor nativo de alto rendimiento en Rust (Windows Desktop):** Ejecuta la reproducción a través de un backend CPAL/WASAPI dedicado con hilo de audio en tiempo real, remuestreo dinámico con varispeed continuo sin chasquidos, y ruteo multicanal / Split-Mono.
-- **Motor Web Audio API (Web / Navegador):** Modo dual con streaming por bloques desde OPFS (Origin Private File System) o decodificación completa en memoria RAM con control de presupuesto.
-- **Modelo de Dos Niveles (Biblioteca Permanente vs. Setlist Efímero):**
-  - La **Biblioteca** almacena el catálogo permanente en `%LOCALAPPDATA%\org.omnitracks.desktop\library.json` y sidecars visibles `omnitracks.project.json` en las carpetas de canciones. Los archivos de audio originales **jamás se tocan**.
-  - El **Setlist** es la sesión del concierto o ensayo (`inSetlist: true`). Puede vaciarse («Limpiar sesión») o modificarse en vivo sin tocar la biblioteca.
-- **Navegación musical en directo:** Saltos de sección cuantizados al compás (`immediate`, `1-bar`, `2-bars`, `section-end`), bucles infinitos (*Vamp*) sin saltos ni micro-cortes, metrónomo / click dinámico y avisos hablados de guía (*Cues*).
-- **Servidor LAN integrado:** Un servidor HTTP/WebSocket nativo en Rust sirve páginas ligeras para teléfonos en la red local (`/monitor` para músicos y `/mezclador` para el técnico de audio).
+> **Principio:** si este manual y el código discrepan, gana el código. Todas las afirmaciones de este documento fueron contrastadas con el código fuente (ver nota de verificación al final).
 
 ---
 
-## 2. Diagrama de Arquitectura Global
+## 1. Visión general
+
+OmniTracks reproduce varias pistas (*stems*) sincronizadas al muestreo (WAV, MP3, FLAC, M4A, OGG, AAC) pensadas para conciertos: saltos de sección cuantizados al compás, bucles *Vamp*, cambio de tono/velocidad sin clics, metrónomo y guía hablada por una salida independiente (*Split-Mono*), mezcla por pista y control remoto desde teléfonos.
+
+Dos plataformas comparten el mismo frontend React:
+
+| | Escritorio (Windows x64) — producto principal | Web (navegador) |
+|---|---|---|
+| Contenedor | Tauri v2 + WebView2 | Build estático Vite (`dist/`) |
+| Motor | Rust: `cpal` (WASAPI) + `symphonia` + `rubato` + `rtrb` | Web Audio API (`audioEngine.ts`) |
+| Modos | Caché PCM en disco + hilos feeder por pista | `buffer` (RAM, presupuesto 256–4096 MB, defecto 1200) y `stream` (OPFS + `SyncAccessHandle` en Worker) |
+| Datos | `library.json` + sidecars en disco | IndexedDB `OmniTracksWebDB` + OPFS |
+| Control remoto | Servidor LAN en Rust (TCP 8765) | No disponible |
+
+### Modelo de dos niveles
+- **Biblioteca** (`library.json`): catálogo permanente. Sin audio; los originales del usuario jamás se tocan.
+- **Setlist**: sesión del día, `inSetlist: true` + `setlistOrder` por canción y `activeSetlist` (ids) en `library.json`. Se vacía o edita sin afectar la biblioteca.
+
+---
+
+## 2. Arquitectura global
 
 ```mermaid
 graph TD
-    subgraph Frontend["Frontend Compartido (React 19 + TypeScript + Vite)"]
-        UI[Vistas: Setlist / En vivo / Arreglo / Mezcla / Biblioteca]
-        App[src/App.tsx - Orquestador Global de Estado]
-        Sidebar[RepertoireTreeSidebar.tsx - Árbol de Biblioteca y +Set]
-        SetlistPage[SetlistPageView.tsx - Vista Principal de Sesión]
-        Mixer[MultitrackMixer.tsx - Faders, Pan, Buses, Mute, Solo]
-        Transport[TransportDeck.tsx - Play/Pausa, BPM, Pitch, Cuantización]
+    subgraph Frontend["Frontend compartido (React 19 + TypeScript + Vite)"]
+        App["src/App.tsx - orquestador de estado"]
+        Views["Vistas: Setlist / En vivo / Arreglo / Mezcla / Control rápido / Biblioteca"]
+        Facade["audioEngine (src/audio/audioEngine.ts) - elige motor"]
+        ProjectDb["storage/projectDb.ts - saveProjectToDb"]
     end
 
-    subgraph DesktopIPC["Puente IPC Tauri v2"]
-        NativeDialog[nativeDialog.ts - Diálogos de Windows e IPC]
-        DesktopLib[desktopLibrary.ts - Cliente de library_*]
+    subgraph DesktopJS["Solo escritorio (JS)"]
+        NativeEngine["nativeAudioEngine.ts"]
+        NativeDialog["utils/nativeDialog.ts"]
+        DesktopLib["storage/desktopLibrary.ts"]
+        DesktopUI["desktop/frontend: RemoteConnectionBridge, DesktopAudioSettings, DesktopUpdates"]
     end
 
-    subgraph RustBackend["Backend Nativo en Rust (desktop/src-tauri)"]
-        TauriMain[src/main.rs - Inicialización y Comandos Tauri]
-        LibStore[src/library/mod.rs - library.json y omnitracks.project.json]
-        AudioMod[src/audio/mod.rs - Comandos audio_*]
-        AudioOutput[src/audio/output.rs - Stream CPAL / WASAPI / Hot-Plug]
-        AudioPlayback[src/audio/playback.rs - Feeder rtrb / Rubato / Jumps / Vamp / Click]
-        AudioCache[src/audio/cache.rs - Caché PCM 16-bit / pcm/song_id/]
-        AudioImport[src/audio/import.rs - Symphonia Decoders Paralelos]
-        LanServer[src/lan.rs - Servidor HTTP/WebSocket TCP 8765]
+    subgraph WebOnly["Solo web"]
+        WebEngine["webAudioEngine (Web Audio API)"]
+        Opfs["opfsStorage + streamingTrack + pcmReader.worker"]
+        IDB["IndexedDB OmniTracksWebDB"]
     end
 
-    subgraph WebEngine["Motor Web Audio (src/audio - Navegadores)"]
-        WebAudioEngine[audioEngine.ts - Web Audio API]
-        StreamingTrack[streamingTrack.ts - Ring Buffer OPFS]
-        PcmWorker[pcmReader.worker.ts - Web Worker SyncAccessHandle]
+    subgraph Rust["Backend Rust (desktop/src-tauri/src)"]
+        Main["main.rs - comandos Tauri y estado"]
+        Lib["library/mod.rs"]
+        AudioMod["audio/mod.rs - comandos audio_*"]
+        Playback["audio/playback.rs - PlaybackEngine"]
+        Output["audio/output.rs - dispositivos y estado"]
+        Cache["audio/cache.rs"]
+        Import["audio/import.rs"]
+        Lan["lan.rs + protocol.rs (axum)"]
     end
 
-    subgraph Storage["Almacenamiento Físico"]
+    subgraph Disk["Disco"]
         LibJson["%LOCALAPPDATA%/org.omnitracks.desktop/library.json"]
-        SidecarJson["Carpeta de Canción / omnitracks.project.json"]
-        PcmCache["%LOCALAPPDATA%/org.omnitracks.desktop/pcm/<id>/*.pcm"]
-        UserAudio["Archivos de Audio Originales del Usuario (Solo Lectura)"]
+        Settings["audio_settings.json"]
+        Pcm["pcm/song_id/sample_rate/track_id.pcm + .json"]
+        Sidecar["carpeta de la canción/omnitracks.project.json"]
+        UserAudio["audios originales (solo lectura)"]
     end
 
-    App --> UI
-    UI --> Sidebar
-    UI --> SetlistPage
-    UI --> Mixer
-    UI --> Transport
-    App --> DesktopIPC
-    DesktopIPC --> RustBackend
-    TauriMain --> LibStore
-    TauriMain --> AudioMod
-    AudioMod --> AudioPlayback
-    AudioPlayback --> AudioOutput
-    AudioPlayback --> AudioCache
-    AudioMod --> AudioImport
-    LibStore --> LibJson
-    LibStore --> SidecarJson
-    AudioCache --> PcmCache
-    AudioImport --> UserAudio
-    TauriMain --> LanServer
-    App -.-> WebEngine
+    App --> Views
+    App --> Facade
+    App --> ProjectDb
+    Facade --> NativeEngine
+    Facade -.-> WebEngine
+    ProjectDb --> DesktopLib
+    ProjectDb -.-> IDB
+    WebEngine -.-> Opfs
+    NativeEngine -->|invoke audio_*| AudioMod
+    NativeDialog -->|invoke| AudioMod
+    DesktopLib -->|invoke library_*| Lib
+    DesktopUI -->|invoke remote_*| Main
+    Main --> Lan
+    AudioMod --> Playback
+    AudioMod --> Import
+    Playback --> Output
+    Playback --> Cache
+    Import --> Cache
+    Import --> UserAudio
+    Cache --> Pcm
+    Lib --> LibJson
+    Lib --> Sidecar
+    Output --> Settings
 ```
 
----
-
-## 3. Explicación Detallada de Archivos por Capa
-
-### 3.1. Capa de Presentación y Frontend (`src/`)
-
-| Archivo | Responsabilidad y Funcionamiento |
-|---|---|
-| [`src/main.tsx`](file:///c:/Users/jpuerta/Documents/ChatGPT/Multi-chatgpt/multitrack-google/src/main.tsx) | Punto de entrada del bundle React. Monta `<App />` en el DOM (`#root`). |
-| [`src/App.tsx`](file:///c:/Users/jpuerta/Documents/ChatGPT/Multi-chatgpt/multitrack-google/src/App.tsx) | **Centro neurálgico del frontend:**<br>1. Almacena el estado de la biblioteca (`projects`), canción montada (`currentProject`), setlist (`setlistQueue`), transporte y medidores.<br>2. Gestiona las acciones de setlist: `handleAddToSetlist`, `handleRemoveFromSetlist`, `handleClearSetlist` y `handleReorderSetlist`.<br>3. Orquesta la importación nativa por carpetas o archivos de audio y la resolución de ambigüedad de canciones.<br>4. Escucha atajos globales de teclado (Barra espaciadora para Play/Pausa, Escape para mixer flotante). |
-| [`src/types/project.ts`](file:///c:/Users/jpuerta/Documents/ChatGPT/Multi-chatgpt/multitrack-google/src/types/project.ts) | Definiciones TypeScript para `SongProject` (canción completa), `TrackChannel` (pista/stem individual), `SongSection` (marcador de sección con tiempo y color), `TransportState`, `OutputBus` (`main` \| `cue-click` \| `both`), y `QuantizeMode` (`immediate` \| `1-bar` \| `2-bars` \| `section-end`). |
-| [`src/components/TopBar.tsx`](file:///c:/Users/jpuerta/Documents/ChatGPT/Multi-chatgpt/multitrack-google/src/components/TopBar.tsx) | Barra de navegación superior con pestañas: `Setlist`, `En vivo`, `Arreglo`, `Mezcla`, `Control rápido`, `Biblioteca`. Integra el acceso al panel de conexión remota LAN y diagnóstico de audio. |
-| [`src/components/TransportDeck.tsx`](file:///c:/Users/jpuerta/Documents/ChatGPT/Multi-chatgpt/multitrack-google/src/components/TransportDeck.tsx) | Barra de transporte inferior. Incluye botones de Play/Pause, Stop, Vamp (repetición en bucle de la sección actual), selectores de BPM y afinación (Pitch en semitonos), cuantización y reloj con formato `mm:ss:ms`. |
-| [`src/components/RepertoireTreeSidebar.tsx`](file:///c:/Users/jpuerta/Documents/ChatGPT/Multi-chatgpt/multitrack-google/src/components/RepertoireTreeSidebar.tsx) | Panel lateral izquierdo retráctil que lista todas las canciones indexadas en la biblioteca. Permite arrastrar canciones al DAW o setlist, pulsar `+ Set` para sumarlas a la sesión, hacer clic en el `✓` (que al pasar el ratón se convierte en `✕`) para quitarlas de la sesión, y vaciar todo el setlist con el botón «Limpiar sesión actual». |
-| [`src/components/SetlistPageView.tsx`](file:///c:/Users/jpuerta/Documents/ChatGPT/Multi-chatgpt/multitrack-google/src/components/SetlistPageView.tsx) | Vista de trabajo para armar el show: muestra la forma de onda maestra, las secciones de la canción activa y el orden de reproducción interactivo. Si no hay canciones en el setlist, muestra un estado limpio «Setlist vacío». Contiene el botón «Limpiar sesión» con confirmación modal. |
-| [`src/components/LiveSetView.tsx`](file:///c:/Users/jpuerta/Documents/ChatGPT/Multi-chatgpt/multitrack-google/src/components/LiveSetView.tsx) | Vista optimizada para directores musicales durante el concierto: botones grandes con feedback táctil para saltar a cualquier sección, visualización de compases restantes y temporizadores de cuenta regresiva. |
-| [`src/components/TimelineArranger.tsx`](file:///c:/Users/jpuerta/Documents/ChatGPT/Multi-chatgpt/multitrack-google/src/components/TimelineArranger.tsx) | Vista tradicional de secuenciador / DAW multipista con pistas apiladas horizontalmente, renderizado de formas de onda por pista, zoom y posicionamiento de marcadores de sección con precisión de milisegundos. |
-| [`src/components/MultitrackMixer.tsx`](file:///c:/Users/jpuerta/Documents/ChatGPT/Multi-chatgpt/multitrack-google/src/components/MultitrackMixer.tsx) | Mesa de mezclas completa con faders de volumen logarítmicos en dB, perillas de paneo estéreo, botones Mute y Solo, asignación de canal a buses (`MAIN`, `CUE/CLICK`, `BOTH`) y medidores estéreo con caída balística a 60 fps. |
-| [`src/components/LibraryAndModals.tsx`](file:///c:/Users/jpuerta/Documents/ChatGPT/Multi-chatgpt/multitrack-google/src/components/LibraryAndModals.tsx) | Agrupa los componentes de gestión de biblioteca y modales emergentes: `LibraryView`, `SongMetadataEditModal` (editor de BPM, tono, artista y título), `ConfirmSongActionModal`, `SongFingerprintPromptModal` y `SectionEditorModal`. |
+La fachada se decide al cargar `audioEngine.ts`: `isDesktopEnvironment = Boolean(window.__TAURI__)` → `nativeAudioEngine`; si no, `webAudioEngine`. `nativeAudioEngine` hace *polling* de `audio_get_playback_state` (intervalo propio) para refrescar posición, sección activa, medidores y estado del dispositivo.
 
 ---
 
-### 3.2. Capa de Persistencia y Almacenamiento
+## 3. Frontend (`src/`)
 
-| Archivo | Responsabilidad |
-|---|---|
-| [`src/storage/desktopLibrary.ts`](file:///c:/Users/jpuerta/Documents/ChatGPT/Multi-chatgpt/multitrack-google/src/storage/desktopLibrary.ts) | Comunica el frontend con el módulo nativo de Rust (`library_*`). Gestiona la carga y guardado de `library.json`, eliminación segura de canciones y sincronización del sidecar `omnitracks.project.json`. |
-| [`src/storage/projectDb.ts`](file:///c:/Users/jpuerta/Documents/ChatGPT/Multi-chatgpt/multitrack-google/src/storage/projectDb.ts) | Capa intermedia que bifurca la persistencia: en escritorio utiliza `desktopLibrary.ts`, mientras que en navegadores web utiliza IndexedDB (`OmniTracksWebDB`). |
-| [`src/utils/trackFingerprint.ts`](file:///c:/Users/jpuerta/Documents/ChatGPT/Multi-chatgpt/multitrack-google/src/utils/trackFingerprint.ts) | Genera la huella digital de una canción basándose en el número de pistas ($\pm 1$) y la coincidencia de tamaño en bytes y duración ($\ge 80\%$). Si se detecta una coincidencia exacta, vincula la carpeta sin duplicar; si hay ambigüedad, lanza una solicitud de confirmación al usuario. |
-| [`src/utils/titleCleaning.ts`](file:///c:/Users/jpuerta/Documents/ChatGPT/Multi-chatgpt/multitrack-google/src/utils/titleCleaning.ts) | Limpia automáticamente títulos sucios como `"Multitrack _ERES BENDITO_ ORIGINAL Jaime Murrel - G major - 108bpm - 440hz"` transformándolos en: Título: `"Eres Bendito"`, Artista: `"Jaime Murrel"`, BPM: `108`, Tono: `"G Major"`. |
+El inventario archivo por archivo con su responsabilidad está en [`instrucciones.md`](instrucciones.md) §2.2. Aquí, solo los contratos clave.
 
----
+### 3.1. `App.tsx` (estado global)
+- **Biblioteca:** `projects` (todas las canciones), `projectsRef` (copia para callbacks), `currentProject` (montada en el motor).
+- **Setlist:** `setlistQueue` es un `useMemo` derivado de `projects.filter(inSetlist)` ordenado por `setlistOrder`. Acciones:
+  - `handleAddToSetlist(id)`: ignora si ya está; en escritorio verifica archivos originales (`audio_check_files_exist`; si faltan abre el flujo de carpeta perdida), regenera la caché PCM si `audio_get_project_cache_status` no está completa, asigna `inSetlist=true` y `setlistOrder = max+1`, y guarda con `saveProjectToDb`.
+  - `handleRemoveFromSetlist(id)`: detiene si suena, expulsa la canción de la caché RAM (`evictSongFromRamCache`), **borra su caché nativa** (`deleteProjectNativeCache`), pone `inSetlist=false` y retira el id de `activeSetlist` en `library.json`.
+  - `handleClearSetlist()`: aplica lo anterior a toda la cola y deja `activeSetlist = []`.
+  - `handleReorderSetlist(from, to)`: reasigna `setlistOrder` y guarda.
+- **Importación:** `scanNativeFolder`/`scanNativeFiles` → huella → creación o fusión de canción (si coincide con una existente conserva ediciones del usuario, secciones y mezcla) → `audio_import_tracks` en segundo plano → carga en el motor si no hay otra canción montada.
+- **Atajos:** Espacio (Play/Pausa), `V` (Vamp), `1`–`9` (salto a sección). `Esc` cierra el mezclador flotante de `SetlistPageView`.
+- **Vista inicial por hash:** `#setlist`, `#live`, `#arranger`, `#mixer`, `#remote`, `#library`.
 
-### 3.3. Capa de Backend Nativo en Rust (`desktop/src-tauri/`)
+### 3.2. Tipos (`src/types/project.ts`)
+`QuantizeMode = '1-bar' | '2-bars' | 'section-end' | 'immediate'` · `OutputBus = 'main' | 'cue-click' | 'both'` · `SplitRoutingMode = 'stereo' | 'split-mono'` · `AudioEngineMode = 'buffer' | 'stream'` · `RepertoireFolder = 'imported' | 'setlist' | 'demos'` · además `SongProject`, `TrackChannel`, `SongSection`, `TransportState`, `RemoteSyncMessage`.
 
-El backend de Rust proporciona aislamiento del motor de audio frente a la recolección de basura de JavaScript y el throttling de los navegadores.
+### 3.3. Persistencia (`src/storage/`)
+`saveProjectToDb(song)` es el **único punto de escritura**:
+- **Escritorio:** `saveDesktopSong` → comando `library_save_song`.
+- **Web:** IndexedDB (`OmniTracksWebDB`, stores `projects` y `audioBuffers`), memoria de presets en `localStorage`, sidecar vía File System Access cuando hay permisos (con *debounce*).
 
-#### Submódulo de Biblioteca (`desktop/src-tauri/src/library/mod.rs`)
-- **`library.json`:** Estructura atómica con control de versión y copia de respaldo automática (`library.backup.json`). Se escribe primero en un archivo temporal `.tmp` y se renombra atómicamente para prevenir corrupción si el equipo pierde energía.
-- **Sidecar Canónico (`omnitracks.project.json`):** Se escribe directamente en la carpeta de origen de los stems. Contiene las secciones, colores, balance de mezcla y tonalidad. Si existe el nombre heredado `.omnitracks.json`, el sistema lo lee por compatibilidad pero guarda siempre el nombre canónico visible.
-- **`library_save_song`:** Sincroniza bidireccionalmente el array `active_setlist` en `library.json`: cuando una canción se marca con `in_setlist: false`, se purga automáticamente de la lista activa del show.
+### 3.4. Huella de canción (`src/audio/fingerprint.ts`)
+`findSongFingerprintMatches(incomingTracks, existingSongs)` devuelve candidatos con `matchRatio ≥ 0.80`, ordenados:
+1. Descarta canciones cuyo número de pistas difiere en más de **±1**.
+2. Empareja pistas una a una (sin reutilizar) cuando coinciden **duración** (±1 s) **y tamaño** (diferencia 0, `< 64 KB` o `< 2 %`); si falta uno de los dos datos en ambos lados, basta el otro.
+3. `matchRatio = emparejadas / max(pistas entrantes, pistas existentes)`.
+Un candidato abre `SongFingerprintPromptModal` para que el usuario decida (vincular a la existente o crear nueva).
 
-#### Submódulo de Audio (`desktop/src-tauri/src/audio/`)
-1. **`output.rs` (Control de Dispositivo y Stream CPAL):**
-   - Configura streams de audio mediante CPAL (Windows WASAPI compartido o exclusivo).
-   - El hilo de audio se configura con prioridad de tiempo real (`AvSetMmThreadCharacteristicsW` en Windows para perfil `"Pro Audio"`).
-   - **Manejo de Hot-Unplug en caliente:** Si la interfaz física (por ejemplo, Focusrite Scarlett) se desconecta durante el concierto, el motor detecta el fallo en el callback, conmuta a estado desconectado conservando la posición exacta del cursor (`playback_sample`), y permite reabrir el stream sin reiniciar la app.
-   - **Regla estricta:** Cero alocaciones de memoria y cero llamadas a `tracing::info!` dentro del callback de audio.
-2. **`playback.rs` (Procesamiento y Renderizado de Audio):**
-   - **`PlaybackFeeder`:** Hilo secundario que lee la caché PCM desde disco y llena un búfer circular en anillo *lock-free* (`rtrb`) de tamaño acotado.
-   - **Varispeed Continuo (`Rubato`):** Cada pista posee una instancia persistente de `rubato::SincFixedIn`. Al cambiar la afinación en tiempo real (por ejemplo +1 semitono), se ajusta el ratio con `set_resample_ratio_relative` conservando los remanentes de muestras entre bloques, eliminando cualquier chasquido o discontinuidad acústica.
-   - **Saltos de Sección Cuantizados y Vamp:** Al solicitar un salto de sección, el motor calcula el compás de destino y aplica un micro-crossfade de 8 ms para evitar clics. En modo Vamp, el motor entra en bucle cerrado continuo de la sección sin interrupción.
-   - **Metrónomo y Cues:** Generación analítica de pulsos sinusoidales de metrónomo (1000 Hz en pulso fuerte, 800 Hz en pulsos débiles) y síntesis de campanadas guía sin sobrecarga de CPU.
-   - **Ruteo Split-Mono:** Distribución independiente de pistas hacia canal izquierdo (música) y canal derecho (click y guía) según el bus asignado (`OutputBus`).
-3. **`cache.rs` (Caché PCM Nativa en Disco):**
-   - Almacena audio decodificado en formato PCM crudo con enteros de 16 bits (`i16`) en `%LOCALAPPDATA%\org.omnitracks.desktop\pcm\<song_id>\<track_id>.pcm`.
-   - **Preservación Mono Real:** Las pistas mono se detectan y almacenan con 1 solo canal (reduciendo el consumo de disco y RAM al 50%).
-4. **`import.rs` (Decodificación Multihilo con Symphonia):**
-   - Decodifica archivos MP3, WAV, FLAC, M4A, etc., en paralelo usando todos los núcleos de CPU disponibles con `rayon` / `tokio`.
-   - Remuestrea al vuelo a la frecuencia de muestreo del dispositivo de salida si difiere de la del archivo original.
+### 3.5. Limpieza de títulos (`src/audio/smartAnalyzer.ts`)
+`cleanSongTitleAndMetadata(raw)` transforma, por ejemplo, `Multitrack _ERES BENDITO_ ORIGINAL Jaime Murrel-G major-108bpm-440hz` en: título «Eres Bendito», artista «Jaime Murrel», tono «G major», BPM 108. `inferSongMetadataFromFiles(files)` aplica la heurística a nombres de carpeta/archivos. Rust tiene su propia versión (`library::clean_song_title_and_metadata`) para el escaneo nativo: **mantener ambas coherentes**. Cubierto por `test/titleCleaning.test.ts`.
 
 ---
 
-## 4. Ciclo de Vida de una Canción (End-to-End)
+## 4. Ciclo de vida de una canción (escritorio)
 
 ```mermaid
 sequenceDiagram
     autonumber
-    actor Usuario
-    participant UI as Frontend (React)
-    participant RustLib as Rust (library/mod.rs)
-    participant RustImport as Rust (audio/import.rs)
-    participant Disk as Disco Duro
+    actor U as Usuario
+    participant UI as Frontend (App.tsx)
+    participant Lib as Rust library/mod.rs
+    participant Aud as Rust audio/mod.rs + import.rs
+    participant Disk as Disco
 
-    Usuario->>UI: Importa carpeta de canción
-    UI->>RustImport: audio_scan_folder (analiza archivos)
-    RustImport-->>UI: Lista de archivos, duración y metadatos limpios
-    UI->>UI: Calcula Huella Digital (Track Fingerprint)
-    alt Es canción nueva
-        UI->>RustLib: library_save_song (guarda en library.json con inSetlist=false)
-        RustLib->>Disk: Escribe omnitracks.project.json en la carpeta
-        UI->>UI: Muestra la canción en el panel lateral con "+ Set"
-    else Coincide >= 80% con canción existente
-        UI->>Usuario: Muestra modal de confirmación / desambiguación
+    U->>UI: Importa carpeta o archivos
+    UI->>Aud: audio_scan_folder / audio_scan_files
+    Aud-->>UI: pistas, duraciones, secciones, título/artista/BPM/tono
+    UI->>UI: Huella (fingerprint)
+    alt Coincide >= 80 % con una existente
+        UI->>U: Modal de confirmación
     end
+    UI->>Lib: library_save_song (inSetlist=false)
+    Lib->>Disk: library.json (+ backup) y omnitracks.project.json
+    UI->>Aud: audio_import_tracks (segundo plano)
+    Aud->>Disk: pcm/song_id/sample_rate/track_id.pcm + .json
+    Aud-->>UI: picos, duración, canales por pista
+    UI->>Lib: library_save_song (metadatos completos)
+    UI->>Aud: audio_load_project (si no hay otra montada)
 
-    Usuario->>UI: Pulsa "+ Set" en la canción
-    UI->>RustImport: audio_import_tracks (genera caché PCM nativa)
-    RustImport->>Disk: Escribe pcm/<song_id>/*.pcm (16-bit)
-    UI->>RustLib: library_save_song (inSetlist=true)
-    UI->>UI: Canción ingresa al Setlist de hoy
+    U->>UI: "+ Set"
+    UI->>Aud: audio_check_files_exist
+    UI->>Aud: audio_get_project_cache_status (regenera si incompleta)
+    UI->>Lib: library_save_song (inSetlist=true, setlistOrder)
 
-    Usuario->>UI: Pulsa Play en la canción
-    UI->>RustBackend: audio_load_project + audio_play
-    RustBackend->>Disk: PlaybackFeeder carga PCM a memoria intermedia
-    RustBackend->>Usuario: Audio suena por la interfaz física (WASAPI)
+    U->>UI: Play
+    UI->>Aud: audio_play (el engine nativo hace polling del estado)
+
+    U->>UI: Quitar del setlist
+    UI->>Aud: audio_stop si suena + audio_delete_project_cache
+    UI->>Lib: library_save_song (inSetlist=false)
 ```
 
----
-
-## 5. Protocolo y Servidor LAN (`desktop/src-tauri/src/lan.rs`)
-
-OmniTracks incluye un servidor HTTP y WebSocket autónomo en Rust que permite a los miembros de la banda conectarse desde sus teléfonos móviles sin instalar ninguna aplicación.
-
-- **Puerto:** TCP `8765` en la interfaz IPv4 seleccionada de la computadora.
-- **Rutas Servidas:**
-  - `http://<IP>:8765/monitor`: Interfaz ligera de solo lectura para músicos en el escenario. Muestra el título actual, sección en curso, cuenta regresiva de compases, BPM y tonalidad.
-  - `http://<IP>:8765/mezclador`: Interfaz táctil interactiva para el sonidista o monitores personales. Permite regular faders de volumen, paneos, mute y solo por pista.
-- **Seguridad y Aislamiento:**
-  - El servidor valida la sesión mediante token temporal y restringe a un máximo de 16 conexiones concurrentes.
-  - El cliente solo puede enviar comandos acotados de mezcla (`setTrackGain`, `setTrackPan`, `setTrackMute`, `setTrackSolo`). No tiene acceso al transporte principal (no puede pausar ni detener la canción desde un teléfono no autorizado).
+Eliminar de la biblioteca: `library_delete_song` (quita de `library.json` y `activeSetlist`, descarga del motor si estaba cargada y borra `pcm/<song_id>`).
 
 ---
 
-## 6. Procedimientos de Mantenimiento y Extensión
+## 5. Almacenamiento en disco (escritorio)
 
-### 6.1. Agregar un Nuevo Comando IPC a Tauri
-1. Declarar la función asíncrona con el atributo `#[tauri::command]` en el archivo correspondiente (`desktop/src-tauri/src/audio/mod.rs` o `library/mod.rs`).
-2. Registrar el comando en la macro `tauri::generate_handler![...]` en [`desktop/src-tauri/src/main.rs`](file:///c:/Users/jpuerta/Documents/ChatGPT/Multi-chatgpt/multitrack-google/desktop/src-tauri/src/main.rs).
-3. Añadir el identificador del comando al array `"permissions"` en [`desktop/src-tauri/capabilities/desktop-remote.json`](file:///c:/Users/jpuerta/Documents/ChatGPT/Multi-chatgpt/multitrack-google/desktop/src-tauri/capabilities/desktop-remote.json).
-4. Invocar el comando desde el frontend usando:
-   ```ts
-   const invoke = (window as any).__TAURI__?.core?.invoke;
-   if (invoke) {
-     const result = await invoke('mi_nuevo_comando', { parametro: valor });
-   }
-   ```
+Directorio de datos: `%LOCALAPPDATA%\org.omnitracks.desktop\` (`app_local_data_dir` de Tauri).
 
-### 6.2. Reglas Obligatorias para Modificaciones de Audio
-- Nunca alojar memoria en el callback de renderizado de CPAL.
-- Los cambios de ratio de velocidad o afinación deben reutilizar el remuestreador Rubato activo; nunca instanciar un nuevo remuestreador mientras una pista está sonando.
-- Todo salto o seek debe iniciar con un desvanecimiento cruzado rápido para eliminar cualquier artefacto en los transitorios.
+| Elemento | Detalle |
+|---|---|
+| `library.json` | `LibraryFile { version (=1), updatedAt, activeSetlist: string[], songs: LibrarySong[] }`, JSON camelCase. Escritura: `library.json.tmp` → copia previa a `library.backup.json` → `rename` atómico (con *fallback* a escritura directa). Lectura: si falta o está corrupto, se restaura desde `library.backup.json`; si tampoco sirve, error. |
+| `omnitracks.project.json` | **Sidecar canónico** en la carpeta de la canción: el `LibrarySong` serializado. Se escribe con `.tmp` + `rename`; si la carpeta es de solo lectura se ignora el fallo (no es fatal). Lectura con compatibilidad del nombre heredado `.omnitracks.json`. |
+| `audio_settings.json` | `AudioSettings { host ("WASAPI" por defecto), deviceName, sampleRate, bufferSize, testChannel }`. |
+| `pcm/<song_id>/<sample_rate>/<track_id>.pcm` | Audio decodificado, **`i16` little-endian**, a la frecuencia del dispositivo. Pistas mono reales se guardan con 1 canal (`is_effectively_mono`, umbral lateral −40 dB). |
+| `pcm/<song_id>/<sample_rate>/<track_id>.json` | `TrackPcmMetadata` (`formatVersion`=1, rutas/tamaño/fecha del original para detectar reconversión, canales, `frameCount`, `durationSec`, 320 picos de onda, `createdAt`). Escritura atómica; antes de escribir se comprueba espacio libre. |
+
+La caché es **derivable**: puede borrarse sin pérdida (se regenera desde los originales). Se limpia al quitar una canción del setlist, al eliminarla de la biblioteca y con `audio_clean_orphan_caches` (carpetas de ids que ya no existen).
 
 ---
 
-## 7. Verificación del Sistema y Tests
+## 6. Motor nativo de audio (Rust)
 
-El proyecto cuenta con suites de pruebas automatizadas que deben ejecutarse antes de cada entrega:
+### 6.1. Hilos y flujo de datos
+```
+Comandos Tauri (audio_*)  ──►  PlaybackEngine (playback.rs)
+                                   │
+   PCM en disco ──► hilo feeder por pista "omni-feed-<track_id>"
+                         (lee, remuestrea con rubato, empalma saltos/vamp con crossfade de 8 ms)
+                                   │  rtrb (búfer circular lock-free por pista)
+                                   ▼
+                          Callback CPAL (WASAPI): mezcla por bus, ruteo, click, guía, fade, salida
+```
+Detalle de tamaños de búfer, saltos y decisiones: [`docs/MOTOR_NATIVO_DISENO.md`](docs/MOTOR_NATIVO_DISENO.md).
 
-1. **Frontend Linting:**
-   ```powershell
-   npm.cmd run lint
-   ```
-2. **Pruebas Unitarias de Lógica Frontend:**
-   ```powershell
-   npm.cmd test
-   ```
-   Verifica heurísticas de limpieza de títulos y coincidencia de huellas digitales de canciones.
-3. **Pruebas Unitarias de Rust y Audio Nativo:**
-   ```powershell
-   cargo test --manifest-path desktop/src-tauri/Cargo.toml --target x86_64-pc-windows-msvc --release
-   ```
-   Ejecuta 40+ pruebas que cubren: lectura y escritura de caché PCM, detección mono/estéreo, estabilidad ante desconexión de hardware, continuidad de varispeed sin clics, alineación del click a nivel de muestra, ruteo Split-Mono y protocolo de red LAN.
+### 6.2. Módulos
+- **`output.rs`:** `AudioSettings`, `AudioEngineState` (settings + estadísticas del stream + indicadores de import), `list_hosts()`/`list_devices(host)`, tono de prueba por canal, persistencia en `audio_settings.json`.
+- **`playback.rs`:**
+  - *Feeders:* un hilo por pista lee el PCM, aplica el remuestreo y llena el `rtrb` respetando un horizonte de lectura.
+  - *Varispeed/pitch:* `resampler.rs::TrackResampler` envuelve `rubato::SincFixedIn` (`sinc_len` 64, interpolación lineal); `set_pitch` usa `set_resample_ratio_relative` sin recrear el remuestreador.
+  - *Saltos y Vamp:* `audio_queue_jump` / `audio_cancel_jump` / `audio_toggle_vamp`; empalme con crossfade `FADE_MS = 8` ms (`crossfade_frames` según frecuencia del dispositivo). Limitación conocida: ver §10.
+  - *Ruteo:* cada pista tiene un `TrackBus` (`Main`, `CueClick`, `Both`).
+    - **Estéreo** (por defecto): mezcla Main+Both con `masterGain` y Cue+Both+click+guía con `cueMasterGain`, ambas sobre L/R.
+    - **Split-Mono:** **canal 0 (izquierdo, «in-ear») = bus Cue/Click + Both + click + guía**; **canal 1 (derecho, «principal») = bus Main + Both**; ambos sumados a mono y con el paneo de pista centrado.
+  - *Click:* `metronome.rs` genera pulsos de 45 ms con ataque de 2 ms y decaimiento exponencial, con barrido de frecuencia en los primeros 35 ms: tiempo fuerte 1680→820 Hz (onda triangular), negras 1120→540 Hz, subdivisiones 840→540 Hz (senoidales); alineado a la muestra y reubicable al hacer seek.
+  - *Guía (`GuideCueEngine`):* sintetiza avisos de sección sin muestras externas.
+  - *Dispositivo:* el *error callback* de CPAL marca `device_disconnected`; la posición se conserva y `audio_reopen_stream` reabre el stream sin reiniciar la app (test `test_device_disconnect_and_reopen_preserves_position`).
+- **`cache.rs`:** ver §5. Constantes `CACHE_FORMAT_VERSION=1`, `WAVEFORM_PEAKS_COUNT=320`, `MONO_SIDE_THRESHOLD_DB=-40`.
+- **`import.rs` + `audio/mod.rs`:** decodifica con Symphonia (`features = ["all"]`) y remuestrea a la frecuencia del dispositivo. `audio_import_tracks` procesa pistas con un semáforo de `clamp(núcleos/2, 2, 4)` tareas bloqueantes (`tokio::task::spawn_blocking`), con progreso emitido como eventos de Tauri (`app.emit`) y cancelación (`audio_cancel_import`). No usa `rayon`.
+
+### 6.3. Regla de tiempo real y estado actual
+Objetivo: el callback no reserva memoria, no hace E/S ni *logging* y no se bloquea. **Realidad:** hoy reserva `Vec`s por bloque y usa `std::sync::Mutex::lock()` sobre consumers, metrónomo, guía, secciones y fade (ver [`instrucciones.md`](instrucciones.md) §4 y §6). No existe llamada explícita a MMCSS/prioridad de hilo; solo se habilita la feature `realtime` de `cpal`. Cualquier cambio en esa zona debe acercarse al objetivo, no alejarse, y validarse con los tests de `playback.rs` y una prueba de carga.
+
+### 6.4. Dependencias Rust principales
+`tauri 2` (+`tauri-plugin-dialog`, `tauri-plugin-updater`), `cpal 0.18` (feature `realtime`), `symphonia 0.5` (`all`), `rubato 0.16`, `rtrb 0.3`, `axum 0.8` (`ws`), `tokio`, `tokio-util`, `serde`/`serde_json`, `base64`, `qrcode`, `if-addrs`, `subtle` (comparación de tokens en tiempo constante), `getrandom`, `tracing`. Dev: `tokio-tungstenite`, `futures-util`.
+
+---
+
+## 7. Servidor LAN y protocolo remoto (`lan.rs`, `protocol.rs`, `desktop/web/`)
+
+### 7.1. Arranque
+Lo inicia el usuario desde **Conexión remota** (`RemoteConnectionBridge`). `remote_start(address)` exige una IPv4 **privada** de este equipo y escucha en `address:8765`. `remote_stop(epoch)` lo apaga. Cada arranque genera un `epoch`, un token por rol y los QR; apagar/encender los regenera y termina todas las sesiones.
+
+### 7.2. Rutas HTTP/WS
+| Ruta | Función |
+|---|---|
+| `GET /monitor`, `GET /mezclador` | Página del rol (`remote.html`). |
+| `GET /remote.js`, `GET /remote.css` | Recursos estáticos. |
+| `GET /session/{role}` | ¿Hay sesión válida (cookie)? |
+| `POST /session/{role}` | Empareja con `{token}` → crea sesión y cookie. |
+| `GET /ws/{role}` | WebSocket de estado/comandos. |
+
+Roles: `monitor` (solo lectura: canción, sección, cuenta atrás, reloj, setlist) y `mezclador` (además recibe pistas, `revision`, niveles y puede enviar comandos).
+
+### 7.3. Emparejamiento y seguridad
+1. El QR codifica `http://<IP>:8765/<rol>#<token>`; el token va en el **fragmento** (no viaja en la petición HTTP).
+2. La página hace `POST /session/{rol}` con el token; el servidor lo compara en tiempo constante (`subtle`) y comprueba el `Origin`.
+3. Responde con cookie `lt_monitor` / `lt_mixer` (`HttpOnly; SameSite=Strict; Path=/`, valor de 43 caracteres aleatorios).
+4. El WebSocket valida cookie y `Origin`; mensajes y *frames* limitados a **1024 bytes**, cuerpo HTTP limitado a 1 KB.
+5. **Máximo 16 sesiones**; si se llena, una sesión nueva reutiliza el cupo de la desconectada más antigua. **Expulsar** revoca la sesión (cierre `4403`) y descarta su cola de comandos.
+6. Solo el rol `mezclador` puede enviar comandos, y solo estos (`deny_unknown_fields`): `setTrackGain`, `setTrackMute`, `setTrackPan`, `setTrackSolo`, cada uno con `revision` y `trackIndex`. Ganancia válida: `0 … 3.1623` (−40 a +10 dB); paneo `−1 … +1`. **No hay comandos de transporte** (play/pausa/stop/saltos) ni de biblioteca.
+
+### 7.4. Integración con el frontend
+La UI de escritorio sondea `remote_exchange(epoch, snapshot, receipts)`: envía el estado actual (`Snapshot`: canción actual/siguiente, setlist, sección, salto en cola, vamp, reloj, pistas, niveles) y los acuses de comandos aplicados, y recibe los comandos pendientes y la lista de dispositivos. El frontend los aplica al motor y confirma con un `Outcome` (`applied`, `stale`, `superseded`, `unconfirmed`). Un comando solo se acepta si el servidor está `acceptingCommands` y su `revision` coincide con la del último estado publicado (`MixCommand::target`); si no, se descarta.
+
+Guía operativa (firewall, aislamiento Wi-Fi, expulsión, pruebas): [`desktop/README.md`](desktop/README.md).
+
+---
+
+## 8. Procedimientos de mantenimiento
+
+### 8.1. Añadir un comando IPC a Tauri (4 pasos obligatorios)
+1. Implementar `#[tauri::command] pub async fn mi_comando(...)` en `audio/mod.rs`, `library/mod.rs`, `updates.rs` o `main.rs`.
+2. Registrarlo en `tauri::generate_handler![...]` en [`desktop/src-tauri/src/main.rs`](desktop/src-tauri/src/main.rs).
+3. Añadirlo a la lista `.commands(&[...])` de [`desktop/src-tauri/build.rs`](desktop/src-tauri/build.rs) (genera el permiso `allow-mi-comando` en `permissions/autogenerated/`, carpeta ignorada por Git).
+4. Añadir `"allow-mi-comando"` a `permissions` en [`desktop/src-tauri/capabilities/desktop-remote.json`](desktop/src-tauri/capabilities/desktop-remote.json).
+
+Invocación desde el frontend:
+```ts
+const invoke = (window as any).__TAURI__?.core?.invoke;
+if (invoke) {
+  const result = await invoke('mi_comando', { parametroCamelCase: valor });
+}
+```
+(Tauri convierte los parámetros `snake_case` de Rust a `camelCase` en JS.)
+
+### 8.2. Inventario de comandos IPC (todos registrados en `main.rs`, `build.rs` y la capacidad)
+- **Servidor LAN:** `remote_status`, `remote_start`, `remote_stop`, `remote_kick`, `remote_exchange`.
+- **Actualizaciones:** `desktop_update_check`, `desktop_update_download`, `desktop_update_install`.
+- **Dispositivo/estado:** `audio_list_hosts`, `audio_list_devices`, `audio_get_config`, `audio_set_config`, `audio_get_stats`, `audio_reset_stats`, `audio_test_tone`, `audio_reopen_stream`.
+- **Importación y caché:** `audio_scan_folder`, `audio_scan_files`, `audio_import_tracks`, `audio_import_folder`, `audio_import_track_bytes`, `audio_import_track_bytes_raw`, `audio_cancel_import`, `audio_get_project_cache_status`, `audio_delete_project_cache`, `audio_get_cache_stats`, `audio_clean_orphan_caches`, `audio_check_files_exist`.
+- **Proyecto/transporte:** `audio_load_project`, `audio_preload_project`, `audio_switch_to_preloaded`, `audio_configure_song`, `audio_play`, `audio_pause`, `audio_stop`, `audio_seek`, `audio_get_playback_state`, `audio_queue_jump`, `audio_cancel_jump`, `audio_toggle_vamp`.
+- **Mezcla y ruteo:** `audio_set_track_controls`, `audio_set_master_gains`, `audio_set_pitch`, `audio_set_metronome`, `audio_set_split_mono`.
+- **Biblioteca:** `library_load`, `library_save`, `library_save_song`, `library_delete_song`, `library_update_song_folder`, `library_read_sidecar`, `library_write_sidecar`.
+- Además, `dialog:allow-open` (plugin de diálogos) para los selectores nativos.
+
+### 8.3. Reglas obligatorias para cambios de audio
+- Nada de reservas, E/S, logging ni bloqueos nuevos en el callback de CPAL (y reducir los existentes cuando sea posible).
+- Cambios de ratio/tono: reutilizar el `SincFixedIn` activo.
+- Todo salto, seek o vamp: crossfade de 8 ms.
+- El click y los saltos se miden en **muestras de canción**; mantener la alineación (±1 muestra) validada por los tests.
+
+### 8.4. Versionado y publicación
+Mantener **la misma versión** en `tauri.conf.json`, `Cargo.toml` y `desktop/package.json` (+ lockfiles). Release firmada: `desktop/build-release.ps1`, tag `desktop-v<versión>` en GitHub Releases (ver [`desktop/README.md`](desktop/README.md)). El actualizador solo se habilita si el build lleva la clave pública del canal (`updates_enabled`).
+
+### 8.5. Añadir una vista, modal o campo a la canción
+- **Vista:** ampliar `WorkspaceView` y `NAV_ITEMS` en `TopBar.tsx`, el render condicional en `App.tsx` y, si procede, el parser de hash.
+- **Campo nuevo en `SongProject`:** añadirlo en `src/types/project.ts` **y** en `LibrarySong` (o `LibraryTrack` / `LibrarySongSection`) de `library/mod.rs` con `#[serde(default)]`. El frontend envía el objeto completo (`invoke('library_save_song', { song })`, sin conversión) y serde ignora los campos desconocidos: **un campo que exista solo en TypeScript no se persiste en `library.json` ni en el sidecar** (se pierde al reiniciar). `#[serde(default)]` mantiene compatibles los archivos antiguos.
+
+---
+
+## 9. Verificación y pruebas
+
+1. `npm.cmd run lint` → `tsc --noEmit`.
+2. `npm.cmd test` → `tsx test/titleCleaning.test.ts && tsx test/trackFingerprint.test.ts`.
+3. `cargo test --locked --release --target x86_64-pc-windows-msvc --manifest-path desktop/src-tauri/Cargo.toml --no-default-features` → ≈48 tests: `playback.rs` (19: varispeed, click a la muestra, Split-Mono por bus, desconexión/reapertura, crossfade), `import.rs` (6), `cache.rs` (5), `output.rs` (4), `library/mod.rs` (4), `lan.rs` (2) y `tests/` de integración (`lan_protocol.rs` 4, `verify_manual_flow.rs` 2, `benchmark_import.rs` 2).
+4. Pruebas manuales de campo (hardware real, 20 pistas, teléfonos, firewall): [`desktop/README.md`](desktop/README.md) §«Pruebas reproducibles».
+
+---
+
+## 10. Limitaciones y pendientes conocidos
+- **Saltos cuantizados dentro del horizonte ya encolado (~600 ms):** pueden posponerse al siguiente compás; la solución prevista (*Jump Reserve Buffers*) está en [`docs/MOTOR_NATIVO_DISENO.md`](docs/MOTOR_NATIVO_DISENO.md) §10. El §1.3 de ese documento (descarte «Caso B», `stream_epoch`, `FlushAndSeek`) también es diseño no implementado y así lo indica una nota de estado.
+- **Callback de audio con reservas y `Mutex`** (§6.3).
+- **Sin prioridad de hilo explícita** (§6.3).
+- **Restos de la plantilla AI Studio** en `package.json` (`react-example`, `@google/genai`, `express`, `dotenv`, `motion`), `.env.example`, `metadata.json` y `.aistudio/`; `npm run clean` usa `rm -rf`.
+- La rama `motor-nativo` aún no se fusiona con `main`.
+
+---
+
+*Nota de verificación (revisión de documentación):* contrastado contra el código en la rama `motor-nativo`. `npm run lint` y `npm test` se ejecutaron y pasan; las pruebas Rust y los builds de Tauri no se re-ejecutaron en esa revisión.

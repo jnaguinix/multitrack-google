@@ -48,6 +48,8 @@ El mecanismo de control de transporte se diseña con una separación estricta de
   - Los tamaños y márgenes finales (ms de ring buffer post-remuestreo y segundos de lookahead de disco) **se calibrarán empíricamente con la prueba de carga de 20 pistas estéreo simultáneas** (Sección 6), no por estimación teórica.
 
 ### 1.3 Ejecución de saltos "1-bar" / "section-end" vs. "immediate"
+
+> **Estado de implementación (verificado contra el código, `playback.rs`):** el **Caso A** (empalme con crossfade de 8 ms al llegar al límite) está implementado. El **Caso B** (descarte por `stream_epoch`), el comando `FlushAndSeek` y los *Jump Reserve Buffers* descritos más abajo son **diseño objetivo, aún NO implementados**: no existen `stream_epoch` ni `FlushAndSeek` en el código Rust. Hoy, un salto cuantizado cuyo límite cae dentro del horizonte ya encolado se pospone al siguiente compás (ver §10). El seek/salto inmediato actual se resuelve con un fade-out, una espera de ~1.5×`FADE_MS` y el reposicionamiento de los feeders (`PlaybackEngine::seek`), no con la cola SPSC `FlushAndSeek` descrita en esta sección.
 - **Salto programado cuantizado ("1-bar" o "section-end"):**
   1. La interfaz solicita el salto con anterioridad.
   2. El feeder calcula la muestra de transición exacta en tiempo de canción (`transition_song_sample = target_bar * samples_per_bar`).
