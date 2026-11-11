@@ -89,4 +89,51 @@ console.log('Test 4 (Canción diferente con 7 pistas):', res4.length);
 assert(res4.length === 0, 'No debe coincidir con canción distinta');
 console.log('✔ Test 4 PASADO');
 
+// Test 5 (a): Escaneo sin duración (MP3/FLAC/WAV extendido), misma carpeta -> 1 candidata
+const scanNoDuration = baseSong.tracks.map((t) => ({
+  name: t.name,
+  fileSize: t.fileSize,
+  durationSec: undefined, // El escaneo rápido no pudo extraer duración
+}));
+const res5 = findSongFingerprintMatches(scanNoDuration, [baseSong]);
+console.log('Test 5 (a - Escaneo sin duración, misma carpeta):', res5.length, res5[0]?.matchRatio);
+assert(res5.length === 1, 'Debe encontrar exactamente 1 candidata aunque falte la duración en el escaneo');
+assert(res5[0].matchRatio === 1.0, 'Coincidencia por tamaño debe ser 100%');
+console.log('✔ Test 5 (a) PASADO');
+
+// Test 6 (b): Dos candidatas a la vez en biblioteca -> debe preguntar (no auto-fusionar)
+const duplicateSong: SongProject = {
+  ...baseSong,
+  id: 'song-copy-2',
+  title: 'Eres Bendito (Copia)',
+};
+const res6 = findSongFingerprintMatches(renamedFiles, [baseSong, duplicateSong]);
+console.log('Test 6 (b - Dos candidatas a la vez):', res6.length);
+assert(res6.length === 2, 'Debe encontrar 2 candidatas');
+// En App.tsx, auto-fusión requiere `candidates.length === 1 && top.matchRatio === 1.0`
+const autoMergeTest6 = res6.length === 1 && res6[0].matchRatio === 1.0;
+assert(!autoMergeTest6, 'Con dos candidatas a la vez DEBE preguntar al usuario, nunca auto-fusionar');
+console.log('✔ Test 6 (b) PASADO');
+
+// Test 7 (c): 7 contra 9 pistas (diferencia > ±1) -> 0 candidatos
+const nineTracks = [
+  ...renamedFiles,
+  { name: '08_Violin.mp3', fileSize: 5000000, durationSec: 250.2 },
+  { name: '09_Cello.mp3', fileSize: 5200000, durationSec: 250.2 },
+];
+const res7 = findSongFingerprintMatches(nineTracks, [baseSong]);
+console.log('Test 7 (c - 7 contra 9 pistas):', res7.length);
+assert(res7.length === 0, '7 contra 9 pistas excede la tolerancia ±1 y debe devolver 0 candidatos');
+console.log('✔ Test 7 (c) PASADO');
+
+// Test 8 (d): 80–99% de coincidencia -> debe preguntar, NO auto-fusionar
+// 6 de 7 pistas coinciden = 85.71%
+const res8 = findSongFingerprintMatches(minusOneTrack, [baseSong]);
+console.log('Test 8 (d - 80–99% de coincidencia):', res8.length, res8[0]?.matchRatio);
+assert(res8.length === 1, 'Debe encontrar 1 candidata');
+assert(res8[0].matchRatio >= 0.80 && res8[0].matchRatio < 1.0, 'La coincidencia debe estar entre 80% y 99%');
+const autoMergeTest8 = res8.length === 1 && res8[0].matchRatio === 1.0;
+assert(!autoMergeTest8, 'Coincidencia parcial (80–99%) DEBE preguntar al usuario, nunca auto-fusionar');
+console.log('✔ Test 8 (d) PASADO');
+
 console.log('=== TODAS LAS PRUEBAS DE HUELLA DE PISTAS PASARON EXITOSAMENTE ===');

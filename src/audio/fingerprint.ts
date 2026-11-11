@@ -54,22 +54,36 @@ export function findSongFingerprintMatches(
         const sizeA = inTrack.fileSize;
         const sizeB = exTrack.fileSize;
 
+        const hasDurationA = durationA != null && durationA > 0;
+        const hasDurationB = durationB != null && durationB > 0;
+        const hasBothDurations = hasDurationA && hasDurationB;
+
+        const hasSizeA = sizeA != null && sizeA > 0;
+        const hasSizeB = sizeB != null && sizeB > 0;
+        const hasBothSizes = hasSizeA && hasSizeB;
+
         let durationMatches = false;
-        if (durationA != null && durationB != null && durationA > 0 && durationB > 0) {
+        if (hasBothDurations) {
           durationMatches = Math.abs(durationA - durationB) <= 1.0; // 1s tolerance
         }
 
         let sizeMatches = false;
-        if (sizeA != null && sizeB != null && sizeA > 0 && sizeB > 0) {
+        if (hasBothSizes) {
           const diff = Math.abs(sizeA - sizeB);
           // Allow tag diffs up to 64KB or 2%
           sizeMatches = diff === 0 || diff < 65536 || diff / Math.max(sizeA, sizeB) < 0.02;
         }
 
-        const isMatch =
-          (durationMatches && sizeMatches) ||
-          (sizeMatches && !durationA && !durationB) ||
-          (durationMatches && !sizeA && !sizeB);
+        let isMatch = false;
+        if (hasBothDurations && hasBothSizes) {
+          isMatch = durationMatches && sizeMatches;
+        } else if (hasBothSizes && !hasBothDurations) {
+          // Si falta la duración en cualquiera de los dos lados, decide solo por tamaño (misma tolerancia)
+          isMatch = sizeMatches;
+        } else if (hasBothDurations && !hasBothSizes) {
+          // Si falta el tamaño en cualquiera de los dos lados, decide solo por duración
+          isMatch = durationMatches;
+        }
 
         if (isMatch) {
           matchedCount++;

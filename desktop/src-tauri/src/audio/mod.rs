@@ -620,6 +620,36 @@ fn probe_wav_header_duration(path: &Path) -> Option<f64> {
     None
 }
 
+fn probe_audio_duration(path: &Path) -> Option<f64> {
+    if let Some(d) = probe_wav_header_duration(path) {
+        return Some(d);
+    }
+    // Fallback rápido con Symphonia para leer duración de cabecera (FLAC, MP3 con Xing, WAV complejo)
+    let file = std::fs::File::open(path).ok()?;
+    let mss = symphonia::core::io::MediaSourceStream::new(Box::new(file), Default::default());
+    let mut hint = symphonia::core::probe::Hint::new();
+    if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+        hint.with_extension(ext);
+    }
+    let probed = symphonia::default::get_probe()
+        .format(&hint, mss, &Default::default(), &Default::default())
+        .ok()?;
+    let track = probed
+        .format
+        .tracks()
+        .iter()
+        .find(|t| t.codec_params.codec != symphonia::core::codecs::CODEC_TYPE_NULL)?;
+    if let (Some(n_frames), Some(tb)) = (track.codec_params.n_frames, track.codec_params.time_base) {
+        let time = tb.calc_time(n_frames);
+        return Some(time.seconds as f64 + time.frac);
+    } else if let (Some(n_frames), Some(sr)) = (track.codec_params.n_frames, track.codec_params.sample_rate) {
+        if sr > 0 {
+            return Some(n_frames as f64 / sr as f64);
+        }
+    }
+    None
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ScannedAudioFile {
@@ -748,7 +778,7 @@ pub async fn audio_scan_folder(
                         format!("stem-{:02}", auto_idx)
                     };
 
-                    let est_duration_sec = probe_wav_header_duration(&path);
+                    let est_duration_sec = probe_audio_duration(&path);
                     let file_size = path.metadata().ok().map(|m| m.len());
 
                     files.push(ScannedAudioFile {
@@ -808,7 +838,7 @@ pub async fn audio_scan_files(
 
                     auto_idx += 1;
                     let track_id = format!("stem-{:02}", auto_idx);
-                    let est_duration_sec = probe_wav_header_duration(path);
+                    let est_duration_sec = probe_audio_duration(path);
                     let file_size = path.metadata().ok().map(|m| m.len());
 
                     files.push(ScannedAudioFile {
