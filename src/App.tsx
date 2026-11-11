@@ -1927,10 +1927,10 @@ export default function App() {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `${proj.title.toLowerCase().replace(/\s+/g, '-')}.omnitracks.json`;
+    a.download = `${proj.title.toLowerCase().replace(/\s+/g, '-')}.omnitracks.project.json`;
     a.click();
     URL.revokeObjectURL(url);
-    showToast('Archivo .omnitracks.json exportado');
+    showToast('Archivo omnitracks.project.json exportado');
   };
 
   const handleImportJsonFile = async (file: File) => {

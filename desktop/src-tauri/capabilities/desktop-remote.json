@@ -50,6 +50,13 @@
     "allow-audio-delete-project-cache",
     "allow-audio-get-cache-stats",
     "allow-audio-clean-orphan-caches",
-    "allow-audio-check-files-exist"
+    "allow-audio-check-files-exist",
+    "allow-library-load",
+    "allow-library-save",
+    "allow-library-save-song",
+    "allow-library-delete-song",
+    "allow-library-update-song-folder",
+    "allow-library-write-sidecar",
+    "allow-library-read-sidecar"
   ]
 }

@@ -47,6 +47,13 @@ fn main() {
             "audio_get_cache_stats",
             "audio_clean_orphan_caches",
             "audio_check_files_exist",
+            "library_load",
+            "library_save",
+            "library_save_song",
+            "library_delete_song",
+            "library_update_song_folder",
+            "library_write_sidecar",
+            "library_read_sidecar",
         ]);
         tauri_build::try_build(tauri_build::Attributes::new().app_manifest(manifest))
             .expect("Tauri build configuration");

@@ -258,7 +258,14 @@ fn main() {
             omnitracks_desktop::audio::audio_delete_project_cache,
             omnitracks_desktop::audio::audio_get_cache_stats,
             omnitracks_desktop::audio::audio_clean_orphan_caches,
-            omnitracks_desktop::audio::audio_check_files_exist
+            omnitracks_desktop::audio::audio_check_files_exist,
+            omnitracks_desktop::library::library_load,
+            omnitracks_desktop::library::library_save,
+            omnitracks_desktop::library::library_save_song,
+            omnitracks_desktop::library::library_delete_song,
+            omnitracks_desktop::library::library_update_song_folder,
+            omnitracks_desktop::library::library_write_sidecar,
+            omnitracks_desktop::library::library_read_sidecar
         ])
         .run(tauri::generate_context!())
         .expect("OmniTracks");

@@ -305,11 +305,11 @@ pub async fn audio_import_folder(
     let audio_extensions = ["mp3", "wav", "ogg", "flac", "m4a", "aac"];
     let mut files_to_import = Vec::new();
 
-    // Check if omnitracks.project.json exists in this folder to keep existing track IDs
-    let sidecar_path = p.join("omnitracks.project.json");
+    // Check if omnitracks.project.json (or fallback .omnitracks.json) exists in this folder to keep existing track IDs
+    let sidecar_path = crate::library::find_sidecar_path(p);
     let mut sidecar_map: std::collections::HashMap<String, String> = std::collections::HashMap::new();
-    if sidecar_path.exists() {
-        if let Ok(content) = std::fs::read_to_string(&sidecar_path) {
+    if let Some(ref sp) = sidecar_path {
+        if let Ok(content) = std::fs::read_to_string(sp) {
             if let Ok(json_val) = serde_json::from_str::<serde_json::Value>(&content) {
                 if let Some(tracks_arr) = json_val.get("tracks").and_then(|t| t.as_array()) {
                     for t in tracks_arr {
@@ -658,7 +658,7 @@ pub async fn audio_scan_folder(
         .unwrap_or("Canción")
         .to_string();
 
-    let sidecar_path = p.join("omnitracks.project.json");
+    let sidecar_path = crate::library::find_sidecar_path(p);
     let mut title = folder_name.clone();
     let mut artist = "Artista Desconocido".to_string();
     let mut bpm = None;
@@ -666,8 +666,8 @@ pub async fn audio_scan_folder(
     let mut sections = Vec::new();
     let mut sidecar_track_ids: std::collections::HashMap<String, String> = std::collections::HashMap::new();
 
-    if sidecar_path.exists() {
-        if let Ok(content) = std::fs::read_to_string(&sidecar_path) {
+    if let Some(ref sp) = sidecar_path {
+        if let Ok(content) = std::fs::read_to_string(sp) {
             if let Ok(json_val) = serde_json::from_str::<serde_json::Value>(&content) {
                 if let Some(t) = json_val.get("title").and_then(|v| v.as_str()) {
                     title = t.to_string();
