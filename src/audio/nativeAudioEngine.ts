@@ -51,7 +51,8 @@ export interface NativePlaybackSnapshot {
 
 export class NativeAudioEngine {
   private currentProject: SongProject | null = null;
-  private isLoaded: boolean = false;
+  private loadedProjectId: string | null = null;
+  private loadingPromises = new Map<string, Promise<{ peaksMap: Map<string, number[]>; wasCancelled: boolean }>>();
   private transportListeners = new Set<(transport: TransportState) => void>();
   private cacheListeners = new Set<() => void>();
   private pollInterval: number | null = null;
@@ -112,17 +113,6 @@ export class NativeAudioEngine {
 
       if (completed) {
         console.info(`[NativeAudioEngine] Importación de caché completada para proyecto '${projId}'`);
-        if (this.currentProject && this.currentProject.id === projId) {
-          try {
-            await this.loadProject(this.currentProject);
-            if (this.playPendingProjectId === projId) {
-              this.playPendingProjectId = null;
-              await this.play();
-            }
-          } catch (err) {
-            console.error('[NativeAudioEngine] Error auto-cargando proyecto al finalizar importación:', err);
-          }
-        }
       }
     }).catch((err: any) => {
       console.warn('[NativeAudioEngine] Error suscribiendo a audio://import-progress:', err);
@@ -131,6 +121,37 @@ export class NativeAudioEngine {
 
   public getImportProgress(projectId: string): { percent: number; text: string; completed: boolean } | null {
     return this.importProgressByProject.get(projectId) || null;
+  }
+
+  public isProjectImporting(projectId: string): boolean {
+    const prog = this.importProgressByProject.get(projectId);
+    return Boolean(prog && !prog.completed);
+  }
+
+  public markImportStarted(projectId: string, text = 'Iniciando decodificación...'): void {
+    this.importProgressByProject.set(projectId, {
+      percent: 0,
+      text,
+      completed: false,
+    });
+    this.notifyCache();
+  }
+
+  public markImportCompleted(projectId: string): void {
+    this.importProgressByProject.set(projectId, {
+      percent: 100,
+      text: 'Completado',
+      completed: true,
+    });
+    this.notifyCache();
+  }
+
+  public consumePlayPending(projectId: string): boolean {
+    if (this.playPendingProjectId === projectId) {
+      this.playPendingProjectId = null;
+      return true;
+    }
+    return false;
   }
 
   public isDesktop(): boolean {
@@ -158,7 +179,11 @@ export class NativeAudioEngine {
   }
 
   public hasPlayableAudio(): boolean {
-    return this.isLoaded && (this.currentProject?.tracks.length ?? 0) > 0;
+    return Boolean(
+      this.currentProject &&
+        this.loadedProjectId === this.currentProject.id &&
+        this.currentProject.tracks.length > 0
+    );
   }
 
   // ===========================================================================
@@ -293,7 +318,7 @@ export class NativeAudioEngine {
       return;
     }
 
-    if (!this.isLoaded) {
+    if (this.loadedProjectId !== projId) {
       const status = await this.checkProjectCacheStatus(this.currentProject);
       if (status.isReady) {
         await this.loadProject(this.currentProject);
@@ -495,7 +520,12 @@ export class NativeAudioEngine {
   // CARGA DE PROYECTO Y VERIFICACIÓN DE CACHÉ NATIVA
   // ===========================================================================
   public prepareProjectShell(project: SongProject): void {
+    const prevId = this.currentProject?.id;
     this.currentProject = project;
+    if (prevId && prevId !== project.id) {
+      this.loadedProjectId = null;
+      void this.stop();
+    }
   }
 
   public updateProjectConfig(project: SongProject): void {
@@ -682,61 +712,120 @@ export class NativeAudioEngine {
 
   public async loadProject(
     project: SongProject,
-    onProgress?: (percent: number, text: string) => void
+    onProgressOrBuffers?: ((percent: number, text: string) => void) | unknown
   ): Promise<{ peaksMap: Map<string, number[]>; wasCancelled: boolean }> {
     const invoke = getInvoke();
     const peaksMap = new Map<string, number[]>();
     if (!invoke) return { peaksMap, wasCancelled: false };
 
+    const onProgress =
+      typeof onProgressOrBuffers === 'function'
+        ? (onProgressOrBuffers as (percent: number, text: string) => void)
+        : undefined;
+
     this.currentProject = project;
-    onProgress?.(10, `Verificando caché nativa para "${project.title}"...`);
 
-    const cacheStatus = await this.checkProjectCacheStatus(project);
-    if (!cacheStatus.isReady && project.tracks.length > 0) {
-      onProgress?.(20, 'Generando caché PCM nativa...');
-      const success = await this.generateNativeCacheForProject(project, onProgress);
-      if (!success) {
-        this.onNoticeCallback?.(`La canción "${project.title}" no dispone de caché PCM nativa.`);
-        return { peaksMap, wasCancelled: false };
+    // Si el proyecto se está importando actualmente en segundo plano, no iniciar una segunda importación:
+    if (this.isProjectImporting(project.id)) {
+      console.info(`[NativeAudioEngine] loadProject pospuesto: '${project.id}' se está decodificando actualmente.`);
+      return { peaksMap, wasCancelled: false };
+    }
+
+    const existingPromise = this.loadingPromises.get(project.id);
+    if (existingPromise) {
+      return existingPromise;
+    }
+
+    const loadTask = (async () => {
+      onProgress?.(10, `Verificando caché nativa para "${project.title}"...`);
+
+      const cacheStatus = await this.checkProjectCacheStatus(project);
+      if (!cacheStatus.isReady && project.tracks.length > 0) {
+        if (this.isProjectImporting(project.id)) {
+          return { peaksMap, wasCancelled: false };
+        }
+        onProgress?.(20, 'Generando caché PCM nativa...');
+        const success = await this.generateNativeCacheForProject(project, onProgress);
+        if (!success) {
+          this.loadedProjectId = null;
+          this.onNoticeCallback?.(`La canción "${project.title}" no dispone de caché PCM nativa.`);
+          return { peaksMap, wasCancelled: false };
+        }
       }
-    }
 
-    onProgress?.(70, 'Cargando pistas en motor nativo...');
-    const nativeSections = (project.sections || []).map((s) => ({
-      id: s.id,
-      name: s.name,
-      code: (s as any).code || null,
-      startSec: s.startTimeSec,
-      endSec: s.endTimeSec,
-    }));
+      onProgress?.(70, 'Cargando pistas en motor nativo...');
+      const nativeSections = (project.sections || []).map((s) => ({
+        id: s.id,
+        name: s.name,
+        code: (s as any).code || null,
+        startSec: s.startTimeSec,
+        endSec: s.endTimeSec,
+      }));
 
+      try {
+        const loadRes: any = await invoke('audio_load_project', {
+          projectId: project.id,
+          bpm: project.bpm || 120,
+          beatsPerBar: project.beatsPerBar || 4,
+          sections: nativeSections,
+          quantizeMode: project.quantizeMode || '1-bar',
+        });
+
+        this.loadedProjectId = project.id;
+        this.lastDurationSec = loadRes?.durationSec || project.durationSec || 0;
+
+        const sr = loadRes?.sampleRate || 48000;
+        const totFrames = loadRes?.totalFrames || Math.round(this.lastDurationSec * sr);
+        const trackPeaksObj = loadRes?.trackPeaks || {};
+        for (const trk of project.tracks) {
+          const pks = trackPeaksObj[trk.id];
+          if (Array.isArray(pks) && pks.length > 0) {
+            peaksMap.set(trk.id, pks);
+            trk.peaks = pks;
+          } else if (trk.peaks && trk.peaks.length > 0) {
+            peaksMap.set(trk.id, trk.peaks);
+          }
+          if (!trk.pcm && totFrames > 0) {
+            trk.pcm = {
+              sampleRate: sr,
+              channels: 2,
+              frames: totFrames,
+              version: 1,
+            };
+          }
+        }
+
+        this.updateProjectConfig(project);
+        this.notifyCache();
+
+        onProgress?.(100, `Cargadas ${loadRes?.trackCount || project.tracks.length} pistas.`);
+
+        if (this.consumePlayPending(project.id)) {
+          await this.play();
+        }
+      } catch (err: any) {
+        this.loadedProjectId = null;
+        console.error('[NativeAudioEngine] Error al cargar proyecto en Rust:', err);
+        this.onNoticeCallback?.(`Error al cargar pistas en motor nativo: ${err}`);
+        throw err;
+      }
+
+      return { peaksMap, wasCancelled: false };
+    })();
+
+    this.loadingPromises.set(project.id, loadTask);
     try {
-      const loadRes: any = await invoke('audio_load_project', {
-        projectId: project.id,
-        bpm: project.bpm || 120,
-        beatsPerBar: project.beatsPerBar || 4,
-        sections: nativeSections,
-        quantizeMode: project.quantizeMode || '1-bar',
-      });
-
-      this.isLoaded = true;
-      this.lastDurationSec = loadRes?.durationSec || project.durationSec || 0;
-      this.updateProjectConfig(project);
-
-      onProgress?.(100, `Cargadas ${loadRes?.trackCount || project.tracks.length} pistas.`);
-    } catch (err: any) {
-      console.error('[NativeAudioEngine] Error al cargar proyecto en Rust:', err);
-      this.onNoticeCallback?.(`Error al cargar pistas en motor nativo: ${err}`);
-      throw err;
+      return await loadTask;
+    } finally {
+      this.loadingPromises.delete(project.id);
     }
-
-    return { peaksMap, wasCancelled: false };
   }
 
   public async preloadProject(project: SongProject): Promise<void> {
     const invoke = getInvoke();
     if (!invoke) return;
     try {
+      if (this.isProjectImporting(project.id)) return;
       const cacheStatus = await this.checkProjectCacheStatus(project);
       if (!cacheStatus.isReady) {
         console.info(`[NativeAudioEngine] Preload omitido para '${project.id}' (caché aún no lista)`);
@@ -754,7 +843,9 @@ export class NativeAudioEngine {
     try {
       await invoke('audio_switch_to_preloaded');
       this.currentProject = project;
+      this.loadedProjectId = project.id;
       this.updateProjectConfig(project);
+      this.notifyCache();
     } catch {
       await this.loadProject(project);
     }
@@ -792,9 +883,26 @@ export class NativeAudioEngine {
     return song.tracks.every((t) => Boolean(t.pcm && t.pcm.frames > 0));
   }
 
-  public getSongRamCacheInfo(song: SongProject): { isReady: boolean; isCached: boolean; isPreloading: boolean } {
+  public getSongRamCacheInfo(song: SongProject): {
+    isReady: boolean;
+    isCached: boolean;
+    isPreloading: boolean;
+    cachedCount: number;
+    totalCount: number;
+    cachedBytes: number;
+    skippedByRamBudget: boolean;
+  } {
     const ready = this.isProjectPcmReady(song);
-    return { isReady: ready, isCached: ready, isPreloading: false };
+    const totalCount = song.tracks?.length || 0;
+    return {
+      isReady: ready,
+      isCached: ready,
+      isPreloading: this.isProjectImporting(song.id),
+      cachedCount: ready ? totalCount : 0,
+      totalCount,
+      cachedBytes: 0,
+      skippedByRamBudget: false,
+    };
   }
 
   public getEffectiveEngineModeForProject(_song: SongProject): string {

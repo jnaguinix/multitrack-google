@@ -472,7 +472,7 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
                           if (isCurrent) {
                             onPlayPause();
                           } else {
-                            onLoadAndPlaySong(song.id, cacheInfo.isReady);
+                            onLoadAndPlaySong(song.id, cacheInfo.isReady || isDesktopApp());
                           }
                         }}
                         title={

@@ -228,8 +228,14 @@ export default function App() {
 
   useEffect(() => {
     if (isDesktopApp && currentProject && currentProject.tracks.length > 0) {
+      if (nativeAudioEngine.isProjectImporting(currentProject.id)) {
+        setMissingNativeCache(false);
+        return;
+      }
       nativeAudioEngine.checkProjectCacheStatus(currentProject).then((st) => {
-        setMissingNativeCache(!st.isReady);
+        if (!nativeAudioEngine.isProjectImporting(currentProject.id)) {
+          setMissingNativeCache(!st.isReady);
+        }
       });
     } else {
       setMissingNativeCache(false);
@@ -308,20 +314,50 @@ export default function App() {
 
   // The manual "Optimizar" button and the automatic background cache are ONE job:
   // pressing the button while the song is already being prepared just shows its progress.
-  const handleStartOptimizeProject = useCallback((projectToOptimize: SongProject) => {
-    modalProjectIdRef.current = projectToOptimize.id;
-    setOptimizingProject(projectToOptimize);
-    setOptimizationProgress({
-      currentTrackIndex: 0,
-      totalTracks: projectToOptimize.tracks.length,
-      trackName: queuedOptimizeIdsRef.current.has(projectToOptimize.id)
-        ? 'Ya se está preparando en segundo plano…'
-        : 'En cola…',
-      percent: 0,
-      phase: 'checking',
-    });
-    runAutoOptimizeRef.current(projectToOptimize.id);
-  }, []);
+  const handleStartOptimizeProject = useCallback(
+    (projectToOptimize: SongProject) => {
+      if (isDesktopApp) {
+        setIsGeneratingNativeCache(true);
+        setNativeCacheProgress({ percent: 5, text: 'Iniciando verificación...' });
+        nativeAudioEngine
+          .generateNativeCacheForProject(projectToOptimize, (percent, text) => {
+            setNativeCacheProgress({ percent, text });
+          })
+          .then(async (ok) => {
+            if (ok) {
+              if (currentProjectRef.current?.id === projectToOptimize.id) {
+                setMissingNativeCache(false);
+                await nativeAudioEngine.loadProject(projectToOptimize);
+              }
+              showToast(`Caché nativa lista para "${projectToOptimize.title}".`);
+            } else {
+              showToast(`No se pudo generar la caché nativa para "${projectToOptimize.title}".`);
+            }
+          })
+          .catch((err: any) => {
+            showToast(`Error al generar caché nativa: ${err?.message || err}`);
+          })
+          .finally(() => {
+            setIsGeneratingNativeCache(false);
+          });
+        return;
+      }
+
+      modalProjectIdRef.current = projectToOptimize.id;
+      setOptimizingProject(projectToOptimize);
+      setOptimizationProgress({
+        currentTrackIndex: 0,
+        totalTracks: projectToOptimize.tracks.length,
+        trackName: queuedOptimizeIdsRef.current.has(projectToOptimize.id)
+          ? 'Ya se está preparando en segundo plano…'
+          : 'En cola…',
+        percent: 0,
+        phase: 'checking',
+      });
+      runAutoOptimizeRef.current(projectToOptimize.id);
+    },
+    [isDesktopApp, showToast]
+  );
 
   const handleCancelOptimization = useCallback(() => {
     const id = modalProjectIdRef.current;
@@ -639,7 +675,7 @@ export default function App() {
 
         // Never start spontaneous playback after a slow disk load;
         // only play if explicitly requested AND the song was already 100% ready in RAM / staged streaming
-        if (explicitPlayIfAlreadyInRam && cameFromCache && audioEngine.hasPlayableAudio()) {
+        if (explicitPlayIfAlreadyInRam && (cameFromCache || isDesktopApp) && audioEngine.hasPlayableAudio()) {
           audioEngine.play();
         }
       } catch (err) {
@@ -1453,7 +1489,9 @@ export default function App() {
             updatedAt: Date.now(),
           };
 
+          nativeAudioEngine.markImportStarted(targetProjectId, `Decodificando ${scanned.files.length} pistas...`);
           audioEngine.prepareProjectShell(newSongProject);
+          setMissingNativeCache(false);
           setCurrentProject(newSongProject);
           setProjects((prev) => [newSongProject, ...prev]);
           saveProjectToDb(newSongProject).catch(() => {});
@@ -1471,6 +1509,8 @@ export default function App() {
             updatedAt: Date.now(),
           };
 
+          nativeAudioEngine.markImportStarted(targetProjectId, `Decodificando ${scanned.files.length} pistas...`);
+          setMissingNativeCache(false);
           audioEngine.updateProjectConfig(newSongProject);
           setCurrentProject(newSongProject);
           setProjects((prev) =>
@@ -1498,6 +1538,7 @@ export default function App() {
           targetSampleRate: null,
         })
           .then((importResult: any) => {
+            nativeAudioEngine.markImportCompleted(targetProjectId);
             setImportStatusText(null);
             if (importResult?.tracks) {
               let updatedDuration = newSongProject.durationSec || 0;
@@ -1529,28 +1570,34 @@ export default function App() {
                 updatedAt: Date.now(),
               };
 
-              setCurrentProject((prev) => (prev?.id === targetProjectId ? completedProject : prev));
               setProjects((prev) =>
                 prev.map((p) => (p.id === targetProjectId ? completedProject : p))
               );
               saveProjectToDb(completedProject).catch(() => {});
-              audioEngine.updateProjectConfig(completedProject);
 
-              // Actualizar estado de caché y cargar en el motor nativo de forma automática
-              nativeAudioEngine.checkProjectCacheStatus(completedProject).then((st) => {
-                setMissingNativeCache(!st.isReady);
-              }).catch(() => {});
+              const isStillCurrent =
+                !currentProjectRef.current || currentProjectRef.current.id === targetProjectId;
+              if (isStillCurrent) {
+                setCurrentProject(completedProject);
+                setMissingNativeCache(false);
 
-              nativeAudioEngine.loadProject(completedProject).then(() => {
-                showToast(`"${completedProject.title}": lista para reproducir.`);
-                console.info(`[NativeImport] "${completedProject.title}" cargada en motor nativo.`);
-              }).catch((loadErr) => {
-                console.error('[NativeImport] Error cargando proyecto en motor nativo:', loadErr);
-                showToast(`Pistas decodificadas, pero ocurrió un error al cargar: ${loadErr}`);
-              });
+                nativeAudioEngine
+                  .loadProject(completedProject)
+                  .then(() => {
+                    showToast(`"${completedProject.title}": lista para reproducir.`);
+                    console.info(`[NativeImport] "${completedProject.title}" cargada en motor nativo.`);
+                  })
+                  .catch((loadErr) => {
+                    console.error('[NativeImport] Error cargando proyecto en motor nativo:', loadErr);
+                    showToast(`Pistas decodificadas, pero ocurrió un error al cargar: ${loadErr}`);
+                  });
+              } else {
+                showToast(`"${completedProject.title}": decodificación completada en biblioteca.`);
+              }
             }
           })
           .catch((importErr: any) => {
+            nativeAudioEngine.markImportCompleted(targetProjectId);
             console.error('[NativeImport] Error en decodificación de pistas:', importErr);
             setImportStatusText(null);
             showToast(`Error al decodificar pistas: ${importErr}`);
@@ -1731,17 +1778,21 @@ export default function App() {
 
   // Load Song Immediately into DAW (Used when confirmed in modal, clicked Play on Setlist card, or dragged onto DAW)
   const handleLoadProjectImmediately = async (projectId: string, autoPlay = false) => {
-    const found = projects.find((p) => p.id === projectId);
+    const found =
+      projectsRef.current.find((p) => p.id === projectId) ||
+      projects.find((p) => p.id === projectId);
     if (!found) return;
-    if (isOpfsSupported() && queuedOptimizeIdsRef.current.has(projectId)) {
-      showToast(`"${found.title}" se está preparando en segundo plano; espera a que termine.`);
-      return;
-    }
-    // Songs already cached in OPFS don't need the original files; others do
-    const isOpfsReady = await isProjectPcmComplete(found);
-    if (!isOpfsReady) {
-      await ensureSourceAccess(projectId);
-      runAutoOptimize(projectId);
+    if (!isDesktopApp) {
+      if (isOpfsSupported() && queuedOptimizeIdsRef.current.has(projectId)) {
+        showToast(`"${found.title}" se está preparando en segundo plano; espera a que termine.`);
+        return;
+      }
+      // Songs already cached in OPFS don't need the original files; others do
+      const isOpfsReady = await isProjectPcmComplete(found);
+      if (!isOpfsReady) {
+        await ensureSourceAccess(projectId);
+        runAutoOptimize(projectId);
+      }
     }
     await activateProject(found, undefined, autoPlay);
     if (activeView === 'library') {
@@ -1753,13 +1804,15 @@ export default function App() {
   // Setlist Management Handlers
   const handleAddToSetlist = (projectId: string) => {
     // Adding to the setlist = copy the audio into the OPFS cache once (in the background)
-    const p = projectsRef.current.find((x) => x.id === projectId);
-    if (p) {
-      isProjectPcmComplete(p).then((complete) => {
-        if (!complete) {
-          ensureSourceAccess(projectId).then(() => runAutoOptimize(projectId));
-        }
-      });
+    if (!isDesktopApp) {
+      const p = projectsRef.current.find((x) => x.id === projectId);
+      if (p) {
+        isProjectPcmComplete(p).then((complete) => {
+          if (!complete) {
+            ensureSourceAccess(projectId).then(() => runAutoOptimize(projectId));
+          }
+        });
+      }
     }
     setProjects((prev) => {
       const maxOrder = prev.reduce(

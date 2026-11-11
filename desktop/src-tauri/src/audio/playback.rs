@@ -245,6 +245,15 @@ pub struct ActiveTrack {
     pub pitch_semitones: Arc<AtomicI32>,
 }
 
+pub struct StreamTrackHandle {
+    pub consumer: Arc<std::sync::Mutex<rtrb::Consumer<f32>>>,
+    pub gain: Arc<AtomicU32>,
+    pub pan: Arc<AtomicI32>,
+    pub muted: Arc<AtomicBool>,
+    pub soloed: Arc<AtomicBool>,
+    pub bus: Arc<AtomicU8>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SwitchSongResult {
@@ -265,6 +274,7 @@ pub struct PlaybackEngine {
     pub total_frames: Arc<AtomicU64>,
     pub sample_rate: Arc<AtomicU32>,
     pub tracks: TokioMutex<Vec<ActiveTrack>>,
+    pub stream_tracks: Arc<std::sync::Mutex<Vec<StreamTrackHandle>>>,
     pub fade: Arc<std::sync::Mutex<FadeEnvelope>>,
     pub stream: TokioMutex<Option<cpal::Stream>>,
     pub stats: Arc<AudioStreamStats>,
@@ -426,6 +436,7 @@ impl PlaybackEngine {
             total_frames: Arc::new(AtomicU64::new(0)),
             sample_rate: Arc::new(AtomicU32::new(48000)),
             tracks: TokioMutex::new(Vec::new()),
+            stream_tracks: Arc::new(std::sync::Mutex::new(Vec::new())),
             fade: Arc::new(std::sync::Mutex::new(FadeEnvelope::new(FADE_MS, 48000))),
             stream: TokioMutex::new(None),
             stats,
@@ -855,11 +866,34 @@ impl PlaybackEngine {
         self.sample_rate.store(device_sample_rate, Ordering::SeqCst);
         self.current_frame.store(0, Ordering::SeqCst);
         self.total_frames.store(max_frames, Ordering::SeqCst);
+        self.is_vamping.store(false, Ordering::SeqCst);
         *self.fade.lock().unwrap() = FadeEnvelope::new(FADE_MS, device_sample_rate);
         *self.queued_jump.lock().unwrap() = None;
+        {
+            let mut gc = self.guide_cue.lock().unwrap();
+            gc.last_announced_section_id = None;
+            gc.active_chime_sample = None;
+        }
 
         let duration_sec = max_frames as f64 / device_sample_rate as f64;
         let track_count = active_tracks.len();
+
+        let mut track_peaks = std::collections::HashMap::new();
+        for meta in &track_metas {
+            track_peaks.insert(meta.track_id.clone(), meta.peaks.clone());
+        }
+
+        let new_stream_tracks: Vec<StreamTrackHandle> = active_tracks
+            .iter()
+            .map(|t| StreamTrackHandle {
+                consumer: Arc::clone(&t.consumer),
+                gain: Arc::clone(&t.gain),
+                pan: Arc::clone(&t.pan),
+                muted: Arc::clone(&t.muted),
+                soloed: Arc::clone(&t.soloed),
+                bus: Arc::clone(&t.bus),
+            })
+            .collect();
 
         let mut tracks_guard = self.tracks.lock().await;
         // Stop any old tracks
@@ -867,9 +901,18 @@ impl PlaybackEngine {
             old.stop_signal.store(true, Ordering::Relaxed);
         }
         *tracks_guard = active_tracks;
+        *self.stream_tracks.lock().unwrap() = new_stream_tracks;
 
         let mut loaded = self.loaded_project_id.lock().await;
         *loaded = Some(project_id.to_string());
+
+        tracing::info!(
+            "[NativeEngine] Loaded project '{}' ({} tracks, {:.2}s, {} Hz)",
+            project_id,
+            track_count,
+            duration_sec,
+            device_sample_rate
+        );
 
         Ok(ProjectLoadInfo {
             project_id: project_id.to_string(),
@@ -877,6 +920,7 @@ impl PlaybackEngine {
             track_count,
             duration_sec,
             total_frames: max_frames,
+            track_peaks,
         })
     }
 
@@ -1132,10 +1176,15 @@ impl PlaybackEngine {
         let mut loaded = self.loaded_project_id.lock().await;
         if loaded.as_deref() == Some(project_id) {
             self.is_playing.store(false, Ordering::SeqCst);
+            self.is_buffering.store(false, Ordering::SeqCst);
             self.current_frame.store(0, Ordering::SeqCst);
             self.total_frames.store(0, Ordering::SeqCst);
             let mut tracks = self.tracks.lock().await;
+            for old in tracks.iter() {
+                old.stop_signal.store(true, Ordering::Relaxed);
+            }
             tracks.clear();
+            self.stream_tracks.lock().unwrap().clear();
             *loaded = None;
             tracing::info!("[NativeEngine] Unloaded project '{}'", project_id);
         }
@@ -1157,13 +1206,20 @@ impl PlaybackEngine {
     }
 
     pub async fn play(&self, state: &AudioEngineState) -> Result<(), String> {
-        let loaded = self.loaded_project_id.lock().await;
-        if loaded.is_none() {
-            return Err("No hay proyecto cargado en el motor nativo".to_string());
+        {
+            let loaded = self.loaded_project_id.lock().await;
+            if loaded.is_none() {
+                return Err("No hay proyecto cargado en el motor nativo".to_string());
+            }
         }
 
         if self.is_playing.load(Ordering::SeqCst) {
             return Ok(());
+        }
+
+        let tot = self.total_frames.load(Ordering::SeqCst);
+        if tot > 0 && self.current_frame.load(Ordering::SeqCst) >= tot {
+            self.seek(0.0).await;
         }
 
         // Start 8 ms fade-in
@@ -1360,20 +1416,7 @@ impl PlaybackEngine {
 
         let channels = default_config.channels() as usize;
 
-        let tracks_arc = {
-            let trks = self.tracks.lock().await;
-            trks.iter()
-                .map(|t| (
-                    Arc::clone(&t.consumer),
-                    Arc::clone(&t.gain),
-                    Arc::clone(&t.pan),
-                    Arc::clone(&t.muted),
-                    Arc::clone(&t.soloed),
-                    Arc::clone(&t.bus),
-                ))
-                .collect::<Vec<_>>()
-        };
-
+        let stream_tracks_arc = Arc::clone(&self.stream_tracks);
         let is_playing = Arc::clone(&self.is_playing);
         let is_buffering_arc = Arc::clone(&self.is_buffering);
         let buffering_start_arc = Arc::clone(&self.buffering_start_time);
@@ -1414,11 +1457,53 @@ impl PlaybackEngine {
                         return;
                     }
 
+                    let tracks_guard = match stream_tracks_arc.try_lock() {
+                        Ok(g) => g,
+                        Err(_) => {
+                            data.fill(0.0);
+                            return;
+                        }
+                    };
+
+                    if tracks_guard.is_empty() {
+                        data.fill(0.0);
+                        return;
+                    }
+
                     let frames = data.len() / channels;
                     let mut fade = fade_arc.lock().unwrap();
 
+                    // Check buffering state BEFORE popping any frames from track consumers
+                    if is_buffering_arc.load(Ordering::Relaxed) {
+                        let mut min_avail_frames = u64::MAX;
+                        for trk in tracks_guard.iter() {
+                            if let Ok(c) = trk.consumer.lock() {
+                                let avail = (c.slots() / 2) as u64;
+                                if avail < min_avail_frames {
+                                    min_avail_frames = avail;
+                                }
+                            }
+                        }
+                        let sr = (sample_rate_u32.max(1)) as u64;
+                        let track_level_ms = if min_avail_frames == u64::MAX { 0 } else { (min_avail_frames * 1000) / sr };
+                        if track_level_ms < 150 {
+                            data.fill(0.0);
+                            return;
+                        } else {
+                            is_buffering_arc.store(false, Ordering::SeqCst);
+                            let dur_ms = if let Some(t_start) = buffering_start_arc.lock().unwrap().take() {
+                                t_start.elapsed().as_millis() as u64
+                            } else {
+                                0
+                            };
+                            prefill_dur_arc.store(dur_ms, Ordering::Relaxed);
+                            stats.min_ring_buffer_level_ms.store(u64::MAX, Ordering::Relaxed);
+                            fade.start_fade_in();
+                        }
+                    }
+
                     // Check if any track has solo
-                    let any_solo = tracks_arc.iter().any(|(_, _, _, _, s, _)| s.load(Ordering::Relaxed));
+                    let any_solo = tracks_guard.iter().any(|t| t.soloed.load(Ordering::Relaxed));
 
                     let mut main_l = vec![0.0f32; frames];
                     let mut main_r = vec![0.0f32; frames];
@@ -1428,13 +1513,13 @@ impl PlaybackEngine {
                     let mut both_r = vec![0.0f32; frames];
                     let mut callback_min_track_frames = u64::MAX;
 
-                    for (consumer_arc, gain_bits, pan_val, muted, soloed, bus_arc) in &tracks_arc {
-                        let is_muted = muted.load(Ordering::Relaxed);
-                        let is_solo = soloed.load(Ordering::Relaxed);
-                        let track_bus = TrackBus::from_u8(bus_arc.load(Ordering::Relaxed));
+                    for trk in tracks_guard.iter() {
+                        let is_muted = trk.muted.load(Ordering::Relaxed);
+                        let is_solo = trk.soloed.load(Ordering::Relaxed);
+                        let track_bus = TrackBus::from_u8(trk.bus.load(Ordering::Relaxed));
 
                         if is_muted || (any_solo && !is_solo) {
-                            if let Ok(mut c) = consumer_arc.lock() {
+                            if let Ok(mut c) = trk.consumer.lock() {
                                 let unread_frames = (c.slots() / 2) as u64;
                                 if unread_frames < callback_min_track_frames {
                                     callback_min_track_frames = unread_frames;
@@ -1446,13 +1531,13 @@ impl PlaybackEngine {
                             continue;
                         }
 
-                        let g = f32::from_bits(gain_bits.load(Ordering::Relaxed));
-                        let p = pan_val.load(Ordering::Relaxed) as f32 / 100.0;
+                        let g = f32::from_bits(trk.gain.load(Ordering::Relaxed));
+                        let p = trk.pan.load(Ordering::Relaxed) as f32 / 100.0;
                         let angle = (p + 1.0) * (std::f32::consts::PI / 4.0);
                         let pan_l = angle.cos() * g;
                         let pan_r = angle.sin() * g;
 
-                        if let Ok(mut c) = consumer_arc.lock() {
+                        if let Ok(mut c) = trk.consumer.lock() {
                             let unread_frames = (c.slots() / 2) as u64;
                             if unread_frames < callback_min_track_frames {
                                 callback_min_track_frames = unread_frames;
@@ -1494,26 +1579,6 @@ impl PlaybackEngine {
                             if had_underrun && !is_buffering_arc.load(Ordering::Relaxed) {
                                 stats.underruns.fetch_add(1, Ordering::Relaxed);
                             }
-                        }
-                    }
-
-                    // Check buffering state:
-                    if is_buffering_arc.load(Ordering::Relaxed) {
-                        let sr = (sample_rate_u32.max(1)) as u64;
-                        let track_level_ms = if callback_min_track_frames == u64::MAX { 0 } else { (callback_min_track_frames * 1000) / sr };
-                        if track_level_ms < 150 {
-                            data.fill(0.0);
-                            return;
-                        } else {
-                            is_buffering_arc.store(false, Ordering::SeqCst);
-                            let dur_ms = if let Some(t_start) = buffering_start_arc.lock().unwrap().take() {
-                                t_start.elapsed().as_millis() as u64
-                            } else {
-                                0
-                            };
-                            prefill_dur_arc.store(dur_ms, Ordering::Relaxed);
-                            stats.min_ring_buffer_level_ms.store(u64::MAX, Ordering::Relaxed);
-                            fade.start_fade_in();
                         }
                     }
 
@@ -1611,6 +1676,135 @@ impl PlaybackEngine {
 
         Ok(())
     }
+
+    /// Simulates one real-time CPAL audio callback block using the shared `stream_tracks`
+    /// and atomic engine state (used for deterministic multi-song integration testing).
+    pub fn simulate_callback_block(&self, data: &mut [f32], channels: usize) {
+        let sample_rate_u32 = self.sample_rate.load(Ordering::Relaxed).max(1);
+        self.stats.callbacks.fetch_add(1, Ordering::Relaxed);
+
+        if !self.is_playing.load(Ordering::Relaxed) {
+            data.fill(0.0);
+            return;
+        }
+
+        let tracks_guard = match self.stream_tracks.try_lock() {
+            Ok(g) => g,
+            Err(_) => {
+                data.fill(0.0);
+                return;
+            }
+        };
+
+        if tracks_guard.is_empty() {
+            data.fill(0.0);
+            return;
+        }
+
+        let frames = data.len() / channels.max(1);
+        let mut fade = self.fade.lock().unwrap();
+
+        if self.is_buffering.load(Ordering::Relaxed) {
+            let mut min_avail_frames = u64::MAX;
+            for trk in tracks_guard.iter() {
+                if let Ok(c) = trk.consumer.lock() {
+                    let avail = (c.slots() / 2) as u64;
+                    if avail < min_avail_frames {
+                        min_avail_frames = avail;
+                    }
+                }
+            }
+            let sr = sample_rate_u32 as u64;
+            let track_level_ms = if min_avail_frames == u64::MAX { 0 } else { (min_avail_frames * 1000) / sr };
+            if track_level_ms < 150 {
+                data.fill(0.0);
+                return;
+            } else {
+                self.is_buffering.store(false, Ordering::SeqCst);
+                let dur_ms = if let Some(t_start) = self.buffering_start_time.lock().unwrap().take() {
+                    t_start.elapsed().as_millis() as u64
+                } else {
+                    0
+                };
+                self.last_prefill_duration_ms.store(dur_ms, Ordering::Relaxed);
+                self.stats.min_ring_buffer_level_ms.store(u64::MAX, Ordering::Relaxed);
+                fade.start_fade_in();
+            }
+        }
+
+        let any_solo = tracks_guard.iter().any(|t| t.soloed.load(Ordering::Relaxed));
+        let mut main_l = vec![0.0f32; frames];
+        let mut main_r = vec![0.0f32; frames];
+        let mut cue_l = vec![0.0f32; frames];
+        let mut cue_r = vec![0.0f32; frames];
+        let mut both_l = vec![0.0f32; frames];
+        let mut both_r = vec![0.0f32; frames];
+
+        for trk in tracks_guard.iter() {
+            let is_muted = trk.muted.load(Ordering::Relaxed);
+            let is_solo = trk.soloed.load(Ordering::Relaxed);
+            let track_bus = TrackBus::from_u8(trk.bus.load(Ordering::Relaxed));
+
+            if is_muted || (any_solo && !is_solo) {
+                if let Ok(mut c) = trk.consumer.lock() {
+                    for _ in 0..frames * 2 {
+                        let _ = c.pop();
+                    }
+                }
+                continue;
+            }
+
+            let g = f32::from_bits(trk.gain.load(Ordering::Relaxed));
+            let p = trk.pan.load(Ordering::Relaxed) as f32 / 100.0;
+            let angle = (p + 1.0) * (std::f32::consts::PI / 4.0);
+            let pan_l = angle.cos() * g;
+            let pan_r = angle.sin() * g;
+
+            if let Ok(mut c) = trk.consumer.lock() {
+                for f in 0..frames {
+                    let l = c.pop().unwrap_or(0.0);
+                    let r = c.pop().unwrap_or(0.0);
+                    let tl = l * pan_l;
+                    let tr = r * pan_r;
+                    match track_bus {
+                        TrackBus::Main => {
+                            main_l[f] += tl;
+                            main_r[f] += tr;
+                        }
+                        TrackBus::CueClick => {
+                            cue_l[f] += tl;
+                            cue_r[f] += tr;
+                        }
+                        TrackBus::Both => {
+                            both_l[f] += tl;
+                            both_r[f] += tr;
+                        }
+                    }
+                }
+            }
+        }
+
+        let master_g = f32::from_bits(self.master_gain.load(Ordering::Relaxed));
+        let cue_g = f32::from_bits(self.cue_master_gain.load(Ordering::Relaxed));
+        for f in 0..frames {
+            let env_gain = fade.next_gain();
+            let out_l = (((main_l[f] + both_l[f]) * master_g) + ((cue_l[f] + both_l[f]) * cue_g)) * env_gain;
+            let out_r = (((main_r[f] + both_r[f]) * master_g) + ((cue_r[f] + both_r[f]) * cue_g)) * env_gain;
+            data[f * channels] = out_l.clamp(-1.0, 1.0);
+            if channels > 1 {
+                data[f * channels + 1] = out_r.clamp(-1.0, 1.0);
+            }
+        }
+
+        let pitch_st = self.pitch_semitones.load(Ordering::Relaxed);
+        let pitch_ratio = 2.0f64.powf(pitch_st as f64 / 12.0);
+        self.current_frame.fetch_add((frames as f64 * pitch_ratio).round() as u64, Ordering::Relaxed);
+        if self.current_frame.load(Ordering::Relaxed) >= self.total_frames.load(Ordering::Relaxed)
+            && !self.is_vamping.load(Ordering::Relaxed)
+        {
+            self.is_playing.store(false, Ordering::Relaxed);
+        }
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -1621,6 +1815,8 @@ pub struct ProjectLoadInfo {
     pub track_count: usize,
     pub duration_sec: f64,
     pub total_frames: u64,
+    #[serde(default)]
+    pub track_peaks: std::collections::HashMap<String, Vec<f32>>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

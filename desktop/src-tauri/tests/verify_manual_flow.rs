@@ -160,6 +160,126 @@ async fn verify_full_flow_user_request() {
     println!("======================================================================\n");
 }
 
+#[tokio::test]
+async fn test_multi_song_import_and_switch_playback() {
+    let temp_dir = std::env::temp_dir().join("omnitracks_multi_song_switch_test");
+    if temp_dir.exists() {
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+    std::fs::create_dir_all(&temp_dir).unwrap();
+
+    let sample_rate = 48000u32;
+    let frames = 48000usize * 2; // 2 seconds of audio
+
+    // Create synthetic PCM caches for Song 1 (440 Hz tone) and Song 2 (880 Hz tone)
+    for (proj_id, freq) in [("song-alpha", 440.0f32), ("song-beta", 880.0f32)] {
+        for trk_idx in 1..=3 {
+            let track_id = format!("stem-0{trk_idx}");
+            let mut samples = Vec::with_capacity(frames * 2);
+            for f in 0..frames {
+                let val = ((2.0 * std::f32::consts::PI * freq * (f as f32) / (sample_rate as f32)).sin() * 16000.0) as i16;
+                samples.push(val);
+                samples.push(val);
+            }
+            let meta = omnitracks_desktop::audio::cache::TrackPcmMetadata {
+                format_version: 1,
+                track_id: track_id.clone(),
+                target_sample_rate: sample_rate,
+                original_sample_rate: sample_rate,
+                original_channels: 2,
+                original_path: format!("{proj_id}/{track_id}.wav"),
+                original_file_size: (frames * 4) as u64,
+                original_modified_ms: 1000,
+                channels: 2,
+                is_effectively_mono: false,
+                frame_count: frames as u64,
+                duration_sec: 2.0,
+                peaks: vec![0.5; 320],
+                created_at: "1000".to_string(),
+            };
+            omnitracks_desktop::audio::cache::write_track_pcm_and_metadata(
+                &temp_dir,
+                proj_id,
+                &meta,
+                &samples,
+            )
+            .unwrap();
+        }
+    }
+
+    let stats = Arc::new(AudioStreamStats::default());
+    let playback = PlaybackEngine::new(stats);
+
+    // Helper closure to verify that the currently loaded song plays, exits buffering, advances frames, and outputs non-zero audio
+    let verify_active_song_plays = |engine: &PlaybackEngine, label: &str| {
+        engine.fade.lock().unwrap().start_fade_in();
+        engine.is_playing.store(true, std::sync::atomic::Ordering::SeqCst);
+
+        // Wait up to 500ms for feeder threads to prefill >= 150ms
+        let mut buf = vec![0.0f32; 480 * 2]; // 10ms stereo callback block
+        let mut max_sample = 0.0f32;
+        let t0 = Instant::now();
+        while t0.elapsed().as_millis() < 1000 {
+            engine.simulate_callback_block(&mut buf, 2);
+            for &s in &buf {
+                if s.abs() > max_sample {
+                    max_sample = s.abs();
+                }
+            }
+            if !engine.is_buffering.load(std::sync::atomic::Ordering::SeqCst)
+                && engine.current_frame.load(std::sync::atomic::Ordering::SeqCst) >= 480 * 5
+                && max_sample > 0.01
+            {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+
+        let cur_frame = engine.current_frame.load(std::sync::atomic::Ordering::SeqCst);
+        let is_buf = engine.is_buffering.load(std::sync::atomic::Ordering::SeqCst);
+        println!(
+            "[MultiSongTest] {}: is_buffering={}, current_frame={}, max_sample={:.4}",
+            label, is_buf, cur_frame, max_sample
+        );
+        assert!(!is_buf, "{label}: no salió del estado is_buffering");
+        assert!(cur_frame > 0, "{label}: current_frame no avanzó");
+        assert!(max_sample > 0.01, "{label}: la salida de audio fue silencio (max_sample={max_sample})");
+    };
+
+    // 1. Load & play Song 1
+    let info1 = playback
+        .load_project(&temp_dir, "song-alpha", sample_rate, Some(120.0), Some(4), None, None)
+        .await
+        .expect("Fallo cargando song-alpha (1)");
+    assert_eq!(info1.track_peaks.len(), 3);
+    verify_active_song_plays(&playback, "Paso 1: Canción 1 recién importada (song-alpha)");
+
+    // 2. Load & play Song 2 while Song 1 was playing
+    let info2 = playback
+        .load_project(&temp_dir, "song-beta", sample_rate, Some(128.0), Some(4), None, None)
+        .await
+        .expect("Fallo cargando song-beta (2)");
+    assert_eq!(info2.track_peaks.len(), 3);
+    verify_active_song_plays(&playback, "Paso 2: Segunda canción importada (song-beta)");
+
+    // 3. Switch back to Song 1 and play
+    playback
+        .load_project(&temp_dir, "song-alpha", sample_rate, Some(120.0), Some(4), None, None)
+        .await
+        .expect("Fallo volviendo a song-alpha (3)");
+    verify_active_song_plays(&playback, "Paso 3: Regreso a Canción 1 (song-alpha)");
+
+    // 4. Switch to Song 2 again and play
+    playback
+        .load_project(&temp_dir, "song-beta", sample_rate, Some(128.0), Some(4), None, None)
+        .await
+        .expect("Fallo volviendo a song-beta (4)");
+    verify_active_song_plays(&playback, "Paso 4: Regreso a Canción 2 (song-beta)");
+
+    playback.stop().await;
+    let _ = std::fs::remove_dir_all(&temp_dir);
+}
+
 fn chrono_time() -> String {
     use std::time::SystemTime;
     let now = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap();
