@@ -1,7 +1,7 @@
 import React, { memo, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Sliders, Volume2, Check, AlertTriangle, Info, RefreshCw, X, Activity, Play, Pause, Square, Flame } from 'lucide-react';
-import { loadAllProjectsFromDb } from '../../src/storage/projectDb';
+import { Sliders, Volume2, Check, AlertTriangle, Info, RefreshCw, X, Activity, Play, Pause, Square, Flame, FolderOpen, HardDriveDownload } from 'lucide-react';
+import { loadAllProjectsFromDb, loadProjectStemsFromDb, extractStemArrayBuffer } from '../../src/storage/projectDb';
 import { SongProject } from '../../src/types/project';
 import './connection.css';
 
@@ -107,6 +107,11 @@ export default memo(function DesktopAudioSettings({ triggerHost }: Props) {
   const [stressNotice, setStressNotice] = useState('');
   const [seekInputSec, setSeekInputSec] = useState(0);
 
+  const [loadErrorDetails, setLoadErrorDetails] = useState<string | null>(null);
+  const [isGeneratingCache, setIsGeneratingCache] = useState(false);
+  const [cacheProgressText, setCacheProgressText] = useState('');
+  const [cacheProgressPercent, setCacheProgressPercent] = useState(0);
+
   const activeDevice = devices.find((d) => d.name === selectedDeviceName) || devices.find((d) => d.isDefault) || devices[0];
 
   const loadAudioConfig = async () => {
@@ -202,13 +207,117 @@ export default memo(function DesktopAudioSettings({ triggerHost }: Props) {
   const handleNativeLoad = async () => {
     if (!invoke || !selectedProjectId) return;
     setNativeNotice('Cargando pistas en motor nativo...');
+    setLoadErrorDetails(null);
     try {
       const res: any = await invoke('audio_load_project', { projectId: selectedProjectId });
       setIsNativeLoaded(true);
       setNativeNotice(`Cargadas ${res.trackCount} pistas (${res.durationSec.toFixed(1)}s) a ${res.sampleRate} Hz`);
       pollStats();
     } catch (err: any) {
-      setNativeNotice(`Error cargando: ${err}`);
+      const errMsg = String(err);
+      setNativeNotice(`Error cargando: ${errMsg}`);
+      setLoadErrorDetails(errMsg);
+    }
+  };
+
+  const handleGenerateNativeCache = async () => {
+    if (!invoke || !selectedProjectId) return;
+    setIsGeneratingCache(true);
+    setCacheProgressPercent(0);
+    setCacheProgressText('Leyendo stems de la canción en la biblioteca...');
+    setLoadErrorDetails(null);
+    try {
+      const stems = await loadProjectStemsFromDb(selectedProjectId);
+      if (!stems || stems.length === 0) {
+        setLoadErrorDetails('No se encontraron stems guardados en IndexedDB para este proyecto. Usa el botón «Seleccionar carpeta de la canción» para importarla directamente desde el disco.');
+        setIsGeneratingCache(false);
+        return;
+      }
+
+      const total = stems.length;
+      let completed = 0;
+      const targetSr = activeDevice?.defaultSampleRate || 48000;
+
+      for (let i = 0; i < total; i++) {
+        const stem = stems[i];
+        const label = stem.fileName || stem.trackId;
+        setCacheProgressText(`Decodificando "${label}" (${i + 1}/${total})...`);
+        setCacheProgressPercent(Math.round(((i) / total) * 100));
+
+        const arrayBuf = await extractStemArrayBuffer(stem);
+        if (!arrayBuf || arrayBuf.byteLength === 0) {
+          console.warn(`[NativeCache] Stem ${stem.trackId} sin buffer disponible en IndexedDB`);
+          continue;
+        }
+
+        const bytes = Array.from(new Uint8Array(arrayBuf));
+        await invoke('audio_import_track_bytes', {
+          projectId: selectedProjectId,
+          trackId: stem.trackId,
+          fileName: stem.fileName || `${stem.trackId}.mp3`,
+          bytes,
+          targetSampleRate: targetSr,
+        });
+        completed++;
+      }
+
+      if (completed === 0) {
+        setLoadErrorDetails('Los stems almacenados no tenían audio en memoria. Usa «Seleccionar carpeta de la canción» para leer los archivos originales desde disco.');
+        setIsGeneratingCache(false);
+        return;
+      }
+
+      setCacheProgressPercent(100);
+      setCacheProgressText(`¡Caché nativa generada para ${completed} pistas! Cargando...`);
+      setTimeout(() => {
+        setIsGeneratingCache(false);
+        void handleNativeLoad();
+      }, 500);
+    } catch (err: any) {
+      setLoadErrorDetails(`Error generando caché nativa: ${err}`);
+      setIsGeneratingCache(false);
+    }
+  };
+
+  const handleImportFromFolder = async () => {
+    if (!invoke || !selectedProjectId) return;
+    try {
+      const selected = await invoke<any>('plugin:dialog|open', {
+        options: {
+          directory: true,
+          multiple: false,
+          title: 'Seleccionar carpeta de la canción multitrack',
+        },
+      });
+
+      const folderPath =
+        typeof selected === 'string'
+          ? selected
+          : selected?.path || (Array.isArray(selected) ? selected[0] : null);
+
+      if (!folderPath) return;
+
+      setIsGeneratingCache(true);
+      setCacheProgressText(`Escaneando y decodificando archivos en "${folderPath}"...`);
+      setCacheProgressPercent(25);
+      setLoadErrorDetails(null);
+
+      const targetSr = activeDevice?.defaultSampleRate || 48000;
+      const res: any = await invoke('audio_import_folder', {
+        projectId: selectedProjectId,
+        folderPath,
+        targetSampleRate: targetSr,
+      });
+
+      setCacheProgressPercent(100);
+      setCacheProgressText(`¡${res.tracks?.length || 0} pistas procesadas y cacheadas con éxito! Cargando...`);
+      setTimeout(() => {
+        setIsGeneratingCache(false);
+        void handleNativeLoad();
+      }, 500);
+    } catch (err: any) {
+      setLoadErrorDetails(`Error importando carpeta: ${err}`);
+      setIsGeneratingCache(false);
     }
   };
 
@@ -572,6 +681,7 @@ export default memo(function DesktopAudioSettings({ triggerHost }: Props) {
                 onChange={(e) => {
                   setSelectedProjectId(e.target.value);
                   setIsNativeLoaded(false);
+                  setLoadErrorDetails(null);
                 }}
                 className="bg-studio-ground border border-neutral-800 rounded-lg px-2.5 py-1.5 text-xs text-neutral-100 focus:outline-none flex-1 truncate"
               >
@@ -588,12 +698,60 @@ export default memo(function DesktopAudioSettings({ triggerHost }: Props) {
               <button
                 type="button"
                 onClick={handleNativeLoad}
-                disabled={!selectedProjectId}
-                className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-emerald-700 hover:bg-emerald-600 text-white cursor-pointer shrink-0"
+                disabled={!selectedProjectId || isGeneratingCache}
+                className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-emerald-700 hover:bg-emerald-600 disabled:opacity-40 text-white cursor-pointer shrink-0"
               >
                 Cargar
               </button>
             </div>
+
+            {/* Alerta de Error de Carga / Falta de Caché con Acciones de Generación */}
+            {loadErrorDetails && (
+              <div className="p-2.5 rounded-lg bg-amber-950/60 border border-amber-700/80 space-y-2">
+                <div className="flex items-start gap-2">
+                  <AlertTriangle size={15} className="text-amber-400 shrink-0 mt-0.5" />
+                  <div className="flex-1 text-[11px] text-amber-200 leading-relaxed font-mono">
+                    {loadErrorDetails}
+                  </div>
+                </div>
+                <div className="flex items-center gap-2 pt-1 border-t border-amber-800/60">
+                  <button
+                    type="button"
+                    onClick={handleGenerateNativeCache}
+                    disabled={isGeneratingCache}
+                    className="px-2.5 py-1 text-xs font-semibold rounded-lg bg-emerald-700 hover:bg-emerald-600 text-white flex items-center gap-1.5 cursor-pointer shadow"
+                  >
+                    <HardDriveDownload size={13} />
+                    <span>Generar caché nativa</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleImportFromFolder}
+                    disabled={isGeneratingCache}
+                    className="px-2.5 py-1 text-xs font-semibold rounded-lg bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 text-neutral-200 flex items-center gap-1.5 cursor-pointer"
+                  >
+                    <FolderOpen size={13} />
+                    <span>Seleccionar carpeta de la canción</span>
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Barra de Progreso de Generación de Caché Nativa */}
+            {isGeneratingCache && (
+              <div className="p-2.5 rounded-lg bg-emerald-950/70 border border-emerald-700/80 space-y-1.5">
+                <div className="flex items-center justify-between text-xs text-emerald-300">
+                  <span className="font-medium truncate max-w-[340px]">{cacheProgressText}</span>
+                  <span className="font-mono font-bold">{cacheProgressPercent}%</span>
+                </div>
+                <div className="w-full h-1.5 bg-neutral-800 rounded-full overflow-hidden">
+                  <div
+                    className="h-full bg-emerald-500 transition-all duration-200 ease-out"
+                    style={{ width: `${cacheProgressPercent}%` }}
+                  />
+                </div>
+              </div>
+            )}
 
             {/* Transport Controls */}
             <div className="flex items-center gap-2 pt-1">

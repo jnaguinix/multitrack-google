@@ -134,17 +134,16 @@ pub struct DecodedAudioInfo {
     pub bits_per_sample: Option<u32>,
 }
 
-/// Decodes any audio file (WAV, FLAC, MP3, OGG, AAC/M4A) into `Vec<Vec<f32>>` using `symphonia`.
+/// Decodes an audio stream from any `MediaSourceStream` using `symphonia`.
 /// Supports cooperative cancellation via `cancel_flag`.
-pub fn decode_audio_file(
-    file_path: &Path,
+pub fn decode_audio_stream(
+    mss: symphonia::core::io::MediaSourceStream,
+    hint_ext: Option<&str>,
+    file_label: &str,
     cancel_flag: Option<&AtomicBool>,
 ) -> Result<DecodedAudioInfo, String> {
-    let file = File::open(file_path).map_err(|e| format!("No se pudo abrir el archivo {:?}: {e}", file_path))?;
-    let mss = symphonia::core::io::MediaSourceStream::new(Box::new(file), Default::default());
-
     let mut hint = symphonia::core::probe::Hint::new();
-    if let Some(ext) = file_path.extension().and_then(|e| e.to_str()) {
+    if let Some(ext) = hint_ext {
         hint.with_extension(ext);
     }
 
@@ -153,14 +152,14 @@ pub fn decode_audio_file(
 
     let probed = symphonia::default::get_probe()
         .format(&hint, mss, &fmt_opts, &meta_opts)
-        .map_err(|e| format!("Formato de archivo no soportado para {:?}: {e}", file_path))?;
+        .map_err(|e| format!("Formato de archivo no soportado para '{file_label}': {e}"))?;
 
     let mut format = probed.format;
     let track = format
         .tracks()
         .iter()
         .find(|t| t.codec_params.codec != symphonia::core::codecs::CODEC_TYPE_NULL)
-        .ok_or_else(|| format!("No se encontró pista de audio válida en {:?}", file_path))?;
+        .ok_or_else(|| format!("No se encontró pista de audio válida en '{file_label}'"))?;
 
     let track_id = track.id;
     let original_sample_rate = track.codec_params.sample_rate.unwrap_or(44100);
@@ -170,7 +169,7 @@ pub fn decode_audio_file(
     let dec_opts: symphonia::core::codecs::DecoderOptions = Default::default();
     let mut decoder = symphonia::default::get_codecs()
         .make(&track.codec_params, &dec_opts)
-        .map_err(|e| format!("Códec de audio no soportado: {e}"))?;
+        .map_err(|e| format!("Códec de audio no soportado en '{file_label}': {e}"))?;
 
     let mut channels: Vec<Vec<f32>> = vec![Vec::new(); (original_channels as usize).max(1)];
     let mut sample_buf: Option<symphonia::core::audio::SampleBuffer<f32>> = None;
@@ -232,7 +231,7 @@ pub fn decode_audio_file(
                 break;
             }
             Err(e) => {
-                tracing::warn!("Error al decodificar paquete en {:?}: {e}", file_path);
+                tracing::warn!("Error al decodificar paquete en {file_label}: {e}");
                 break;
             }
         }
@@ -244,6 +243,30 @@ pub fn decode_audio_file(
         original_channels,
         bits_per_sample,
     })
+}
+
+/// Decodes any audio file (WAV, FLAC, MP3, OGG, AAC/M4A) into `Vec<Vec<f32>>` using `symphonia`.
+/// Supports cooperative cancellation via `cancel_flag`.
+pub fn decode_audio_file(
+    file_path: &Path,
+    cancel_flag: Option<&AtomicBool>,
+) -> Result<DecodedAudioInfo, String> {
+    let file = File::open(file_path).map_err(|e| format!("No se pudo abrir el archivo {:?}: {e}", file_path))?;
+    let mss = symphonia::core::io::MediaSourceStream::new(Box::new(file), Default::default());
+    let ext = file_path.extension().and_then(|e| e.to_str());
+    decode_audio_stream(mss, ext, &file_path.to_string_lossy(), cancel_flag)
+}
+
+/// Decodes any in-memory audio byte buffer (WAV, MP3, FLAC, OGG, AAC/M4A) into `Vec<Vec<f32>>` using `symphonia`.
+pub fn decode_audio_bytes(
+    bytes: Vec<u8>,
+    file_name: &str,
+    cancel_flag: Option<&AtomicBool>,
+) -> Result<DecodedAudioInfo, String> {
+    let cursor = std::io::Cursor::new(bytes);
+    let mss = symphonia::core::io::MediaSourceStream::new(Box::new(cursor), Default::default());
+    let ext = Path::new(file_name).extension().and_then(|e| e.to_str());
+    decode_audio_stream(mss, ext, file_name, cancel_flag)
 }
 
 /// Decodes an audio file, detects mono/effectively-mono, resamples to `target_sample_rate`,
@@ -352,6 +375,152 @@ pub fn decode_and_cache_track(
     } else {
         let len = resampled[0].len().min(resampled[1].len());
         for i in 0..len {
+            let s0 = if is_exact_16bit {
+                quantize_f32_to_i16_exact(resampled[0][i])
+            } else {
+                quantize_f32_to_i16_with_dither(resampled[0][i], &mut rng)
+            };
+            let s1 = if is_exact_16bit {
+                quantize_f32_to_i16_exact(resampled[1][i])
+            } else {
+                quantize_f32_to_i16_with_dither(resampled[1][i], &mut rng)
+            };
+            pcm_samples.push(s0);
+            pcm_samples.push(s1);
+        }
+    }
+
+    if let Some(flag) = cancel_flag {
+        if flag.load(Ordering::Relaxed) {
+            delete_track_cache(base_dir, project_id, target_sample_rate, track_id);
+            return Err("Importación cancelada por el usuario".to_string());
+        }
+    }
+
+    let now_iso = {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        format!("{now}")
+    };
+
+    let metadata = TrackPcmMetadata {
+        format_version: CACHE_FORMAT_VERSION,
+        track_id: track_id.to_string(),
+        target_sample_rate,
+        original_sample_rate,
+        original_channels,
+        original_path,
+        original_file_size,
+        original_modified_ms,
+        channels: channels_count,
+        is_effectively_mono: is_eff_mono,
+        frame_count,
+        duration_sec,
+        peaks,
+        created_at: now_iso,
+    };
+
+    // 5. Atomic write to disk
+    write_track_pcm_and_metadata(base_dir, project_id, &metadata, &pcm_samples)?;
+
+    Ok(metadata)
+}
+
+/// Decodes in-memory audio bytes, resamples to `target_sample_rate`, detects mono,
+/// extracts peaks, applies TPDF dither, and writes PCM + JSON atomically to disk.
+pub fn decode_and_cache_track_bytes(
+    base_dir: &Path,
+    project_id: &str,
+    track_id: &str,
+    file_name: &str,
+    bytes: Vec<u8>,
+    target_sample_rate: u32,
+    cancel_flag: Option<&AtomicBool>,
+) -> Result<TrackPcmMetadata, String> {
+    let original_file_size = bytes.len() as u64;
+    let original_path = format!("memory://{file_name}");
+    let original_modified_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64;
+
+    let decoded_info = decode_audio_bytes(bytes, file_name, cancel_flag)?;
+    let decoded_channels = decoded_info.channels;
+    let original_sample_rate = decoded_info.sample_rate;
+    let original_channels = decoded_info.original_channels;
+    let bits_per_sample = decoded_info.bits_per_sample.unwrap_or(16);
+
+    if decoded_channels.is_empty() || decoded_channels[0].is_empty() {
+        return Err(format!("El audio '{file_name}' no contiene muestras audibles"));
+    }
+
+    if let Some(flag) = cancel_flag {
+        if flag.load(Ordering::Relaxed) {
+            delete_track_cache(base_dir, project_id, target_sample_rate, track_id);
+            return Err("Importación cancelada por el usuario".to_string());
+        }
+    }
+
+    // 1. Mono / Effectively-Mono detection
+    let (is_eff_mono, working_channels) = if decoded_channels.len() >= 2 {
+        let eff_mono = is_effectively_mono(&decoded_channels[0], &decoded_channels[1]);
+        if eff_mono {
+            let len = decoded_channels[0].len().min(decoded_channels[1].len());
+            let mut mono = Vec::with_capacity(len);
+            for i in 0..len {
+                mono.push((decoded_channels[0][i] + decoded_channels[1][i]) * 0.5);
+            }
+            (true, vec![mono])
+        } else {
+            (false, decoded_channels)
+        }
+    } else {
+        (true, decoded_channels)
+    };
+
+    // 2. Resampling to target_sample_rate (if different)
+    let resampled = if original_sample_rate != target_sample_rate {
+        resample_channels(
+            &working_channels,
+            original_sample_rate as usize,
+            target_sample_rate as usize,
+        )?
+    } else {
+        working_channels
+    };
+
+    if let Some(flag) = cancel_flag {
+        if flag.load(Ordering::Relaxed) {
+            delete_track_cache(base_dir, project_id, target_sample_rate, track_id);
+            return Err("Importación cancelada por el usuario".to_string());
+        }
+    }
+
+    let channels_count = resampled.len() as u16;
+    let frame_count = resampled[0].len() as u64;
+    let duration_sec = frame_count as f64 / target_sample_rate as f64;
+
+    // 3. Extract 320 waveform peaks
+    let peaks = extract_waveform_peaks(&resampled[0], 320);
+
+    // 4. Quantize to i16 (exact copy if source is 16-bit and sample rates match, else TPDF dither)
+    let is_exact_16bit = bits_per_sample <= 16 && original_sample_rate == target_sample_rate;
+    let mut rng = TpdfDitherRng::new(frame_count ^ (target_sample_rate as u64));
+    let mut pcm_samples = Vec::with_capacity((frame_count as usize) * (channels_count as usize));
+
+    if channels_count == 1 {
+        for &s in &resampled[0] {
+            let sample_i16 = if is_exact_16bit {
+                quantize_f32_to_i16_exact(s)
+            } else {
+                quantize_f32_to_i16_with_dither(s, &mut rng)
+            };
+            pcm_samples.push(sample_i16);
+        }
+    } else {
+        for i in 0..(frame_count as usize) {
             let s0 = if is_exact_16bit {
                 quantize_f32_to_i16_exact(resampled[0][i])
             } else {
@@ -569,5 +738,52 @@ mod tests {
         assert!((meta.duration_sec - 1.0).abs() < 0.05);
 
         let _ = std::fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn test_decode_and_cache_track_bytes() {
+        let temp_dir = std::env::temp_dir().join(format!("omnitracks_bytes_test_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        std::fs::create_dir_all(&temp_dir).unwrap();
+
+        let wav_path = temp_dir.join("test_stem_bytes.wav");
+        let samples: Vec<i16> = (0..48000).map(|i| ((i % 500) as i16) * 20).collect();
+        write_test_wav_16bit(&wav_path, 48000, 1, &samples);
+        let wav_bytes = std::fs::read(&wav_path).unwrap();
+
+        let meta = decode_and_cache_track_bytes(&temp_dir, "test_proj_bytes", "stem_bytes_01", "test_stem_bytes.wav", wav_bytes, 48000, None).unwrap();
+
+        assert_eq!(meta.track_id, "stem_bytes_01");
+        assert_eq!(meta.original_sample_rate, 48000);
+        assert_eq!(meta.target_sample_rate, 48000);
+        assert_eq!(meta.frame_count, 48000);
+        assert_eq!(meta.peaks.len(), 320);
+
+        let pcm_path = cache::get_track_pcm_path(&temp_dir, "test_proj_bytes", 48000, "stem_bytes_01");
+        assert!(pcm_path.exists());
+        assert_eq!(pcm_path.metadata().unwrap().len(), 48000 * 2);
+
+        let _ = std::fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn test_mp3_decoding_and_load_if_downloaded() {
+        let mp3_path = std::path::PathBuf::from(r"C:\Users\jpuerta\Downloads\Multitrack _ERES BENDITO_ ORIGINAL Jaime Murrel-G major-108bpm-440hz\Multitrack _ERES BENDITO_ ORIGINAL Jaime Murrel-Guitars-G major-108bpm-440hz.mp3");
+        if mp3_path.exists() {
+            let temp_dir = std::env::temp_dir().join(format!("omnitracks_mp3_test_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+            std::fs::create_dir_all(&temp_dir).unwrap();
+
+            let meta = decode_and_cache_track(&temp_dir, "test_mp3_proj", "stem_guitars", &mp3_path, 48000, None).expect("Debe decodificar MP3 real sin errores");
+            assert_eq!(meta.track_id, "stem_guitars");
+            assert_eq!(meta.target_sample_rate, 48000);
+            assert!(meta.frame_count > 0);
+            assert!(meta.duration_sec > 10.0);
+            assert_eq!(meta.peaks.len(), 320);
+
+            let pcm_path = cache::get_track_pcm_path(&temp_dir, "test_mp3_proj", 48000, "stem_guitars");
+            assert!(pcm_path.exists());
+            assert!(pcm_path.metadata().unwrap().len() > 0);
+
+            let _ = std::fs::remove_dir_all(temp_dir);
+        }
     }
 }

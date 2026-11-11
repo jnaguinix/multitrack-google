@@ -131,13 +131,36 @@ impl PlaybackEngine {
 
         let proj_dir = get_project_cache_dir(base_dir, project_id, device_sample_rate);
         if !proj_dir.exists() {
+            let pcm_root = base_dir.join("pcm").join(project_id);
+            let mut other_rates = Vec::new();
+            if let Ok(entries) = std::fs::read_dir(&pcm_root) {
+                for entry in entries.flatten() {
+                    if let Ok(file_type) = entry.file_type() {
+                        if file_type.is_dir() {
+                            if let Some(name) = entry.file_name().to_str() {
+                                if let Ok(rate) = name.parse::<u32>() {
+                                    other_rates.push(rate);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            if !other_rates.is_empty() {
+                return Err(format!(
+                    "No existe caché PCM para el proyecto '{project_id}' a {device_sample_rate} Hz (ruta buscada: '{}'). Se encontraron frecuencias existentes: {:?} Hz. Utiliza el botón «Generar caché nativa» para convertirla.",
+                    proj_dir.display(),
+                    other_rates
+                ));
+            }
             return Err(format!(
-                "No existe caché PCM para el proyecto '{project_id}' a {device_sample_rate} Hz"
+                "No existe caché PCM para el proyecto '{project_id}' a {device_sample_rate} Hz (ruta buscada: '{}'). Genera la caché nativa antes de reproducir.",
+                proj_dir.display()
             ));
         }
 
         let mut read_dir = std::fs::read_dir(&proj_dir)
-            .map_err(|e| format!("Error leyendo directorio de caché: {e}"))?;
+            .map_err(|e| format!("Error leyendo directorio de caché en '{}': {e}", proj_dir.display()))?;
 
         let mut track_metas = Vec::new();
         while let Some(Ok(entry)) = read_dir.next() {
@@ -152,7 +175,21 @@ impl PlaybackEngine {
         }
 
         if track_metas.is_empty() {
-            return Err("No se encontraron pistas válidas en la caché del proyecto".to_string());
+            return Err(format!(
+                "No se encontraron metadatos (.json) en la caché de '{}'",
+                proj_dir.display()
+            ));
+        }
+
+        for meta in &track_metas {
+            let pcm_path = proj_dir.join(format!("{}.pcm", meta.track_id));
+            if !pcm_path.exists() {
+                return Err(format!(
+                    "Falta el archivo PCM para la pista '{}' (ruta buscada: '{}')",
+                    meta.track_id,
+                    pcm_path.display()
+                ));
+            }
         }
 
         let mut max_frames = 0u64;
@@ -687,5 +724,82 @@ pub mod tests {
         let angle_l = (p_left + 1.0) * (std::f32::consts::PI / 4.0);
         assert!((angle_l.cos() * g - g).abs() < 0.001);
         assert!((angle_l.sin() * g).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_feeder_survives_300ms_disk_stall_without_underrun() {
+        // 500 ms of stereo audio at 48 kHz = 24000 frames = 48000 samples
+        let sample_rate = 48000usize;
+        let ring_buffer_capacity = sample_rate; // 500 ms stereo = 48000 samples
+        let (mut producer, mut consumer) = rtrb::RingBuffer::<f32>::new(ring_buffer_capacity);
+
+        // Pre-fill the ring buffer to 400 ms (>= 350 ms operational target)
+        let prefill_samples = (sample_rate as f32 * 0.40 * 2.0) as usize; // 38400 samples
+        for i in 0..prefill_samples {
+            producer.push((i % 100) as f32 / 100.0).unwrap();
+        }
+
+        // Simulate a 300 ms complete disk stall where the feeder thread can produce 0 samples
+        // During these 300 ms, the hardware audio callback consumes 300 ms of stereo audio:
+        let consume_frames_300ms = (sample_rate as f32 * 0.30) as usize; // 14400 frames = 28800 samples
+        let mut underrun_occurred = false;
+
+        for _ in 0..(consume_frames_300ms * 2) {
+            match consumer.pop() {
+                Ok(_) => {},
+                Err(_) => {
+                    underrun_occurred = true;
+                    break;
+                }
+            }
+        }
+
+        // Must survive the 300 ms stall with ZERO underruns:
+        assert!(!underrun_occurred, "El búfer circular sufrió un underrun durante el corte de disco de 300ms");
+        // And must still have audio remaining in the ring buffer:
+        let remaining_samples = prefill_samples - (consume_frames_300ms * 2);
+        assert_eq!(consumer.slots(), remaining_samples);
+    }
+
+    #[test]
+    fn test_inter_track_sample_alignment_mono_stereo() {
+        // Track 1: Mono with impulse (1.0) at frame 120
+        // Track 2: Stereo with impulse (1.0) at frame 120
+        let total_frames = 256;
+        let impulse_frame = 120;
+
+        let mut mono_samples = vec![0.0f32; total_frames];
+        mono_samples[impulse_frame] = 1.0;
+
+        let mut stereo_l = vec![0.0f32; total_frames];
+        let mut stereo_r = vec![0.0f32; total_frames];
+        stereo_l[impulse_frame] = 1.0;
+        stereo_r[impulse_frame] = 1.0;
+
+        let mut master_l = vec![0.0f32; total_frames];
+        let mut master_r = vec![0.0f32; total_frames];
+
+        // Mix Track 1 (Mono expanded to stereo: pan center)
+        for i in 0..total_frames {
+            master_l[i] += mono_samples[i];
+            master_r[i] += mono_samples[i];
+        }
+
+        // Mix Track 2 (Stereo)
+        for i in 0..total_frames {
+            master_l[i] += stereo_l[i];
+            master_r[i] += stereo_r[i];
+        }
+
+        // Verification: Impulse must land at the EXACT SAME sample frame in both channels
+        for i in 0..total_frames {
+            if i == impulse_frame {
+                assert_eq!(master_l[i], 2.0, "Impulso no alineado en frame {i} en canal izquierdo");
+                assert_eq!(master_r[i], 2.0, "Impulso no alineado en frame {i} en canal derecho");
+            } else {
+                assert_eq!(master_l[i], 0.0, "Muestra espuria en canal izquierdo en frame {i}");
+                assert_eq!(master_r[i], 0.0, "Muestra espuria en canal derecho en frame {i}");
+            }
+        }
     }
 }

@@ -67,6 +67,8 @@ export class StreamingTrack {
 
   // Active scheduled sources in Web Audio graph: chunkIndex -> ScheduledSource
   private scheduledSources = new Map<number, ScheduledSource>();
+  private lastScheduledChunkIndex = -1;
+  private lastScheduledEndCtxTime = -1;
 
   // Dynamic underrun & telemetry management
   private targetAheadSec = TARGET_AHEAD_SEC;
@@ -324,7 +326,8 @@ export class StreamingTrack {
       }
 
       const chunkBuffer = this.chunkBuffers.get(c);
-      const chunkStartSongSec = c * CHUNK_SEC;
+      const startSample = c * this.chunkFrames;
+      const chunkStartSongSec = startSample / this.sampleRate;
       const chunkDurationSongSec = (chunkBuffer?.length ?? this.chunkFrames) / this.sampleRate;
 
       // Exact AudioContext start time calculated mathematically from integer frames
@@ -380,8 +383,6 @@ export class StreamingTrack {
       chunkIndex,
       buffer,
       chunkStartCtxTime,
-      chunkStartSongSec,
-      currentSongSec,
       rate,
       nowCtx,
     } = params;
@@ -389,13 +390,12 @@ export class StreamingTrack {
     let offsetInChunkSec = 0;
     let startWhen = chunkStartCtxTime;
 
-    // If starting mid-chunk (e.g. at playhead or after seek)
-    if (chunkStartCtxTime < nowCtx) {
+    // A chunk starts mid-way ONLY if it was scheduled to start in the past
+    // (e.g. immediate play or seek positioned inside this chunk)
+    if (chunkStartCtxTime < nowCtx - 0.001) {
       const elapsedCtx = nowCtx - chunkStartCtxTime;
-      offsetInChunkSec = elapsedCtx * rate;
+      offsetInChunkSec = Math.min(buffer.duration - 0.001, elapsedCtx * rate);
       startWhen = nowCtx;
-    } else if (currentSongSec > chunkStartSongSec) {
-      offsetInChunkSec = currentSongSec - chunkStartSongSec;
     }
 
     const remainingSongSec = Math.max(0, buffer.duration - offsetInChunkSec);
@@ -407,12 +407,16 @@ export class StreamingTrack {
     source.buffer = buffer;
     source.detune.value = this.pitchSemitones * 100;
 
-    // A chunk is contiguous if it starts at offset 0 and aligns with the previous chunk's end time
-    const prevSource = this.scheduledSources.get(chunkIndex - 1);
+    // A chunk is contiguous if it directly follows the previous chunk and starts at offset 0
     const isContiguous =
       offsetInChunkSec === 0 &&
-      Boolean(prevSource) &&
-      Math.abs(prevSource!.endCtxTime - startWhen) < 0.005;
+      this.lastScheduledChunkIndex >= 0 &&
+      chunkIndex === this.lastScheduledChunkIndex + 1 &&
+      Math.abs(this.lastScheduledEndCtxTime - startWhen) < 0.05;
+
+    console.debug(
+      `[StreamingTrack][Transition] Pista "${this.trackId}" chunk ${chunkIndex} | isContiguous=${isContiguous} | offset=${offsetInChunkSec.toFixed(5)}s | startWhen=${startWhen.toFixed(4)} | lastEnd=${this.lastScheduledEndCtxTime.toFixed(4)}`
+    );
 
     if (isContiguous) {
       // Seamless contiguous playback: maintain 1.0 gain without dip/fade-in
@@ -429,6 +433,9 @@ export class StreamingTrack {
     source.start(startWhen, offsetInChunkSec);
 
     const endCtxTime = startWhen + remainingSongSec / rate;
+    this.lastScheduledChunkIndex = chunkIndex;
+    this.lastScheduledEndCtxTime = endCtxTime;
+
     this.scheduledSources.set(chunkIndex, {
       source,
       fadeGain,
@@ -454,6 +461,8 @@ export class StreamingTrack {
       }
     }
     this.scheduledSources.clear();
+    this.lastScheduledChunkIndex = -1;
+    this.lastScheduledEndCtxTime = -1;
   }
 
   /**

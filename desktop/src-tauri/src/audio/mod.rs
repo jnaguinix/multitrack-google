@@ -208,6 +208,128 @@ pub async fn audio_import_tracks(
 }
 
 #[tauri::command]
+pub async fn audio_import_track_bytes(
+    app: tauri::AppHandle,
+    state: State<'_, AudioEngineState>,
+    project_id: String,
+    track_id: String,
+    file_name: String,
+    bytes: Vec<u8>,
+    target_sample_rate: Option<u32>,
+) -> Result<cache::TrackPcmMetadata, String> {
+    let local_data = app
+        .path()
+        .app_local_data_dir()
+        .unwrap_or_else(|_| PathBuf::from("."));
+
+    let sample_rate = if let Some(r) = target_sample_rate {
+        r
+    } else {
+        let settings = state.current_settings.lock().await;
+        settings.sample_rate.unwrap_or(48000)
+    };
+
+    cache::check_free_disk_space(&local_data, (bytes.len() as u64) * 4)?;
+
+    let cancel_flag = state.create_import_cancel_flag(&project_id).await;
+    let cancel_ref = Some(cancel_flag.as_ref());
+
+    import::decode_and_cache_track_bytes(
+        &local_data,
+        &project_id,
+        &track_id,
+        &file_name,
+        bytes,
+        sample_rate,
+        cancel_ref,
+    )
+}
+
+#[tauri::command]
+pub async fn audio_import_folder(
+    app: tauri::AppHandle,
+    state: State<'_, AudioEngineState>,
+    project_id: String,
+    folder_path: String,
+    target_sample_rate: Option<u32>,
+) -> Result<ImportResult, String> {
+    let _local_data = app
+        .path()
+        .app_local_data_dir()
+        .unwrap_or_else(|_| PathBuf::from("."));
+
+    let sample_rate = if let Some(r) = target_sample_rate {
+        r
+    } else {
+        let settings = state.current_settings.lock().await;
+        settings.sample_rate.unwrap_or(48000)
+    };
+
+    let p = Path::new(&folder_path);
+    if !p.exists() || !p.is_dir() {
+        return Err(format!("La carpeta '{}' no existe en disco", folder_path));
+    }
+
+    let entries = std::fs::read_dir(p)
+        .map_err(|e| format!("Error leyendo carpeta '{}': {e}", folder_path))?;
+
+    let audio_extensions = ["mp3", "wav", "ogg", "flac", "m4a", "aac"];
+    let mut files_to_import = Vec::new();
+
+    // Check if omnitracks.project.json exists in this folder to keep existing track IDs
+    let sidecar_path = p.join("omnitracks.project.json");
+    let mut sidecar_map: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    if sidecar_path.exists() {
+        if let Ok(content) = std::fs::read_to_string(&sidecar_path) {
+            if let Ok(json_val) = serde_json::from_str::<serde_json::Value>(&content) {
+                if let Some(tracks_arr) = json_val.get("tracks").and_then(|t| t.as_array()) {
+                    for t in tracks_arr {
+                        if let (Some(id), Some(name)) = (
+                            t.get("id").and_then(|i| i.as_str()),
+                            t.get("name").and_then(|n| n.as_str()),
+                        ) {
+                            sidecar_map.insert(name.to_lowercase(), id.to_string());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    let mut idx = 0;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_file() {
+            if let Some(ext) = path.extension().and_then(|s| s.to_str()).map(|s| s.to_lowercase()) {
+                if audio_extensions.contains(&ext.as_str()) {
+                    let file_stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("track");
+                    let file_stem_lower = file_stem.to_lowercase();
+                    
+                    // Match track ID from sidecar if possible, else generate stable stem ID
+                    let track_id = if let Some(matched_id) = sidecar_map.get(&file_stem_lower) {
+                        matched_id.clone()
+                    } else {
+                        format!("stem-{:02}", idx)
+                    };
+                    idx += 1;
+
+                    files_to_import.push(ImportTrackFile {
+                        file_path: path.to_string_lossy().to_string(),
+                        track_id,
+                    });
+                }
+            }
+        }
+    }
+
+    if files_to_import.is_empty() {
+        return Err(format!("No se encontraron archivos de audio compatibles (.mp3, .wav, .flac, .ogg, .m4a) en '{}'", folder_path));
+    }
+
+    audio_import_tracks(app, state, project_id, files_to_import, Some(sample_rate)).await
+}
+
+#[tauri::command]
 pub async fn audio_get_project_cache_status(
     app: tauri::AppHandle,
     state: State<'_, AudioEngineState>,

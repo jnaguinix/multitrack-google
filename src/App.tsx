@@ -991,36 +991,74 @@ export default function App() {
       }
 
       // Desktop Native Audio Import Pipeline (Fase 2: Decodificación y Caché en Rust)
-      if (isDesktopApp && validFiles.some((f) => Boolean((f as any).path))) {
+      if (isDesktopApp) {
         try {
-          const filesToImport = validFiles
-            .filter((f) => Boolean((f as any).path))
-            .map((f, idx) => ({
-              filePath: (f as any).path as string,
-              trackId: initialTracks[idx].id,
-            }));
-
           const invoke = (window as any).__TAURI__?.core?.invoke;
-          if (invoke && filesToImport.length > 0) {
-            const importResult: { tracks: any[]; errors: string[] } = await invoke('audio_import_tracks', {
-              projectId: targetProjectId,
-              files: filesToImport,
-              targetSampleRate: null,
-            });
+          if (invoke) {
+            const hasPaths = validFiles.some((f) => Boolean((f as any).path));
+            if (hasPaths) {
+              const filesToImport = validFiles
+                .filter((f) => Boolean((f as any).path))
+                .map((f, idx) => ({
+                  filePath: (f as any).path as string,
+                  trackId: initialTracks[idx].id,
+                }));
 
-            for (const meta of importResult.tracks) {
-              const matchedTrack = initialTracks.find((t) => t.id === meta.trackId);
-              if (matchedTrack) {
-                matchedTrack.peaks = meta.peaks;
-                matchedTrack.durationSec = meta.durationSec;
-                matchedTrack.pcm = {
-                  sampleRate: meta.targetSampleRate,
-                  channels: meta.channels,
-                  frames: meta.frameCount,
-                  version: 1,
-                };
-                if (meta.durationSec > headerMaxDurationSec) {
-                  headerMaxDurationSec = meta.durationSec;
+              const importResult: { tracks: any[]; errors: string[] } = await invoke('audio_import_tracks', {
+                projectId: targetProjectId,
+                files: filesToImport,
+                targetSampleRate: null,
+              });
+
+              for (const meta of importResult.tracks) {
+                const matchedTrack = initialTracks.find((t) => t.id === meta.trackId);
+                if (matchedTrack) {
+                  matchedTrack.peaks = meta.peaks;
+                  matchedTrack.durationSec = meta.durationSec;
+                  matchedTrack.pcm = {
+                    sampleRate: meta.targetSampleRate,
+                    channels: meta.channels,
+                    frames: meta.frameCount,
+                    version: 1,
+                  };
+                  if (meta.durationSec > headerMaxDurationSec) {
+                    headerMaxDurationSec = meta.durationSec;
+                  }
+                }
+              }
+            } else {
+              // Si los archivos se seleccionaron mediante el selector HTML o drag-and-drop sin path nativo en Chromium:
+              // No se omite: enviamos los bytes directamente a Rust (audio_import_track_bytes) para asegurar la caché nativa!
+              console.info('[AudioImport][Desktop] Transfiriendo stems a Rust para generar caché nativa...');
+              for (let idx = 0; idx < validFiles.length; idx++) {
+                const file = validFiles[idx];
+                const trackId = initialTracks[idx].id;
+                try {
+                  const arrayBuf = await file.arrayBuffer();
+                  const bytes = Array.from(new Uint8Array(arrayBuf));
+                  const meta: any = await invoke('audio_import_track_bytes', {
+                    projectId: targetProjectId,
+                    trackId,
+                    fileName: file.name,
+                    bytes,
+                    targetSampleRate: null,
+                  });
+                  const matchedTrack = initialTracks.find((t) => t.id === trackId);
+                  if (matchedTrack && meta) {
+                    matchedTrack.peaks = meta.peaks;
+                    matchedTrack.durationSec = meta.durationSec;
+                    matchedTrack.pcm = {
+                      sampleRate: meta.targetSampleRate,
+                      channels: meta.channels,
+                      frames: meta.frameCount,
+                      version: 1,
+                    };
+                    if (meta.durationSec > headerMaxDurationSec) {
+                      headerMaxDurationSec = meta.durationSec;
+                    }
+                  }
+                } catch (byteErr) {
+                  console.warn(`[AudioImport][Desktop] Error importando pista ${trackId} por bytes:`, byteErr);
                 }
               }
             }

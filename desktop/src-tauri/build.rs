@@ -17,6 +17,8 @@ fn main() {
             "audio_get_stats",
             "audio_test_tone",
             "audio_import_tracks",
+            "audio_import_track_bytes",
+            "audio_import_folder",
             "audio_cancel_import",
             "audio_get_project_cache_status",
             "audio_load_project",
