@@ -413,6 +413,9 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
             const cacheInfo = audioEngine.getSongRamCacheInfo(song);
             // Avance real de decodificación (pista N de M) emitido por el motor nativo.
             const liveCacheText = isDesktopApp() ? nativeAudioEngine.formatImportProgress(song.id) : null;
+            // Escritorio: estado real de la caché PCM nativa (no el del motor web).
+            const nativeLiveText = liveCacheText;
+            const nativeReady = isDesktopApp() ? nativeAudioEngine.isNativeCacheReady(song.id) : null;
             const isPcmReady = audioEngine.isProjectPcmReady(song);
             const isStreamSong = audioEngine.getEffectiveEngineModeForProject(song) === 'stream';
             const pcmMB = audioEngine.getProjectPcmEstimatedMB(song);
@@ -533,7 +536,30 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
                     </span>
 
                     <div className="flex items-center gap-1 shrink-0">
-                      {cacheInfo.totalCount > 0 && (
+                      {isDesktopApp() && song.tracks.length > 0 && (
+                        <span
+                          title={
+                            nativeLiveText
+                              ? `Generando la caché de audio nativa: ${nativeLiveText}`
+                              : nativeReady
+                              ? 'Caché de audio nativa lista: suena sin esperas.'
+                              : nativeReady === null
+                              ? 'Comprobando la caché de audio nativa...'
+                              : 'Sin caché de audio nativa: se genera al añadir al setlist o al cargar en el DAW.'
+                          }
+                          className={`px-1.5 py-0.2 rounded text-[11px] font-bold tracking-tight ${
+                            nativeLiveText
+                              ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
+                              : nativeReady
+                              ? 'bg-studio-strip text-studio-ink border border-studio-line'
+                              : 'bg-neutral-800/80 text-neutral-400 border border-neutral-700'
+                          }`}
+                        >
+                          {nativeLiveText ?? (nativeReady ? 'Lista' : nativeReady === null ? 'Comprobando' : 'Sin preparar')}
+                        </span>
+                      )}
+
+                      {!isDesktopApp() && cacheInfo.totalCount > 0 && (
                         <span
                           title={
                             isStreamSong
@@ -568,7 +594,7 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
                         </span>
                       )}
 
-                      {isPcmReady ? (
+                      {isDesktopApp() ? null : isPcmReady ? (
                         <span
                           title={`Guardada en el disco del navegador (OPFS, ~${pcmMB} MB)`}
                           className="px-1.5 py-0.2 rounded text-[11px] font-bold bg-studio-strip text-studio-ink border border-studio-line"
@@ -611,7 +637,7 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
                       >
                         Montar en consola (00:00)
                       </button>
-                      {!isPcmReady && song.tracks.length > 0 && (
+                      {!isDesktopApp() && !isPcmReady && song.tracks.length > 0 && (
                         <button
                           type="button"
                           onClick={(event) => {

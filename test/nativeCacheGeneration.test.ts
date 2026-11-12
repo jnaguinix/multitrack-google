@@ -148,6 +148,37 @@ async function main() {
   assert(engine.isProjectImporting(project.id) === false, 'tras el fallo no queda importando');
   console.log('OK 6: fallo notificado y estado limpio:', notices[0]);
 
+  // 7. Estado síncrono de la caché nativa para pintar las tarjetas del setlist/En vivo.
+  //    - null hasta que se consulta; luego true/false según el backend.
+  //    - se notifica a los suscriptores solo cuando el valor cambia.
+  //    - al terminar de generar queda en true sin que nadie tenga que volver a consultar.
+  const p2: any = { ...project, id: 'song-2' };
+  assert(engine.isNativeCacheReady(p2.id) === null, '7a: sin consulta previa -> null');
+  let notified = 0;
+  const unsub = engine.subscribeCache(() => notified++);
+
+  cacheReady = false;
+  await engine.checkProjectCacheStatus(p2);
+  assert(engine.isNativeCacheReady(p2.id) === false, '7b: tras consultar sin caché -> false');
+  assert(notified >= 1, '7b: el cambio null->false se notifica');
+
+  assert((await engine.generateNativeCacheForProject(p2)) === true, '7c: genera');
+  assert(engine.isNativeCacheReady(p2.id) === true, '7c: tras generar -> true sin consultar de nuevo');
+
+  const antes = notified;
+  await engine.checkProjectCacheStatus(p2);
+  assert(notified === antes, '7d: consultar sin cambios NO notifica (evita redibujados en bucle)');
+
+  cacheReady = false;
+  await engine.checkProjectCacheStatus(p2);
+  assert(engine.isNativeCacheReady(p2.id) === false, '7e: caché borrada -> false');
+  assert(notified > antes, '7e: el cambio true->false se notifica');
+
+  await engine.refreshCacheStatuses([p2, { ...project, id: 'song-3' } as any]);
+  assert(engine.isNativeCacheReady('song-3') === false, '7f: refreshCacheStatuses consulta varias canciones');
+  unsub();
+  console.log('OK 7: estado nativo síncrono, notificación solo al cambiar, refresco múltiple');
+
   console.log('\nTODAS LAS PRUEBAS PASARON');
   process.exit(0);
 }

@@ -92,6 +92,10 @@ export class NativeAudioEngine {
 
   private importProgressByProject = new Map<string, NativeImportProgress>();
   private generatingCachePromises = new Map<string, Promise<boolean>>();
+  /** Último estado conocido de la caché PCM nativa por proyecto (para pintar la interfaz de forma síncrona). */
+  private nativeReadyByProject = new Map<string, boolean>();
+  /** Pistas de cada proyecto, para poder re-consultar el estado al terminar una importación. */
+  private trackIdsByProject = new Map<string, string[]>();
   private playPendingProjectId: string | null = null;
 
   constructor() {
@@ -129,6 +133,7 @@ export class NativeAudioEngine {
 
       if (completed) {
         console.info(`[NativeAudioEngine] Importación de caché completada para proyecto '${projId}'`);
+        this.recheckKnownProject(projId);
       }
     }).catch((err: any) => {
       console.warn('[NativeAudioEngine] Error suscribiendo a audio://import-progress:', err);
@@ -165,6 +170,37 @@ export class NativeAudioEngine {
       totalTracks: prev?.totalTracks ?? 0,
     });
     this.notifyCache();
+    this.recheckKnownProject(projectId);
+  }
+
+  /**
+   * Estado conocido de la caché PCM nativa: `null` si aún no se consultó, `true`/`false` según el último
+   * resultado del backend. Es síncrono para poder usarlo al renderizar tarjetas.
+   */
+  public isNativeCacheReady(projectId: string): boolean | null {
+    const v = this.nativeReadyByProject.get(projectId);
+    return v === undefined ? null : v;
+  }
+
+  /** Guarda el estado y avisa a los suscriptores solo si cambió (evita redibujados en bucle). */
+  private setNativeReady(projectId: string, ready: boolean): void {
+    const prev = this.nativeReadyByProject.get(projectId);
+    this.nativeReadyByProject.set(projectId, ready);
+    if (prev !== ready) this.notifyCache();
+  }
+
+  /** Re-consulta el estado de un proyecto cuyas pistas ya conocemos (p. ej. al terminar una importación). */
+  private recheckKnownProject(projectId: string): void {
+    const trackIds = this.trackIdsByProject.get(projectId);
+    if (!trackIds) return;
+    this.queryCacheStatus(projectId, trackIds).catch((err) => {
+      console.error(`[NativeAudioEngine] Error re-consultando la caché de '${projectId}':`, err);
+    });
+  }
+
+  /** Consulta varias canciones a la vez (p. ej. el setlist al abrir la app o al cambiar). */
+  public async refreshCacheStatuses(projects: SongProject[]): Promise<void> {
+    await Promise.all(projects.map((p) => this.checkProjectCacheStatus(p)));
   }
 
   /** Texto "Pista N de M · P%" a partir del avance real emitido por el backend. */
@@ -601,24 +637,37 @@ export class NativeAudioEngine {
     }
   }
 
-  public async checkProjectCacheStatus(project: SongProject): Promise<{ isReady: boolean; cachedCount: number; totalCount: number }> {
+  /** Consulta al backend y actualiza el estado síncrono. Lanza si el backend falla. */
+  private async queryCacheStatus(
+    projectId: string,
+    trackIds: string[]
+  ): Promise<{ isReady: boolean; cachedCount: number; totalCount: number }> {
     const invoke = getInvoke();
-    if (!invoke) return { isReady: false, cachedCount: 0, totalCount: project.tracks.length };
+    if (!invoke) return { isReady: false, cachedCount: 0, totalCount: trackIds.length };
 
+    const res: any = await invoke('audio_get_project_cache_status', {
+      projectId,
+      sampleRate: null,
+      trackIds,
+    });
+    const isReady = Boolean(res?.isReady);
+    this.setNativeReady(projectId, isReady);
+    return {
+      isReady,
+      cachedCount: res?.cachedTracksCount || 0,
+      totalCount: res?.totalTracksCount || trackIds.length,
+    };
+  }
+
+  public async checkProjectCacheStatus(project: SongProject): Promise<{ isReady: boolean; cachedCount: number; totalCount: number }> {
+    const trackIds = project.tracks.map((t) => t.id);
+    this.trackIdsByProject.set(project.id, trackIds);
     try {
-      const res: any = await invoke('audio_get_project_cache_status', {
-        projectId: project.id,
-        sampleRate: null,
-        trackIds: project.tracks.map((t) => t.id),
-      });
-      return {
-        isReady: Boolean(res?.isReady),
-        cachedCount: res?.cachedTracksCount || 0,
-        totalCount: res?.totalTracksCount || project.tracks.length,
-      };
+      return await this.queryCacheStatus(project.id, trackIds);
     } catch (err) {
       console.error(`[NativeAudioEngine] Error consultando el estado de la caché de '${project.id}':`, err);
-      return { isReady: false, cachedCount: 0, totalCount: project.tracks.length };
+      this.setNativeReady(project.id, false);
+      return { isReady: false, cachedCount: 0, totalCount: trackIds.length };
     }
   }
 
@@ -651,6 +700,7 @@ export class NativeAudioEngine {
       }
     }
 
+    this.trackIdsByProject.set(project.id, project.tracks.map((t) => t.id));
     this.markImportStarted(project.id, 'Preparando decodificación...', project.tracks.length);
     const unsubscribe = this.forwardRealProgress(project.id, onProgress);
     const task = this.runGenerateNativeCache(project, onProgress).finally(() => {
@@ -723,6 +773,7 @@ export class NativeAudioEngine {
           if (res?.tracks && res.tracks.length > 0) {
             onProgress?.(100, `¡Caché nativa generada para ${res.tracks.length} pistas!`);
             this.notifyCache();
+            await this.checkProjectCacheStatus(project);
             return true;
           }
         }
@@ -758,6 +809,7 @@ export class NativeAudioEngine {
         if (completed > 0) {
           onProgress?.(100, `¡Caché nativa generada para ${completed} pistas!`);
           this.notifyCache();
+          await this.checkProjectCacheStatus(project);
           return true;
         }
       }
@@ -797,6 +849,7 @@ export class NativeAudioEngine {
       if (res?.tracks && res.tracks.length > 0) {
         onProgress?.(100, `¡Caché nativa generada para ${res.tracks.length} pistas!`);
         this.notifyCache();
+        await this.checkProjectCacheStatus(project);
         return true;
       }
 
