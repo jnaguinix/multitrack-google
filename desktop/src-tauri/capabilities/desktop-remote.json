@@ -14,6 +14,8 @@
     "allow-desktop-update-download",
     "allow-desktop-update-install",
     "dialog:allow-open",
+    "core:event:allow-listen",
+    "core:event:allow-unlisten",
     "allow-audio-list-hosts",
     "allow-audio-list-devices",
     "allow-audio-get-config",
