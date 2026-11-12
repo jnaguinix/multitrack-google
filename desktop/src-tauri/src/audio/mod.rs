@@ -141,14 +141,16 @@ pub async fn audio_import_tracks(
         .map(|n| (n.get() / 2).clamp(2, 4))
         .unwrap_or(2);
     let semaphore = Arc::new(tokio::sync::Semaphore::new(concurrency));
+    let tracker = Arc::new(import::ImportProgressTracker::new(total_tracks));
     let mut tasks = Vec::new();
 
-    for (idx, file) in files.into_iter().enumerate() {
+    for file in files.into_iter() {
         let sem = Arc::clone(&semaphore);
         let flag = Arc::clone(&cancel_flag);
         let app_clone = app.clone();
         let local_data_clone = local_data.clone();
         let proj_id_clone = project_id.clone();
+        let tracker_clone = Arc::clone(&tracker);
 
         tasks.push(tokio::spawn(async move {
             let permit = sem.acquire_owned().await.map_err(|e| e.to_string())?;
@@ -164,27 +166,34 @@ pub async fn audio_import_tracks(
                 .unwrap_or("Pista")
                 .to_string();
 
-            let _ = app_clone.emit(
-                "audio://import-progress",
-                ImportProgressEvent {
-                    project_id: proj_id_clone.clone(),
-                    track_index: idx,
-                    total_tracks,
-                    track_name: track_name.clone(),
-                    percent: (idx as f32 / total_tracks.max(1) as f32) * 100.0,
-                    completed: false,
-                },
-            );
-
+            let track_name_for_event = track_name.clone();
             let res = tokio::task::spawn_blocking(move || {
                 let _permit_guard = permit;
-                import::decode_and_cache_track(
+                let on_phase = |phase: import::ImportPhase| {
+                    let (percent, finished) = tracker_clone.advance(phase);
+                    if let Err(e) = app_clone.emit(
+                        "audio://import-progress",
+                        ImportProgressEvent {
+                            project_id: proj_id_clone.clone(),
+                            // Pistas ya terminadas (no el índice de esta pista): los hilos van en paralelo.
+                            track_index: finished,
+                            total_tracks,
+                            track_name: track_name_for_event.clone(),
+                            percent,
+                            completed: false,
+                        },
+                    ) {
+                        tracing::warn!("No se pudo emitir el progreso de importación: {e}");
+                    }
+                };
+                import::decode_and_cache_track_with_progress(
                     &local_data_clone,
                     &proj_id_clone,
                     &file.track_id,
                     &input_path,
                     sample_rate,
                     Some(&flag),
+                    &on_phase,
                 )
             })
             .await
@@ -220,7 +229,7 @@ pub async fn audio_import_tracks(
 
     let is_cancelled = cancel_flag.load(std::sync::atomic::Ordering::Relaxed);
     if !is_cancelled {
-        let _ = app.emit(
+        if let Err(e) = app.emit(
             "audio://import-progress",
             ImportProgressEvent {
                 project_id: project_id.clone(),
@@ -230,7 +239,9 @@ pub async fn audio_import_tracks(
                 percent: 100.0,
                 completed: true,
             },
-        );
+        ) {
+            tracing::warn!("No se pudo emitir el evento final de importación: {e}");
+        }
     }
 
     Ok(ImportResult { tracks, errors })

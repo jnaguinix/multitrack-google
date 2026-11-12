@@ -24,6 +24,63 @@ pub struct ImportResult {
     pub errors: Vec<String>,
 }
 
+/// Fases por las que pasa cada pista durante la generación de la caché. Cada una cuenta como una
+/// «unidad» de progreso, así el porcentaje avanza 4 veces por pista en vez de saltar por pista.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ImportPhase {
+    Decoded,
+    Resampled,
+    Quantized,
+    Written,
+}
+
+impl ImportPhase {
+    pub const ALL: [ImportPhase; 4] = [
+        ImportPhase::Decoded,
+        ImportPhase::Resampled,
+        ImportPhase::Quantized,
+        ImportPhase::Written,
+    ];
+}
+
+/// Contador de progreso compartido entre los hilos de importación (sin dependencias de Tauri).
+/// El porcentaje nunca llega a 100: ese valor lo marca el evento final de «completado».
+pub struct ImportProgressTracker {
+    total_units: usize,
+    units: std::sync::atomic::AtomicUsize,
+    finished_tracks: std::sync::atomic::AtomicUsize,
+}
+
+impl ImportProgressTracker {
+    pub const UNITS_PER_TRACK: usize = ImportPhase::ALL.len();
+    /// Tope mientras queden pistas por terminar.
+    pub const MAX_PERCENT_BEFORE_DONE: f32 = 99.0;
+
+    pub fn new(total_tracks: usize) -> Self {
+        Self {
+            total_units: total_tracks * Self::UNITS_PER_TRACK,
+            units: std::sync::atomic::AtomicUsize::new(0),
+            finished_tracks: std::sync::atomic::AtomicUsize::new(0),
+        }
+    }
+
+    /// Registra una fase terminada. Devuelve `(porcentaje, pistas_terminadas)` tras contarla.
+    pub fn advance(&self, phase: ImportPhase) -> (f32, usize) {
+        let units = self.units.fetch_add(1, Ordering::SeqCst) + 1;
+        let finished = if phase == ImportPhase::Written {
+            self.finished_tracks.fetch_add(1, Ordering::SeqCst) + 1
+        } else {
+            self.finished_tracks.load(Ordering::SeqCst)
+        };
+        let percent = if self.total_units == 0 {
+            0.0
+        } else {
+            (units as f32 / self.total_units as f32 * 100.0).min(Self::MAX_PERCENT_BEFORE_DONE)
+        };
+        (percent, finished)
+    }
+}
+
 /// Fast pseudo-random number generator for TPDF dither (xorshift64star).
 pub struct TpdfDitherRng(u64);
 
@@ -280,6 +337,28 @@ pub fn decode_and_cache_track(
     target_sample_rate: u32,
     cancel_flag: Option<&AtomicBool>,
 ) -> Result<TrackPcmMetadata, String> {
+    decode_and_cache_track_with_progress(
+        base_dir,
+        project_id,
+        track_id,
+        input_file_path,
+        target_sample_rate,
+        cancel_flag,
+        &|_| {},
+    )
+}
+
+/// Igual que [`decode_and_cache_track`], pero avisa con `on_phase` cada vez que termina una fase.
+/// Un acierto de caché emite las cuatro fases de golpe.
+pub fn decode_and_cache_track_with_progress(
+    base_dir: &Path,
+    project_id: &str,
+    track_id: &str,
+    input_file_path: &Path,
+    target_sample_rate: u32,
+    cancel_flag: Option<&AtomicBool>,
+    on_phase: &dyn Fn(ImportPhase),
+) -> Result<TrackPcmMetadata, String> {
     let t_total_start = std::time::Instant::now();
 
     // 0. Cache hit check: if file is already converted and original file hasn't changed, reuse!
@@ -291,6 +370,9 @@ pub fn decode_and_cache_track(
                 input_file_path.file_name().unwrap_or_default().to_string_lossy(),
                 t_total_start.elapsed()
             );
+            for phase in ImportPhase::ALL {
+                on_phase(phase);
+            }
             return Ok(cached_meta);
         }
     }
@@ -319,6 +401,7 @@ pub fn decode_and_cache_track(
     if decoded_channels.is_empty() || decoded_channels[0].is_empty() {
         return Err(format!("El archivo de audio {:?} no contiene muestras audibles", input_file_path));
     }
+    on_phase(ImportPhase::Decoded);
 
     if let Some(flag) = cancel_flag {
         if flag.load(Ordering::Relaxed) {
@@ -359,6 +442,7 @@ pub fn decode_and_cache_track(
         working_channels
     };
     let dur_resample = t_resample_start.elapsed();
+    on_phase(ImportPhase::Resampled);
 
     if let Some(flag) = cancel_flag {
         if flag.load(Ordering::Relaxed) {
@@ -415,6 +499,8 @@ pub fn decode_and_cache_track(
         }
     }
 
+    on_phase(ImportPhase::Quantized);
+
     let now_iso = {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -445,6 +531,7 @@ pub fn decode_and_cache_track(
     write_track_pcm_and_metadata(base_dir, project_id, &metadata, &pcm_samples)?;
     let dur_write = t_write_start.elapsed();
     let dur_total = t_total_start.elapsed();
+    on_phase(ImportPhase::Written);
 
     tracing::info!(
         "[Import Perf] Pista '{}' ({}): lectura={:?}, decodificación={:?}, remuestreo={:?}, escritura={:?}, total={:?}",
@@ -998,5 +1085,87 @@ mod tests {
         assert!(fallos.is_empty(), "El PCM cambió:
 {}", fallos.join("
 "));
+    }
+
+
+    #[test]
+    fn test_progress_tracker_monotono_y_40_pasos_para_10_pistas() {
+        let t = ImportProgressTracker::new(10);
+        let mut last = 0.0f32;
+        let mut pasos = 0;
+        for _ in 0..10 {
+            for phase in ImportPhase::ALL {
+                let (p, _) = t.advance(phase);
+                assert!(p >= last, "el porcentaje retrocedió: {last} -> {p}");
+                last = p;
+                pasos += 1;
+            }
+        }
+        assert_eq!(pasos, 40);
+        assert_eq!(last, ImportProgressTracker::MAX_PERCENT_BEFORE_DONE);
+    }
+
+    #[test]
+    fn test_progress_tracker_tope_en_99_y_pistas_terminadas() {
+        let t = ImportProgressTracker::new(2);
+        let mut ultimo = (0.0, 0);
+        for _ in 0..2 {
+            for phase in ImportPhase::ALL {
+                ultimo = t.advance(phase);
+                assert!(ultimo.0 <= 99.0);
+            }
+        }
+        assert_eq!(ultimo, (99.0, 2));
+        // Pasarse de unidades tampoco supera el tope.
+        assert_eq!(t.advance(ImportPhase::Decoded).0, 99.0);
+    }
+
+    #[test]
+    fn test_progress_tracker_sin_pistas_no_divide_por_cero() {
+        let t = ImportProgressTracker::new(0);
+        let (p, f) = t.advance(ImportPhase::Decoded);
+        assert_eq!((p, f), (0.0, 0));
+    }
+
+    #[test]
+    fn test_progress_tracker_desde_varios_hilos() {
+        let t = std::sync::Arc::new(ImportProgressTracker::new(8));
+        let handles: Vec<_> = (0..4)
+            .map(|_| {
+                let t = std::sync::Arc::clone(&t);
+                std::thread::spawn(move || {
+                    for _ in 0..2 {
+                        for phase in ImportPhase::ALL {
+                            t.advance(phase);
+                        }
+                    }
+                })
+            })
+            .collect();
+        for h in handles {
+            h.join().unwrap();
+        }
+        let (_, finished) = t.advance(ImportPhase::Decoded);
+        assert_eq!(finished, 8);
+    }
+
+    #[test]
+    fn test_with_progress_emite_las_cuatro_fases_en_orden() {
+        let temp_dir = std::env::temp_dir().join(format!("omnitracks_phase_test_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        std::fs::create_dir_all(&temp_dir).unwrap();
+        let wav_path = temp_dir.join("fases.wav");
+        let samples: Vec<i16> = (0..4410).map(|i| ((i % 300) as i16) * 30).collect();
+        write_test_wav_16bit(&wav_path, 44100, 2, &samples);
+
+        let vistas = std::cell::RefCell::new(Vec::new());
+        decode_and_cache_track_with_progress(&temp_dir, "p", "t", &wav_path, 48000, None, &|f| vistas.borrow_mut().push(f)).unwrap();
+        assert_eq!(*vistas.borrow(), ImportPhase::ALL.to_vec());
+
+        // Segunda vez: acierto de caché, también emite las cuatro.
+        vistas.borrow_mut().clear();
+        decode_and_cache_track_with_progress(&temp_dir, "p", "t", &wav_path, 48000, None, &|f| vistas.borrow_mut().push(f)).unwrap();
+        assert_eq!(*vistas.borrow(), ImportPhase::ALL.to_vec());
+
+        let _ = std::fs::remove_dir_all(temp_dir);
     }
 }
