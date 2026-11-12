@@ -141,8 +141,14 @@ type StudioFaderProps = {
   gain: number;
   onChangeGain: (nextGain: number) => void;
 } & (
-  | { peak: number; levelL?: never; levelR?: never }
-  | { peak?: never; levelL: number; levelR: number }
+  | { peak: number; levelL?: never; levelR?: never; dbScale?: never }
+  | {
+      peak?: never;
+      levelL: number;
+      levelR: number;
+      /** Niveles en la escala dBFS de los medidores de pista: usa sus mismas zonas de color. */
+      dbScale?: boolean;
+    }
 );
 
 function peakPosition(dbfs: number): number {
@@ -159,6 +165,7 @@ const StudioFader: React.FC<StudioFaderProps> = ({
   peak,
   levelL,
   levelR,
+  dbScale,
   onChangeGain,
 }) => {
   const faderRef = useRef<HTMLDivElement | null>(null);
@@ -266,11 +273,11 @@ const StudioFader: React.FC<StudioFaderProps> = ({
           </>
         ) : (
           <>
-            <div className="lt-meter" aria-hidden="true">
+            <div className={`lt-meter${dbScale ? ' lt-db-meter' : ''}`} aria-hidden="true">
               <i />
               <s style={{ height: meterMask(levelL) }} />
             </div>
-            <div className="lt-meter" aria-hidden="true">
+            <div className={`lt-meter${dbScale ? ' lt-db-meter' : ''}`} aria-hidden="true">
               <i />
               <s style={{ height: meterMask(levelR) }} />
             </div>
@@ -414,6 +421,19 @@ export const MultitrackMixer: React.FC<MultitrackMixerProps> = ({
     ? Math.min(1, maxCueBusLevel * activityFromGain(cueMasterGain) * 1.05)
     : 0;
 
+  // Escritorio: el motor nativo mide los buses de verdad. Se muestran en la misma escala en dBFS
+  // que los medidores de pista. En la web se mantiene la estimación anterior.
+  const nb = transport.isPlaying ? meters.nativeBuses ?? null : null;
+  const busPos = (x: number) => peakPosition(x > 0 ? 20 * Math.log10(x) : -Infinity);
+  const stripLevels = (native: { l: number; r: number } | undefined, est: number, rFactor: number) =>
+    nb && native ? { l: busPos(native.l), r: busPos(native.r) } : { l: est, r: est * rFactor };
+  const clickLevels = stripLevels(nb?.click, clickStripLevel, 0.96);
+  const guideLevels = stripLevels(nb?.guide, guideStripLevel, 0.95);
+  const mainLevels = stripLevels(nb?.main, mainBusOutLevel, 0.95);
+  const cueLevels = stripLevels(nb?.cue, cueBusOutLevel, 0.95);
+  // Con niveles nativos la escala es dBFS: amarillo desde −6 dBFS y rojo desde −1 dBFS, como en las pistas.
+  const nativeScale = Boolean(meters.nativeBuses);
+
   // Check if user already imported custom tracks named "Click" or "Guía" / "Cues"
   const hasCustomClickTrack = project.tracks.some((t) => {
     if (t.role === 'click') return true;
@@ -555,8 +575,9 @@ export const MultitrackMixer: React.FC<MultitrackMixerProps> = ({
               <StudioFader
                 name="Click"
                 gain={project.clickGain}
-                levelL={clickStripLevel}
-                levelR={clickStripLevel * 0.96}
+                levelL={clickLevels.l}
+                levelR={clickLevels.r}
+                dbScale={nativeScale}
                 onChangeGain={onChangeClickGain}
               />
 
@@ -614,8 +635,9 @@ export const MultitrackMixer: React.FC<MultitrackMixerProps> = ({
               <StudioFader
                 name="Guía"
                 gain={project.guideGain}
-                levelL={guideStripLevel}
-                levelR={guideStripLevel * 0.95}
+                levelL={guideLevels.l}
+                levelR={guideLevels.r}
+                dbScale={nativeScale}
                 onChangeGain={onChangeGuideGain}
               />
 
@@ -668,8 +690,9 @@ export const MultitrackMixer: React.FC<MultitrackMixerProps> = ({
             <StudioFader
               name="Main L/R"
               gain={project.masterGain}
-              levelL={mainBusOutLevel}
-              levelR={mainBusOutLevel * 0.95}
+              levelL={mainLevels.l}
+              levelR={mainLevels.r}
+              dbScale={nativeScale}
               onChangeGain={onChangeMasterGain}
             />
           </div>
@@ -686,8 +709,9 @@ export const MultitrackMixer: React.FC<MultitrackMixerProps> = ({
             <StudioFader
               name="Click / Cue"
               gain={cueMasterGain}
-              levelL={cueBusOutLevel}
-              levelR={cueBusOutLevel * 0.95}
+              levelL={cueLevels.l}
+              levelR={cueLevels.r}
+              dbScale={nativeScale}
               onChangeGain={onChangeCueMasterGain}
             />
           </div>

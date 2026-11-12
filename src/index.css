@@ -1256,6 +1256,9 @@
 .lt-meter s { z-index: 1; }
 .lt-peak-meter i::before { height: 10%; }
 .lt-peak-meter i::after { height: 1.67%; }
+/* Medidores de bus con niveles nativos en dBFS: mismas zonas que las pistas (−6 y −1 dBFS sobre −60..0). */
+.lt-db-meter i::before { height: 10%; }
+.lt-db-meter i::after { height: 1.67%; }
 
 @media (max-width: 420px) {
   .lt-transport .lt-icon-control { width: 29px; }

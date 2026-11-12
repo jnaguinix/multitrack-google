@@ -41,7 +41,7 @@ desktop/src-tauri/src/audio/playback/
 ├── guide.rs        # GuideCueEngine: síntesis y renderizado de cues vocales de guía para saltos de sección
 ├── jumps.rs        # queue_section_jump, cancel_queued_jump, toggle_vamp (impl PlaybackEngine)
 ├── transport.rs    # play, pause, stop, seek, get_playback_state, reopen_stream (impl PlaybackEngine)
-├── types.rs        # NativeSongSection, QueuedJumpInfo, ActiveTrack, PlaybackStateSnapshot, etc.
+├── types.rs        # NativeSongSection, QueuedJumpInfo, ActiveTrack, PlaybackStateSnapshot, PeakMeter/BusMeters (medidores), etc.
 └── tests.rs        # Suite completa de pruebas unitarias y benchmarks de audio
 ```
 
@@ -126,6 +126,7 @@ src/hooks/
 3. **Añadir al Setlist**: `handleAddToSetlist` (TS, `useSetlist.ts`) añade la canción a `setlistQueue`. Verifica la caché con `nativeAudioEngine.checkProjectCacheStatus` (`audio_get_project_cache_status`). Si `isReady == false`, invoca `nativeAudioEngine.generateNativeCacheForProject`.
 4. **Caché PCM**: `audio_import_tracks` (`audio/mod.rs`) decodifica cada stem con `import::decode_and_cache_track` (`audio/import.rs`), remuestrea al `target_sample_rate` y escribe `stem-*.pcm` y `stem-*.json` en disco vía `cache::write_track_pcm_and_metadata` (`audio/cache.rs`), emitiendo eventos `audio://import-progress`.
 5. **Reproducir**: `activateProject` invoca `nativeAudioEngine.loadProject` (`audio_load_project`). `PlaybackEngine::load_project` prellena los buffers circulares `rtrb` mediante los hilos feeder (`playback/feeder_io.rs`). `audio_play` inicia el micro-fundido de 8 ms y el callback de salida CPAL en `ensure_stream` (`playback/mod.rs`) entrega las muestras a WASAPI sin alocaciones ni bloqueos.
+6. **Medidores**: el callback guarda el pico post-fader de cada pista y de los buses (Main, Cue, salida, click, guía) en `PeakMeter` atómicos (`playback/types.rs`), una vez por bloque. `get_playback_state` (`playback/transport.rs`) los lee y pone a cero sin tocar `stream_tracks`, y viajan en el campo `meters` de `audio_get_playback_state`. En TS, `MeterBallistics` (`src/audio/meterBallistics.ts`) aplica una caída de ~20 dB/s y `nativeAudioEngine.getTrackMeters` los entrega a Arreglo y Mezcla.
 
 ---
 

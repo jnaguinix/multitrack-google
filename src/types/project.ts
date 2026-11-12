@@ -117,9 +117,21 @@ export interface TrackMeterReading {
   clipping: boolean;
 }
 
+/** Niveles reales por bus del motor nativo (pico lineal con caída, 1.0 = 0 dBFS). */
+export interface NativeBusLevels {
+  main: { l: number; r: number };
+  cue: { l: number; r: number };
+  out: { l: number; r: number };
+  click: { l: number; r: number };
+  guide: { l: number; r: number };
+  clipping: boolean;
+}
+
 export interface MetersSnapshot {
   tracks: Record<string, TrackMeterReading>;
   master: TrackMeterReading;
+  /** Solo en escritorio: niveles medidos por bus. Si falta, las vistas usan su estimación de siempre. */
+  nativeBuses?: NativeBusLevels | null;
 }
 
 export type RemoteSyncMessage =

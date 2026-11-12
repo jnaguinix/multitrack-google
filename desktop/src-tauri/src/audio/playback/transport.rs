@@ -4,7 +4,7 @@ use std::time::Instant;
 use crate::audio::output::AudioEngineState;
 
 use super::fade::FADE_MS;
-use super::types::PlaybackStateSnapshot;
+use super::types::{LevelPair, MetersSnapshotDto, PlaybackStateSnapshot, TrackLevel};
 use super::PlaybackEngine;
 
 impl PlaybackEngine {
@@ -129,6 +129,7 @@ impl PlaybackEngine {
         let queued_section_id = queued_guard.as_ref().map(|q| q.target_section_id.clone());
 
         let met = self.metronome.lock().unwrap();
+        let meters = self.take_meters();
 
         PlaybackStateSnapshot {
             is_playing: self.is_playing.load(Ordering::SeqCst),
@@ -162,6 +163,34 @@ impl PlaybackEngine {
             split_mono: self.split_mono.load(Ordering::SeqCst),
             master_gain: f32::from_bits(self.master_gain.load(Ordering::Relaxed)),
             cue_master_gain: f32::from_bits(self.cue_master_gain.load(Ordering::Relaxed)),
+            meters,
+        }
+    }
+
+    /// Lee y pone a cero los picos de pistas y buses (pico desde la lectura anterior).
+    /// Nunca bloquea `stream_tracks` (el callback hace `try_lock` sobre él y emitiría silencio):
+    /// recorre la lista de control `tracks`. Si está ocupada (carga en curso), devuelve solo los
+    /// buses; los picos de pista no se pierden, se leen en la siguiente consulta.
+    pub fn take_meters(&self) -> MetersSnapshotDto {
+        let tracks = match self.tracks.try_lock() {
+            Ok(guard) => guard
+                .iter()
+                .map(|t| {
+                    let (l, r) = t.meter.take();
+                    TrackLevel { track_id: t.track_id.clone(), l, r }
+                })
+                .collect(),
+            Err(_) => Vec::new(),
+        };
+        let out: LevelPair = self.bus_meters.out.take().into();
+        MetersSnapshotDto {
+            tracks,
+            main: self.bus_meters.main.take().into(),
+            cue: self.bus_meters.cue.take().into(),
+            click: self.bus_meters.click.take().into(),
+            guide: self.bus_meters.guide.take().into(),
+            clipped: out.l > 1.0 || out.r > 1.0,
+            out,
         }
     }
 }
