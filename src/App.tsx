@@ -12,6 +12,7 @@ import { useProjectActions } from './hooks/useProjectActions';
 import { useSetlist } from './hooks/useSetlist';
 import { useImportFlow } from './hooks/useImportFlow';
 import { useMixerActions } from './hooks/useMixerActions';
+import { useDawDragDrop } from './hooks/useDawDragDrop';
 import {
   deleteProjectFromDb,
   loadAllProjectsFromDb,
@@ -55,16 +56,12 @@ import {
   isProjectPcmComplete,
 } from './storage/opfsStorage';
 import {
-  extractAudioFilesWithHandlesFromDataTransfer,
   getRegisteredHandle,
   isFsAccessSupported,
 } from './storage/sourceFiles';
 import {
   PcmOptimizationProgress,
 } from './storage/pcmOptimizer';
-import {
-  extractAudioFilesFromDataTransfer,
-} from './utils/fileImportHelper';
 import {
   ConfirmSongActionModal,
   inferTrackRoleAndColor,
@@ -960,55 +957,19 @@ export default function App() {
     showToast(`"${song.title}" eliminada de la biblioteca (archivos originales intactos)`);
   };
 
-  // Drag-and-Drop on DAW Workspace (Handles both Repertoire Song Drag & Audio File Drag)
-  const handleDragOverDaw = (e: React.DragEvent) => {
-    e.preventDefault();
-    if (
-      e.dataTransfer.types.includes('application/x-omnitracks-song-id') &&
-      !e.dataTransfer.types.includes('application/x-omnitracks-setlist-index')
-    ) {
-      setDragOverlayMode('repertoire-song');
-    } else if (e.dataTransfer.types.includes('Files')) {
-      setDragOverlayMode('files');
-    }
-  };
-
-  const handleDragLeaveDaw = (e: React.DragEvent) => {
-    if (e.currentTarget === e.target) {
-      setDragOverlayMode(null);
-    }
-  };
-
-  const handleDropOnDaw = async (e: React.DragEvent) => {
-    e.preventDefault();
-    setDragOverlayMode(null);
-
-    const songId = e.dataTransfer.getData('application/x-omnitracks-song-id');
-    if (songId) {
-      handleAddToSetlist(songId);
-      handleLoadProjectImmediately(songId, false);
-      return;
-    }
-
-    // Start both extractors synchronously (DataTransfer is only valid during the event)
-    const withHandles = extractAudioFilesWithHandlesFromDataTransfer(e.dataTransfer);
-    const classic = extractAudioFilesFromDataTransfer(e.dataTransfer);
-    const handleFiles = await withHandles;
-    const audioFiles = handleFiles.length > 0 ? handleFiles : await classic;
-    if (audioFiles.length > 0) {
-      const hasPaths = audioFiles.some((f) => Boolean((f as any).path));
-      if (isDesktopApp && hasPaths) {
-        const filePaths = audioFiles.map((f) => (f as any).path as string).filter(Boolean);
-        if (filePaths.length > 0) {
-          handleImportNative({ filePaths }, 'main', 'new-song');
-          return;
-        }
-      }
-      handleInstantImportFiles(audioFiles, 'main', 'new-song');
-    } else {
-      showToast('No se encontraron archivos de audio compatibles (.wav, .mp3, .ogg, .flac, .m4a)');
-    }
-  };
+  const {
+    handleDragOverDaw,
+    handleDragLeaveDaw,
+    handleDropOnDaw,
+  } = useDawDragDrop({
+    setDragOverlayMode,
+    handleAddToSetlist,
+    handleLoadProjectImmediately,
+    isDesktopApp,
+    handleImportNative,
+    handleInstantImportFiles,
+    showToast,
+  });
 
   const transportProject = activeView === 'live' ? null : currentProject;
   const remoteTriggerRef = DesktopRemoteBridge && window.location.origin === 'https://tauri.localhost'
