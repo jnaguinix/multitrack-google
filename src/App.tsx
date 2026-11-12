@@ -203,7 +203,7 @@ export default function App() {
   const lastBroadcastTransportMsRef = useRef<number>(0);
   const currentProjectRef = useRef<SongProject | null>(currentProject);
   currentProjectRef.current = currentProject;
-  const projectsRef = useRef<SongProject[]>(projects);
+  const projectsRef = useRef<SongProject[]>([]);
   useEffect(() => {
     projectsRef.current = projects;
   }, [projects]);
