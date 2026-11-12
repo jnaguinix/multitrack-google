@@ -159,28 +159,35 @@ pub fn resample_channels(
         .map_err(|e| format!("Error creando resampler: {e}"))?;
 
     let in_frames = channels[0].len();
-    let mut out_channels: Vec<Vec<f32>> = vec![Vec::new(); n_channels];
+    // Capacidad de salida reservada de una vez (un bloque extra por el relleno del último).
+    let out_capacity = ((in_frames as f64) * (to_rate as f64) / (from_rate as f64)).ceil() as usize + chunk_size;
+    let mut out_channels: Vec<Vec<f32>> = (0..n_channels).map(|_| Vec::with_capacity(out_capacity)).collect();
+
+    // Búferes de entrada y salida reutilizados en cada bloque (antes se reservaban y ponían a cero cada vez).
+    let mut in_chunk: Vec<Vec<f32>> = Vec::new();
+    let mut out_chunk = resampler.output_buffer_allocate(true);
 
     let mut pos = 0;
     while pos < in_frames {
         let needed = resampler.input_frames_next();
-        let mut in_chunk = vec![vec![0.0f32; needed]; n_channels];
+        if in_chunk.len() != n_channels || in_chunk[0].len() != needed {
+            in_chunk = vec![vec![0.0f32; needed]; n_channels];
+        }
         let remaining = in_frames - pos;
         let take = remaining.min(needed);
 
+        // El último bloque se rellena con ceros, igual que antes.
         for ch in 0..n_channels {
-            for i in 0..take {
-                in_chunk[ch][i] = channels[ch][pos + i];
-            }
+            in_chunk[ch][..take].copy_from_slice(&channels[ch][pos..pos + take]);
+            in_chunk[ch][take..].fill(0.0);
         }
 
-        let out_chunk = resampler
-            .process(&in_chunk, None)
+        let (_, produced) = resampler
+            .process_into_buffer(&in_chunk, &mut out_chunk, None)
             .map_err(|e| format!("Error en remuestreo: {e}"))?;
 
         let expected_out = ((take as f64) * (to_rate as f64) / (from_rate as f64)).round() as usize;
-        let actual_chunk_len = out_chunk[0].len();
-        let copy_len = expected_out.min(actual_chunk_len);
+        let copy_len = expected_out.min(produced);
 
         for ch in 0..n_channels {
             out_channels[ch].extend_from_slice(&out_chunk[ch][..copy_len]);
