@@ -346,6 +346,8 @@ pub fn decode_and_cache_track(
         (true, decoded_channels)
     };
 
+    let dur_mono = t_resample_start.elapsed();
+
     // 2. Resampling to target_sample_rate (if different)
     let resampled = if original_sample_rate != target_sample_rate {
         resample_channels(
@@ -372,6 +374,7 @@ pub fn decode_and_cache_track(
 
     // 3. Extract 320 waveform peaks
     let peaks = extract_waveform_peaks(&resampled[0], 320);
+    let dur_peaks = t_write_start.elapsed();
 
     // 4. Quantize to i16 (exact copy if source is 16-bit and sample rates match, else TPDF dither)
     let is_exact_16bit = bits_per_sample <= 16 && original_sample_rate == target_sample_rate;
@@ -438,6 +441,7 @@ pub fn decode_and_cache_track(
     };
 
     // 5. Atomic write to disk
+    let dur_quant_end = t_write_start.elapsed();
     write_track_pcm_and_metadata(base_dir, project_id, &metadata, &pcm_samples)?;
     let dur_write = t_write_start.elapsed();
     let dur_total = t_total_start.elapsed();
@@ -451,6 +455,18 @@ pub fn decode_and_cache_track(
         dur_resample,
         dur_write,
         dur_total
+    );
+    log_phase_breakdown(
+        track_id,
+        original_sample_rate,
+        target_sample_rate,
+        channels_count,
+        frame_count,
+        dur_mono,
+        dur_resample,
+        dur_peaks,
+        dur_quant_end,
+        dur_write,
     );
 
     Ok(metadata)
@@ -512,6 +528,8 @@ pub fn decode_and_cache_track_bytes(
         (true, decoded_channels)
     };
 
+    let dur_mono = t_resample_start.elapsed();
+
     // 2. Resampling to target_sample_rate (if different)
     let resampled = if original_sample_rate != target_sample_rate {
         resample_channels(
@@ -539,6 +557,7 @@ pub fn decode_and_cache_track_bytes(
 
     // 3. Extract 320 waveform peaks
     let peaks = extract_waveform_peaks(&resampled[0], 320);
+    let dur_peaks = t_write_start.elapsed();
 
     // 4. Quantize to i16 (exact copy if source is 16-bit and sample rates match, else TPDF dither)
     let is_exact_16bit = bits_per_sample <= 16 && original_sample_rate == target_sample_rate;
@@ -604,6 +623,7 @@ pub fn decode_and_cache_track_bytes(
     };
 
     // 5. Atomic write to disk
+    let dur_quant_end = t_write_start.elapsed();
     write_track_pcm_and_metadata(base_dir, project_id, &metadata, &pcm_samples)?;
     let dur_write = t_write_start.elapsed();
     let dur_total = t_total_start.elapsed();
@@ -617,8 +637,50 @@ pub fn decode_and_cache_track_bytes(
         dur_write,
         dur_total
     );
+    log_phase_breakdown(
+        track_id,
+        original_sample_rate,
+        target_sample_rate,
+        channels_count,
+        frame_count,
+        dur_mono,
+        dur_resample,
+        dur_peaks,
+        dur_quant_end,
+        dur_write,
+    );
 
     Ok(metadata)
+}
+
+/// Diagnóstico: desglosa las fases agregadas de `[Import Perf]` (remuestreo incluye detección
+/// mono; escritura incluye picos + cuantización + disco). Solo registra, no cambia comportamiento.
+#[allow(clippy::too_many_arguments)]
+fn log_phase_breakdown(
+    track_id: &str,
+    original_sample_rate: u32,
+    target_sample_rate: u32,
+    channels: u16,
+    frames: u64,
+    dur_mono: std::time::Duration,
+    dur_mono_plus_resample: std::time::Duration,
+    dur_peaks: std::time::Duration,
+    dur_peaks_plus_quant: std::time::Duration,
+    dur_write_total: std::time::Duration,
+) {
+    tracing::info!(
+        "[Import Perf Fases] Pista '{}': {} Hz -> {} Hz, canales={}, frames={}, mono={:?}, remuestreo_puro={:?}, picos={:?}, cuantización={:?}, disco={:?}",
+        track_id,
+        original_sample_rate,
+        target_sample_rate,
+        channels,
+        frames,
+        dur_mono,
+        dur_mono_plus_resample.saturating_sub(dur_mono),
+        dur_peaks,
+        dur_peaks_plus_quant.saturating_sub(dur_peaks),
+        dur_write_total.saturating_sub(dur_peaks_plus_quant),
+    );
 }
 
 #[cfg(test)]
