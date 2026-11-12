@@ -2,7 +2,7 @@
 
 ## 1. Qué es OmniTracks
 Reproductor de multitracks optimizado para cultos y música en vivo. Dispone de dos entornos:
-- **Web**: React 18, TypeScript, Tailwind CSS y Vite, con motor Web Audio API / AudioContext y almacenamiento en OPFS / IndexedDB.
+- **Web**: React 19 (^19.0.1), TypeScript, Tailwind CSS 4 (^4.3.3) y Vite, con motor Web Audio API / AudioContext y almacenamiento en OPFS / IndexedDB.
 - **Escritorio**: Tauri v2 para Windows x64 con WebView2 Evergreen y motor de audio nativo multihilo de alto rendimiento implementado en Rust (CPAL, Symphonia, rubato y rtrb).
 
 ---
@@ -15,7 +15,7 @@ Reproductor de multitracks optimizado para cultos y música en vivo. Dispone de 
 - `src/storage/*`: Persistencia en IndexedDB (`projectDb.ts`), OPFS (`opfsStorage.ts`), File System Access (`sourceFiles.ts`) y puente desktop (`desktopLibrary.ts`).
 - `desktop/src-tauri/src/audio/*`: Motor nativo: `playback/` (transporte, buffers `rtrb`, callback CPAL), `cache.rs` (caché PCM i16 y picos), `import.rs` (decodificación Symphonia/Hound), `output.rs` (dispositivos WASAPI), `resampler.rs` (remuestreo `rubato`), `metronome.rs` (click sintético), `mod.rs` (comandos `audio_*`).
 - `desktop/src-tauri/src/library/`: Gestión de `library.json`, persistencia atómica y sidecars `omnitracks.project.json` (comandos `library_*`).
-- `desktop/src-tauri/src/lan.rs`: Servidor HTTP/WebSocket local (puerto 8765) para control remoto desde móviles (músicos y sonidistas) en la LAN.
+- `desktop/src-tauri/src/lan.rs`: Servidor HTTP/WebSocket local para control remoto desde móviles (músicos y sonidistas) en la LAN (puerto 8765 definido como `const PORT` en `desktop/src-tauri/src/main.rs:14`).
 - `desktop/src-tauri/tests/`: Pruebas de integración de Rust (`lan_protocol.rs`, `verify_manual_flow.rs`, `import_flow.rs`, `benchmark_import.rs`).
 - `test/`: Pruebas unitarias en Node/TypeScript (`titleCleaning.test.ts`, `trackFingerprint.test.ts`, `nativeCacheGeneration.test.ts`).
 
@@ -37,10 +37,10 @@ Reproductor de multitracks optimizado para cultos y música en vivo. Dispone de 
 
 ## 4. Decisiones cerradas
 - **WASAPI en modo compartido**: Salida estándar por defecto en Windows.
-- **ASIO diferido**: No se implementará por restricciones de licencia del SDK propietario de Steinberg (decisión explícita del dueño del proyecto).
+- **ASIO diferido, sin decidir**: Depende de la licencia del SDK de Steinberg y de la decisión del dueño.
 - **Caché PCM al sample rate del dispositivo**: Al decodificar pistas con `import.rs`, el audio se remuestrea a la frecuencia nativa del hardware (`target_sample_rate`) para garantizar cero remuestreo pesado durante la reproducción.
 - **Biblioteca como índice ligero**: `library.json` contiene únicamente metadatos. Las carpetas de caché PCM (`pcm/<id>/`) solo existen para canciones que forman parte del setlist o están activas en consola.
-- **Licencia limpia**: Prohibido copiar, portar o inspirar código desde LibreTracks (licencia AGPL incompatible con OmniTracks).
+- **Licencia LibreTracks (AGPL)**: Prohibido copiar o portar su código; las ideas generales sí se pueden usar.
 
 ---
 
@@ -54,10 +54,11 @@ Reproductor de multitracks optimizado para cultos y música en vivo. Dispone de 
 ---
 
 ## 6. Pendientes conocidos
-- **Lentitud en generación de caché**: La decodificación secuencial Symphonia en pistas largas (MP3/FLAC) toma tiempo perceptible.
+- **Decodificación de caché**: Se realiza en paralelo (3-4 hilos, `desktop/src-tauri/src/audio/mod.rs:140-142`); los tiempos reales en el `.exe` de producción están sin medir.
+- **Importación HTML/arrastre vs nativa**: La importación por selector HTML o arrastre de archivos sigue decodificando al importar (`src/hooks/useImportFlow.ts:250, 440`); solo la ruta nativa de carpeta importa sin decodificar.
 - **Saltos cuantizados tardíos**: Si el compás objetivo ya cayó dentro de los ~500 ms prellenados en el ring buffer `rtrb`, el salto se pospone al siguiente compás.
 - **Fase 5 diferida**: Ruteo libre multicanal a más de 2 salidas físicas independientes de la tarjeta.
-- **Fase 7 diferida**: Soporte de drivers de audio ASIO.
+- **Fase 7 diferida**: Soporte de drivers de audio ASIO (diferido, sin decidir: depende de la licencia del SDK de Steinberg y de la decisión del dueño).
 - **Retiro del motor web**: Desacoplar definitivamente `audioEngine.ts` de la aplicación de escritorio.
 - **`MARKER_PALETTE` duplicada**: Definida de forma duplicada en `src/App.tsx` y `src/hooks/useImportFlow.ts`.
 - **`handleRelinkProject` en `App.tsx`**: Retenido en el componente raíz para evitar referencias circulares / hoisting temporal (`TS2448`).
