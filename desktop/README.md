@@ -4,6 +4,36 @@ Windows x64, Tauri v2 y WebView2 Evergreen. El instalador único contiene OmniTr
 
 OmniTracks para Windows registra su instalación con identificador `org.omnitracks.desktop` y almacena sus datos locales en `%LOCALAPPDATA%\org.omnitracks.desktop`. Esta versión empieza con una biblioteca y configuración vacías: `library.json`, `library.backup.json`, `audio_settings.json` y la caché `pcm\` (ver `Manual.md` §5).
 
+## Estado del Motor Nativo de Audio
+
+La versión de escritorio integra un motor de reproducción de multitracks en Rust sobre WASAPI en modo compartido:
+
+| Fase | Funcionalidad | Estado |
+|---|---|:---:|
+| **Fases 0 a 4** | Arquitectura, reproducción en Rust, streaming continuo desde disco con `rtrb`, micro-fades de 8 ms, caché PCM nativa, decodificación con `symphonia` y `rubato`, metrónomo y guías sintéticas, y compensación sinc de retardo de grupo. | **Completadas** |
+| **Fase 5** | Ruteo multicanal discreto (> 2 salidas físicas independientes). Actualmente opera en estéreo o Split-Mono (Ch 1: Click/Guía, Ch 2: Música) en dispositivo de 2 canales. | **Diferida** |
+| **Fase 6** | Control remoto por LAN vía HTTP/WebSocket (puerto 8765) para roles de Músico y Sonidista (`lan.rs`). Streaming de audio LAN para monitoreo personal en auriculares pendiente. | **Parcial** |
+| **Fase 7** | Soporte de drivers ASIO (pospuesto por decisión del dueño debido a restricciones de licencia del SDK de Steinberg). | **Diferida** |
+
+## Flujo de Desarrollo
+
+- **Desarrollo rápido de la interfaz web:**
+  ~~~powershell
+  npm.cmd run dev
+  ~~~
+  Inicia Vite en modo desarrollo (`http://localhost:5173`) para iterar rápidamente la UI y componentes web con recarga en caliente.
+- **Compilar y probar el ejecutable de escritorio (`.exe`):**
+  ~~~powershell
+  npm.cmd --prefix desktop run build:portable
+  ~~~
+  Construye el frontend de escritorio (`desktop/dist/`) y compila el binario portátil de Windows:
+  `desktop\src-tauri\target\x86_64-pc-windows-msvc\release\omnitracks-desktop.exe`
+- **Verificación rápida y completa del proyecto:**
+  ~~~powershell
+  powershell -ExecutionPolicy Bypass -File .\verify.ps1            # Rápida (lint, tests web, cargo test --lib, build web)
+  powershell -ExecutionPolicy Bypass -File .\verify.ps1 -Completo  # Completa (+ cargo test completo y build:portable)
+  ~~~
+
 ## Compilar en Windows
 
 Se necesita PowerShell, Node.js 24 x64, Git, Rust estable MSVC y la carga de trabajo de C++ de Visual Studio Build Tools. Si faltan los Build Tools, ejecutar este comando en PowerShell con permisos de administrador.
