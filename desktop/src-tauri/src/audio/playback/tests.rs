@@ -1,4 +1,4 @@
-﻿    use super::*;
+    use super::*;
     use crate::audio::metronome::ActiveClickPulse;
 
     #[test]
@@ -905,7 +905,7 @@
             list
         }
 
-        // --- 1. MEDICIÃ“N ANTES: asignaciÃ³n de 8 vectores por callback + lock() ---
+        // --- 1. MEDICIÓN ANTES: asignación de 8 vectores por callback + lock() ---
         let tracks_before = make_tracks(num_tracks);
         let stats_before = Arc::new(AudioStreamStats::default());
         stats_before.min_ring_buffer_level_ms.store(u64::MAX, Ordering::Relaxed);
@@ -918,7 +918,7 @@
             let mut fade = fade_before.lock().unwrap();
             let _ = fade.next_gain();
 
-            // AsignaciÃ³n dinÃ¡mica en cada llamada (8 vectores por callback)
+            // Asignación dinámica en cada llamada (8 vectores por callback)
             let mut main_l = vec![0.0f32; frames_per_block];
             let mut main_r = vec![0.0f32; frames_per_block];
             let mut cue_l = vec![0.0f32; frames_per_block];
@@ -958,7 +958,7 @@
                         }
                     }
                 }
-                // Reponer frames para simular feeder en reproducciÃ³n continua de 10 min
+                // Reponer frames para simular feeder en reproducción continua de 10 min
                 if let Ok(mut p) = prod_arc.lock() {
                     for _ in 0..(frames_per_block * 2) {
                         let _ = p.push(0.3);
@@ -997,13 +997,13 @@
             }
         }
 
-        // --- 2. MEDICIÃ“N DESPUÃ‰S: bÃºferes preasignados con fill(0.0) + try_lock() ---
+        // --- 2. MEDICIÓN DESPUÉS: búferes preasignados con fill(0.0) + try_lock() ---
         let tracks_after = make_tracks(num_tracks);
         let stats_after = Arc::new(AudioStreamStats::default());
         stats_after.min_ring_buffer_level_ms.store(u64::MAX, Ordering::Relaxed);
         let fade_after = Arc::new(std::sync::Mutex::new(FadeEnvelope::new(FADE_MS, 48000)));
 
-        // PreasignaciÃ³n de los 8 vectores una sola vez fuera del bucle
+        // Preasignación de los 8 vectores una sola vez fuera del bucle
         let mut main_l = Vec::<f32>::with_capacity(4096);
         let mut main_r = Vec::<f32>::with_capacity(4096);
         let mut cue_l = Vec::<f32>::with_capacity(4096);
@@ -1024,7 +1024,7 @@
             };
             let _ = fade.next_gain();
 
-            // ReutilizaciÃ³n sin alocaciones dinÃ¡micas
+            // Reutilización sin alocaciones dinámicas
             if main_l.len() < frames_per_block {
                 main_l.resize(frames_per_block, 0.0);
                 main_r.resize(frames_per_block, 0.0);
@@ -1074,7 +1074,7 @@
                         }
                     }
                 }
-                // Reponer frames para simular feeder en reproducciÃ³n continua de 10 min
+                // Reponer frames para simular feeder en reproducción continua de 10 min
                 if let Ok(mut p) = prod_arc.try_lock() {
                     for _ in 0..(frames_per_block * 2) {
                         let _ = p.push(0.3);
@@ -1115,14 +1115,14 @@
 
         println!("=== BENCHMARK 10 MINUTOS (112,500 CALLBACKS, 8 PISTAS) ===");
         println!(
-            "ANTES   | Callbacks: {} | Underruns: {} | Max Âµs: {} | Min Buffer: {} ms",
+            "ANTES   | Callbacks: {} | Underruns: {} | Max µs: {} | Min Buffer: {} ms",
             stats_before.callbacks.load(Ordering::Relaxed),
             stats_before.underruns.load(Ordering::Relaxed),
             stats_before.max_callback_duration_us.load(Ordering::Relaxed),
             stats_before.min_ring_buffer_level_ms.load(Ordering::Relaxed)
         );
         println!(
-            "DESPUÃ‰S | Callbacks: {} | Underruns: {} | Max Âµs: {} | Min Buffer: {} ms",
+            "DESPUÉS | Callbacks: {} | Underruns: {} | Max µs: {} | Min Buffer: {} ms",
             stats_after.callbacks.load(Ordering::Relaxed),
             stats_after.underruns.load(Ordering::Relaxed),
             stats_after.max_callback_duration_us.load(Ordering::Relaxed),

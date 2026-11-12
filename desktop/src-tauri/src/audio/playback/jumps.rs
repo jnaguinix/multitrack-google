@@ -21,7 +21,7 @@ impl PlaybackEngine {
             let target = sections_guard
                 .iter()
                 .find(|s| s.id == section_id)
-                .ok_or_else(|| format!("SecciÃ³n '{section_id}' no encontrada en las {} secciones registradas", sections_guard.len()))?
+                .ok_or_else(|| format!("Sección '{section_id}' no encontrada en las {} secciones registradas", sections_guard.len()))?
                 .clone();
             let cur_end = sections_guard
                 .iter()

@@ -1,4 +1,4 @@
-﻿use std::fs::File;
+use std::fs::File;
 use std::io::{Seek, SeekFrom};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicI64, AtomicU32, AtomicU64, AtomicU8, Ordering};
@@ -150,19 +150,19 @@ impl PlaybackEngine {
             }
             if !other_rates.is_empty() {
                 return Err(format!(
-                    "No existe cachÃ© PCM para el proyecto '{project_id}' a {device_sample_rate} Hz (ruta buscada: '{}'). Se encontraron frecuencias existentes: {:?} Hz. Utiliza el botÃ³n Â«Generar cachÃ© nativaÂ» para convertirla.",
+                    "No existe caché PCM para el proyecto '{project_id}' a {device_sample_rate} Hz (ruta buscada: '{}'). Se encontraron frecuencias existentes: {:?} Hz. Utiliza el botón «Generar caché nativa» para convertirla.",
                     proj_dir.display(),
                     other_rates
                 ));
             }
             return Err(format!(
-                "No existe cachÃ© PCM para el proyecto '{project_id}' a {device_sample_rate} Hz (ruta buscada: '{}'). Genera la cachÃ© nativa antes de reproducir.",
+                "No existe caché PCM para el proyecto '{project_id}' a {device_sample_rate} Hz (ruta buscada: '{}'). Genera la caché nativa antes de reproducir.",
                 proj_dir.display()
             ));
         }
 
         let mut read_dir = std::fs::read_dir(&proj_dir)
-            .map_err(|e| format!("Error leyendo directorio de cachÃ© en '{}': {e}", proj_dir.display()))?;
+            .map_err(|e| format!("Error leyendo directorio de caché en '{}': {e}", proj_dir.display()))?;
 
         let mut track_metas = Vec::new();
         while let Some(Ok(entry)) = read_dir.next() {
@@ -178,7 +178,7 @@ impl PlaybackEngine {
 
         if track_metas.is_empty() {
             return Err(format!(
-                "No se encontraron metadatos (.json) en la cachÃ© de '{}'",
+                "No se encontraron metadatos (.json) en la caché de '{}'",
                 proj_dir.display()
             ));
         }
@@ -624,7 +624,7 @@ impl PlaybackEngine {
     pub async fn preload_project(&self, base_dir: &Path, project_id: &str, device_sample_rate: u32) -> Result<(), String> {
         let proj_dir = get_project_cache_dir(base_dir, project_id, device_sample_rate);
         if !proj_dir.exists() {
-            return Err(format!("No existe cachÃ© PCM para precargar proyecto '{project_id}'"));
+            return Err(format!("No existe caché PCM para precargar proyecto '{project_id}'"));
         }
         let mut preloaded = self.preloaded_project_id.lock().await;
         *preloaded = Some(project_id.to_string());
@@ -637,7 +637,7 @@ impl PlaybackEngine {
             let mut g = self.preloaded_project_id.lock().await;
             g.take()
         };
-        let project_id = preloaded.ok_or_else(|| "No hay ninguna canciÃ³n precargada en cola".to_string())?;
+        let project_id = preloaded.ok_or_else(|| "No hay ninguna canción precargada en cola".to_string())?;
         tracing::info!("[NativeEngine] Switching to preloaded project '{}'", project_id);
         let res = self.load_project(base_dir, &project_id, device_sample_rate, None, None, None, None).await?;
         Ok(res)
@@ -723,7 +723,7 @@ impl PlaybackEngine {
 
         let default_config = device
             .default_output_config()
-            .map_err(|e| format!("Error en configuraciÃ³n de salida: {e}"))?;
+            .map_err(|e| format!("Error en configuración de salida: {e}"))?;
 
         let sample_rate_u32 = default_config.sample_rate();
         self.sample_rate.store(sample_rate_u32, Ordering::SeqCst);
@@ -752,7 +752,7 @@ impl PlaybackEngine {
         let is_playing_arc_err = Arc::clone(&self.is_playing);
 
         let err_fn = move |err| {
-            eprintln!("[NativeAudioStream] Error en stream CPAL (posible desconexiÃ³n): {err}");
+            eprintln!("[NativeAudioStream] Error en stream CPAL (posible desconexión): {err}");
             dev_disconnected_arc.store(true, Ordering::SeqCst);
             is_playing_arc_err.store(false, Ordering::SeqCst);
         };
