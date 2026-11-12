@@ -410,6 +410,147 @@ pub fn decode_and_cache_track_with_progress(
         }
     }
 
+    let (metadata, timings) = finish_decoded_track(
+        base_dir,
+        project_id,
+        track_id,
+        DecodedSource {
+            channels: decoded_channels,
+            sample_rate: original_sample_rate,
+            original_channels,
+            bits_per_sample,
+            original_path,
+            original_file_size,
+            original_modified_ms,
+        },
+        target_sample_rate,
+        cancel_flag,
+        on_phase,
+    )?;
+    let dur_total = t_total_start.elapsed();
+
+    tracing::info!(
+        "[Import Perf] Pista '{}' ({}): lectura={:?}, decodificación={:?}, remuestreo={:?}, escritura={:?}, total={:?}",
+        track_id,
+        input_file_path.file_name().unwrap_or_default().to_string_lossy(),
+        dur_read,
+        dur_decode,
+        timings.resample,
+        timings.write,
+        dur_total
+    );
+
+    Ok(metadata)
+}
+
+/// Decodes in-memory audio bytes, resamples to `target_sample_rate`, detects mono,
+/// extracts peaks, applies TPDF dither, and writes PCM + JSON atomically to disk.
+pub fn decode_and_cache_track_bytes(
+    base_dir: &Path,
+    project_id: &str,
+    track_id: &str,
+    file_name: &str,
+    bytes: Vec<u8>,
+    target_sample_rate: u32,
+    cancel_flag: Option<&AtomicBool>,
+) -> Result<TrackPcmMetadata, String> {
+    let t_total_start = std::time::Instant::now();
+    let original_file_size = bytes.len() as u64;
+    let original_path = format!("memory://{file_name}");
+    let original_modified_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64;
+
+    let t_decode_start = std::time::Instant::now();
+    let decoded_info = decode_audio_bytes(bytes, file_name, cancel_flag)?;
+    let dur_decode = t_decode_start.elapsed();
+    let decoded_channels = decoded_info.channels;
+    let original_sample_rate = decoded_info.sample_rate;
+    let original_channels = decoded_info.original_channels;
+    let bits_per_sample = decoded_info.bits_per_sample.unwrap_or(16);
+
+    if decoded_channels.is_empty() || decoded_channels[0].is_empty() {
+        return Err(format!("El audio '{file_name}' no contiene muestras audibles"));
+    }
+
+    if let Some(flag) = cancel_flag {
+        if flag.load(Ordering::Relaxed) {
+            delete_track_cache(base_dir, project_id, target_sample_rate, track_id);
+            return Err("Importación cancelada por el usuario".to_string());
+        }
+    }
+
+    let (metadata, timings) = finish_decoded_track(
+        base_dir,
+        project_id,
+        track_id,
+        DecodedSource {
+            channels: decoded_channels,
+            sample_rate: original_sample_rate,
+            original_channels,
+            bits_per_sample,
+            original_path,
+            original_file_size,
+            original_modified_ms,
+        },
+        target_sample_rate,
+        cancel_flag,
+        &|_| {},
+    )?;
+    let dur_total = t_total_start.elapsed();
+
+    tracing::info!(
+        "[Import Perf] Pista bytes '{}' ({}): lectura=0ms, decodificación={:?}, remuestreo={:?}, escritura={:?}, total={:?}",
+        track_id,
+        file_name,
+        dur_decode,
+        timings.resample,
+        timings.write,
+        dur_total
+    );
+
+    Ok(metadata)
+}
+
+/// Datos de origen ya decodificados que necesita la cola común de la importación.
+struct DecodedSource {
+    channels: Vec<Vec<f32>>,
+    sample_rate: u32,
+    original_channels: u16,
+    bits_per_sample: u32,
+    original_path: String,
+    original_file_size: u64,
+    original_modified_ms: u64,
+}
+
+/// Tiempos de la cola común, para los registros de rendimiento de cada llamador.
+struct TailTimings {
+    resample: std::time::Duration,
+    write: std::time::Duration,
+}
+
+/// Cola común de `decode_and_cache_track*`: detección mono, remuestreo, picos, cuantización y
+/// escritura atómica. `on_phase` recibe Resampled, Quantized y Written (Decoded lo emite el llamador).
+fn finish_decoded_track(
+    base_dir: &Path,
+    project_id: &str,
+    track_id: &str,
+    source: DecodedSource,
+    target_sample_rate: u32,
+    cancel_flag: Option<&AtomicBool>,
+    on_phase: &dyn Fn(ImportPhase),
+) -> Result<(TrackPcmMetadata, TailTimings), String> {
+    let DecodedSource {
+        channels: decoded_channels,
+        sample_rate: original_sample_rate,
+        original_channels,
+        bits_per_sample,
+        original_path,
+        original_file_size,
+        original_modified_ms,
+    } = source;
+
     let t_resample_start = std::time::Instant::now();
     // 1. Mono / Effectively-Mono detection
     let (is_eff_mono, working_channels) = if decoded_channels.len() >= 2 {
@@ -530,19 +671,8 @@ pub fn decode_and_cache_track_with_progress(
     let dur_quant_end = t_write_start.elapsed();
     write_track_pcm_and_metadata(base_dir, project_id, &metadata, &pcm_samples)?;
     let dur_write = t_write_start.elapsed();
-    let dur_total = t_total_start.elapsed();
     on_phase(ImportPhase::Written);
 
-    tracing::info!(
-        "[Import Perf] Pista '{}' ({}): lectura={:?}, decodificación={:?}, remuestreo={:?}, escritura={:?}, total={:?}",
-        track_id,
-        input_file_path.file_name().unwrap_or_default().to_string_lossy(),
-        dur_read,
-        dur_decode,
-        dur_resample,
-        dur_write,
-        dur_total
-    );
     log_phase_breakdown(
         track_id,
         original_sample_rate,
@@ -556,188 +686,7 @@ pub fn decode_and_cache_track_with_progress(
         dur_write,
     );
 
-    Ok(metadata)
-}
-
-/// Decodes in-memory audio bytes, resamples to `target_sample_rate`, detects mono,
-/// extracts peaks, applies TPDF dither, and writes PCM + JSON atomically to disk.
-pub fn decode_and_cache_track_bytes(
-    base_dir: &Path,
-    project_id: &str,
-    track_id: &str,
-    file_name: &str,
-    bytes: Vec<u8>,
-    target_sample_rate: u32,
-    cancel_flag: Option<&AtomicBool>,
-) -> Result<TrackPcmMetadata, String> {
-    let t_total_start = std::time::Instant::now();
-    let original_file_size = bytes.len() as u64;
-    let original_path = format!("memory://{file_name}");
-    let original_modified_ms = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as u64;
-
-    let t_decode_start = std::time::Instant::now();
-    let decoded_info = decode_audio_bytes(bytes, file_name, cancel_flag)?;
-    let dur_decode = t_decode_start.elapsed();
-    let decoded_channels = decoded_info.channels;
-    let original_sample_rate = decoded_info.sample_rate;
-    let original_channels = decoded_info.original_channels;
-    let bits_per_sample = decoded_info.bits_per_sample.unwrap_or(16);
-
-    if decoded_channels.is_empty() || decoded_channels[0].is_empty() {
-        return Err(format!("El audio '{file_name}' no contiene muestras audibles"));
-    }
-
-    if let Some(flag) = cancel_flag {
-        if flag.load(Ordering::Relaxed) {
-            delete_track_cache(base_dir, project_id, target_sample_rate, track_id);
-            return Err("Importación cancelada por el usuario".to_string());
-        }
-    }
-
-    let t_resample_start = std::time::Instant::now();
-    // 1. Mono / Effectively-Mono detection
-    let (is_eff_mono, working_channels) = if decoded_channels.len() >= 2 {
-        let eff_mono = is_effectively_mono(&decoded_channels[0], &decoded_channels[1]);
-        if eff_mono {
-            let len = decoded_channels[0].len().min(decoded_channels[1].len());
-            let mut mono = Vec::with_capacity(len);
-            for i in 0..len {
-                mono.push((decoded_channels[0][i] + decoded_channels[1][i]) * 0.5);
-            }
-            (true, vec![mono])
-        } else {
-            (false, decoded_channels)
-        }
-    } else {
-        (true, decoded_channels)
-    };
-
-    let dur_mono = t_resample_start.elapsed();
-
-    // 2. Resampling to target_sample_rate (if different)
-    let resampled = if original_sample_rate != target_sample_rate {
-        resample_channels(
-            &working_channels,
-            original_sample_rate as usize,
-            target_sample_rate as usize,
-        )?
-    } else {
-        working_channels
-    };
-
-    let dur_resample = t_resample_start.elapsed();
-
-    if let Some(flag) = cancel_flag {
-        if flag.load(Ordering::Relaxed) {
-            delete_track_cache(base_dir, project_id, target_sample_rate, track_id);
-            return Err("Importación cancelada por el usuario".to_string());
-        }
-    }
-
-    let t_write_start = std::time::Instant::now();
-    let channels_count = resampled.len() as u16;
-    let frame_count = resampled[0].len() as u64;
-    let duration_sec = frame_count as f64 / target_sample_rate as f64;
-
-    // 3. Extract 320 waveform peaks
-    let peaks = extract_waveform_peaks(&resampled[0], 320);
-    let dur_peaks = t_write_start.elapsed();
-
-    // 4. Quantize to i16 (exact copy if source is 16-bit and sample rates match, else TPDF dither)
-    let is_exact_16bit = bits_per_sample <= 16 && original_sample_rate == target_sample_rate;
-    let mut rng = TpdfDitherRng::new(frame_count ^ (target_sample_rate as u64));
-    let mut pcm_samples = Vec::with_capacity((frame_count as usize) * (channels_count as usize));
-
-    if channels_count == 1 {
-        for &s in &resampled[0] {
-            let sample_i16 = if is_exact_16bit {
-                quantize_f32_to_i16_exact(s)
-            } else {
-                quantize_f32_to_i16_with_dither(s, &mut rng)
-            };
-            pcm_samples.push(sample_i16);
-        }
-    } else {
-        for i in 0..(frame_count as usize) {
-            let s0 = if is_exact_16bit {
-                quantize_f32_to_i16_exact(resampled[0][i])
-            } else {
-                quantize_f32_to_i16_with_dither(resampled[0][i], &mut rng)
-            };
-            let s1 = if is_exact_16bit {
-                quantize_f32_to_i16_exact(resampled[1][i])
-            } else {
-                quantize_f32_to_i16_with_dither(resampled[1][i], &mut rng)
-            };
-            pcm_samples.push(s0);
-            pcm_samples.push(s1);
-        }
-    }
-
-    if let Some(flag) = cancel_flag {
-        if flag.load(Ordering::Relaxed) {
-            delete_track_cache(base_dir, project_id, target_sample_rate, track_id);
-            return Err("Importación cancelada por el usuario".to_string());
-        }
-    }
-
-    let now_iso = {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
-        format!("{now}")
-    };
-
-    let metadata = TrackPcmMetadata {
-        format_version: CACHE_FORMAT_VERSION,
-        track_id: track_id.to_string(),
-        target_sample_rate,
-        original_sample_rate,
-        original_channels,
-        original_path,
-        original_file_size,
-        original_modified_ms,
-        channels: channels_count,
-        is_effectively_mono: is_eff_mono,
-        frame_count,
-        duration_sec,
-        peaks,
-        created_at: now_iso,
-    };
-
-    // 5. Atomic write to disk
-    let dur_quant_end = t_write_start.elapsed();
-    write_track_pcm_and_metadata(base_dir, project_id, &metadata, &pcm_samples)?;
-    let dur_write = t_write_start.elapsed();
-    let dur_total = t_total_start.elapsed();
-
-    tracing::info!(
-        "[Import Perf] Pista bytes '{}' ({}): lectura=0ms, decodificación={:?}, remuestreo={:?}, escritura={:?}, total={:?}",
-        track_id,
-        file_name,
-        dur_decode,
-        dur_resample,
-        dur_write,
-        dur_total
-    );
-    log_phase_breakdown(
-        track_id,
-        original_sample_rate,
-        target_sample_rate,
-        channels_count,
-        frame_count,
-        dur_mono,
-        dur_resample,
-        dur_peaks,
-        dur_quant_end,
-        dur_write,
-    );
-
-    Ok(metadata)
+    Ok((metadata, TailTimings { resample: dur_resample, write: dur_write }))
 }
 
 /// Diagnóstico: desglosa las fases agregadas de `[Import Perf]` (remuestreo incluye detección
@@ -1167,5 +1116,40 @@ mod tests {
         assert_eq!(*vistas.borrow(), ImportPhase::ALL.to_vec());
 
         let _ = std::fs::remove_dir_all(temp_dir);
+    }
+
+
+    /// La ruta por bytes (IndexedDB) y la de archivo comparten la lógica de cola: deben producir
+    /// exactamente el mismo PCM para la misma señal.
+    #[test]
+    fn test_pcm_bytes_path_igual_a_ruta_de_archivo() {
+        let casos: Vec<(&str, u32, u16, bool, i32)> = vec![
+            ("bytes_44k_16", 44100, 16, false, 20000),
+            ("bytes_44k_24", 44100, 24, false, 6_000_000),
+            ("bytes_48k_exacto", 48000, 16, false, 20000),
+            ("bytes_mono_efectivo", 44100, 16, true, 20000),
+        ];
+        for (name, hz, bits, same, amp) in casos {
+            let frames = synth_frames(hz as usize / 2, amp, same);
+            let (hash_archivo, ch_a, fc_a) = pcm_fingerprint(name, hz, bits, &frames);
+
+            let temp_dir = std::env::temp_dir().join(format!(
+                "omnitracks_bytes_{name}_{}",
+                std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+            ));
+            std::fs::create_dir_all(&temp_dir).unwrap();
+            let wav_path = temp_dir.join("in.wav");
+            write_test_wav_interleaved(&wav_path, hz, bits, &frames);
+            let bytes = std::fs::read(&wav_path).unwrap();
+            let meta = decode_and_cache_track_bytes(&temp_dir, "golden", "stem", "in.wav", bytes, 48000, None).unwrap();
+            let pcm = std::fs::read(cache::get_track_pcm_path(&temp_dir, "golden", 48000, "stem")).unwrap();
+            let _ = std::fs::remove_dir_all(&temp_dir);
+
+            assert_eq!(
+                (fnv1a64(&pcm), meta.channels, meta.frame_count),
+                (hash_archivo, ch_a, fc_a),
+                "la ruta por bytes difiere de la de archivo en el caso {name}"
+            );
+        }
     }
 }
