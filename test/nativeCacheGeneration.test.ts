@@ -179,6 +179,28 @@ async function main() {
   unsub();
   console.log('OK 7: estado nativo síncrono, notificación solo al cambiar, refresco múltiple');
 
+  // 8. Eventos cruzados (llegan de varios hilos): el avance nunca retrocede; un import nuevo vuelve a 0.
+  engine.markImportStarted(project.id, 'orden', 10);
+  const seenPct: number[] = [];
+  const seenPista: number[] = [];
+  const unsub8 = engine.subscribeCache(() => {
+    const p = engine.getImportProgress(project.id);
+    if (p) { seenPct.push(p.percent); seenPista.push(p.trackNumber); }
+  });
+  for (const [pct, hechas] of [[30, 3], [20, 2], [45, 4], [40, 3]] as const) {
+    emit({ project_id: project.id, track_index: hechas, total_tracks: 10, track_name: 'x', percent: pct, completed: false });
+  }
+  assert(seenPct.join(',') === '30,30,45,45', `porcentaje monótono (fue ${seenPct.join(',')})`);
+  assert(seenPista.join(',') === '4,4,5,5', `pista monótona (fue ${seenPista.join(',')})`);
+  emit({ project_id: project.id, track_index: 10, total_tracks: 10, track_name: 'Completado', percent: 100, completed: true });
+  assert(engine.getImportProgress(project.id)?.percent === 100, 'el evento final marca 100');
+  engine.markImportStarted(project.id, 'otra vez', 10);
+  assert(engine.getImportProgress(project.id)?.percent === 0, 'nueva importación vuelve a 0');
+  emit({ project_id: project.id, track_index: 1, total_tracks: 10, track_name: 'x', percent: 10, completed: false });
+  assert(engine.getImportProgress(project.id)?.percent === 10, 'tras reiniciar, el avance vuelve a contar desde 0');
+  unsub8();
+  console.log('OK 8: porcentaje y pista no retroceden con eventos cruzados; reinicio vuelve a 0');
+
   console.log('\nTODAS LAS PRUEBAS PASARON');
   process.exit(0);
 }

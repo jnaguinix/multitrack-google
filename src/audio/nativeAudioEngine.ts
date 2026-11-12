@@ -113,13 +113,21 @@ export class NativeAudioEngine {
       const payload = event.payload;
       if (!payload) return;
       const projId = payload.project_id || payload.projectId;
-      const percent = Math.round(payload.percent || 0);
+      let percent = Math.round(payload.percent || 0);
       const text = payload.track_name || '';
       const completed = Boolean(payload.completed);
       const totalTracks = Number(payload.total_tracks ?? payload.totalTracks ?? 0);
+      // El backend envía cuántas pistas llevan terminadas; la que se está procesando es la siguiente.
       const rawIndex = Number(payload.track_index ?? payload.trackIndex ?? 0);
-      // El backend emite el índice 0-based al empezar cada pista.
-      const trackNumber = completed ? totalTracks : Math.min(rawIndex + 1, totalTracks || rawIndex + 1);
+      let trackNumber = completed ? totalTracks : Math.min(rawIndex + 1, totalTracks || rawIndex + 1);
+
+      // Los eventos salen de varios hilos y pueden llegar cruzados: mientras la importación sigue en
+      // curso, ni el porcentaje ni el número de pista pueden retroceder.
+      const prev = this.importProgressByProject.get(projId);
+      if (prev && !prev.completed && !completed) {
+        percent = Math.max(prev.percent, percent);
+        trackNumber = Math.max(prev.trackNumber, trackNumber);
+      }
 
       this.importProgressByProject.set(projId, {
         percent,
