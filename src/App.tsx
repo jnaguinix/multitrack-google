@@ -9,8 +9,8 @@ import { audioEngine } from './audio/audioEngine';
 import { nativeAudioEngine } from './audio/nativeAudioEngine';
 import { inferSongMetadataFromFiles } from './audio/smartAnalyzer';
 import { useOptimization } from './hooks/useOptimization';
+import { useProjectActions } from './hooks/useProjectActions';
 import {
-  createEmptyProjectTemplate,
   deleteProjectFromDb,
   findSavedProjectPreset,
   loadAllProjectsFromDb,
@@ -198,6 +198,9 @@ export default function App() {
     master: { rms: 0, peak: 0, clipping: false },
   });
 
+  const [songToDeleteFromLibrary, setSongToDeleteFromLibrary] = useState<SongProject | null>(null);
+  const [missingFolderSong, setMissingFolderSong] = useState<SongProject | null>(null);
+  const [editingMetadataSong, setEditingMetadataSong] = useState<SongProject | null>(null);
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
   const [importStatusText, setImportStatusText] = useState<string | null>(null);
   const [fingerprintPrompt, setFingerprintPrompt] = useState<{
@@ -1800,34 +1803,30 @@ export default function App() {
     showToast('Marcadores de sección (mm:ss) guardados en canción y carpeta');
   };
 
-  // Load Song Immediately into DAW (Used when confirmed in modal, clicked Play on Setlist card, or dragged onto DAW)
-  const handleLoadProjectImmediately = async (projectId: string, autoPlay = false) => {
-    const found =
-      projectsRef.current.find((p) => p.id === projectId) ||
-      projects.find((p) => p.id === projectId);
-    if (!found) return;
-    if (!isDesktopApp) {
-      if (isOpfsSupported() && queuedOptimizeIdsRef.current.has(projectId)) {
-        showToast(`"${found.title}" se está preparando en segundo plano; espera a que termine.`);
-        return;
-      }
-      // Songs already cached in OPFS don't need the original files; others do
-      const isOpfsReady = await isProjectPcmComplete(found);
-      if (!isOpfsReady) {
-        await ensureSourceAccess(projectId);
-        runAutoOptimize(projectId);
-      }
-    }
-    await activateProject(found, undefined, autoPlay);
-    if (activeView === 'library') {
-      handleSelectView('setlist');
-    }
-    showToast(`Canción montada en consola: ${found.title}`);
-  };
-
-  const [songToDeleteFromLibrary, setSongToDeleteFromLibrary] = useState<SongProject | null>(null);
-  const [missingFolderSong, setMissingFolderSong] = useState<SongProject | null>(null);
-  const [editingMetadataSong, setEditingMetadataSong] = useState<SongProject | null>(null);
+  const {
+    handleLoadProjectImmediately,
+    handleCreateNewProject,
+    handleUpdateSongMetadata,
+    handleDeleteProject,
+    handleExportJson,
+    handleImportJsonFile,
+  } = useProjectActions({
+    projects,
+    projectsRef,
+    currentProject,
+    currentProjectRef,
+    setProjects,
+    setCurrentProject,
+    showToast,
+    isDesktopApp,
+    queuedOptimizeIdsRef,
+    ensureSourceAccess,
+    runAutoOptimize,
+    activateProject,
+    activeView,
+    handleSelectView,
+    setSongToDeleteFromLibrary,
+  });
 
   // Setlist Management Handlers
   const handleAddToSetlist = (projectId: string) => {
@@ -2063,41 +2062,6 @@ export default function App() {
     handleReorderSetlist(idx, targetIdx);
   };
 
-  const handleCreateNewProject = async (
-    title: string,
-    artist: string,
-    bpm: number,
-    keySignature: string
-  ) => {
-    const newProj = createEmptyProjectTemplate(title, artist, bpm, keySignature);
-    newProj.inSetlist = false;
-    newProj.setlistOrder = undefined;
-    await activateProject(newProj);
-    handleSelectView('library');
-    showToast(`Nueva canción creada en biblioteca: ${title}`);
-  };
-
-  const handleUpdateSongMetadata = (updated: SongProject) => {
-    const next: SongProject = {
-      ...updated,
-      isTitleCustom: true,
-      updatedAt: Date.now(),
-    };
-    setProjects((prev) => prev.map((p) => (p.id === next.id ? next : p)));
-    if (currentProjectRef.current?.id === next.id) {
-      setCurrentProject(next);
-      audioEngine.updateProjectConfig(next);
-    }
-    saveProjectToDb(next).catch(() => {});
-    showToast(`Metadatos actualizados: "${next.title}"`);
-  };
-
-  const handleDeleteProject = (projectId: string) => {
-    const song = projectsRef.current.find((p) => p.id === projectId);
-    if (!song) return;
-    setSongToDeleteFromLibrary(song);
-  };
-
   const confirmDeleteFromLibrary = async () => {
     if (!songToDeleteFromLibrary) return;
     const song = songToDeleteFromLibrary;
@@ -2121,41 +2085,6 @@ export default function App() {
       setCurrentProject(null);
     }
     showToast(`"${song.title}" eliminada de la biblioteca (archivos originales intactos)`);
-  };
-
-  const handleExportJson = (proj: SongProject) => {
-    const blob = new Blob([JSON.stringify(proj, null, 2)], {
-      type: 'application/json',
-    });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `${proj.title.toLowerCase().replace(/\s+/g, '-')}.omnitracks.project.json`;
-    a.click();
-    URL.revokeObjectURL(url);
-    showToast('Archivo omnitracks.project.json exportado');
-  };
-
-  const handleImportJsonFile = async (file: File) => {
-    try {
-      const text = await file.text();
-      const parsed = JSON.parse(text) as SongProject;
-      if (!parsed.title || !Array.isArray(parsed.tracks)) {
-        showToast('El archivo JSON no tiene un formato de OmniTracks válido');
-        return;
-      }
-      const importedProj: SongProject = normalizeProjectSectionsToTime({
-        ...parsed,
-        id: `imported-${Date.now()}`,
-        folder: 'imported',
-        updatedAt: Date.now(),
-      });
-      await activateProject(importedProj);
-      handleSelectView('setlist');
-      showToast(`Proyecto importado: ${importedProj.title}`);
-    } catch {
-      showToast('No se pudo leer el archivo JSON');
-    }
   };
 
   // Drag-and-Drop on DAW Workspace (Handles both Repertoire Song Drag & Audio File Drag)
