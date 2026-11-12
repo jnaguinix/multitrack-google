@@ -108,6 +108,14 @@ impl TpdfDitherRng {
     }
 }
 
+/// Equivale a `x.round()` (mitades lejos de cero) para |x| <= 32768, sin llamar a `roundf`.
+/// 0.49999997 es el mayor f32 menor que 0.5. Equivalencia comprobada en la prueba
+/// `test_round_half_away_fast_equivale_a_round` y exhaustivamente en la medición previa.
+#[inline]
+fn round_half_away_fast(x: f32) -> i32 {
+    (x + 0.49999997f32.copysign(x)) as i32
+}
+
 #[inline]
 pub fn quantize_f32_to_i16_with_dither(sample: f32, rng: &mut TpdfDitherRng) -> i16 {
     let dithered = sample + rng.dither_16();
@@ -117,7 +125,7 @@ pub fn quantize_f32_to_i16_with_dither(sample: f32, rng: &mut TpdfDitherRng) -> 
     } else if clamped <= -1.0 {
         -32768
     } else {
-        (clamped * 32767.0).round() as i16
+        round_half_away_fast(clamped * 32767.0) as i16
     }
 }
 
@@ -129,9 +137,9 @@ pub fn quantize_f32_to_i16_exact(sample: f32) -> i16 {
     } else if clamped <= -1.0 {
         -32768
     } else if clamped >= 0.0 {
-        (clamped * 32768.0).min(32767.0).round() as i16
+        round_half_away_fast((clamped * 32768.0).min(32767.0)) as i16
     } else {
-        (clamped * 32768.0).max(-32768.0).round() as i16
+        round_half_away_fast((clamped * 32768.0).max(-32768.0)) as i16
     }
 }
 
@@ -513,6 +521,42 @@ pub fn decode_and_cache_track_bytes(
     Ok(metadata)
 }
 
+/// Cuantiza los canales a i16 intercalado. Una sola comprobación de modo por pista (no por muestra) y
+/// escritura directa sobre un búfer ya dimensionado. El generador de dither se consume siempre en el
+/// mismo orden (canal 0 y luego canal 1 por frame) para que el resultado no cambie ni un bit.
+fn quantize_channels_to_pcm(channels: &[Vec<f32>], rng: &mut TpdfDitherRng, is_exact_16bit: bool) -> Vec<i16> {
+    if channels.len() == 1 {
+        let src = &channels[0];
+        let mut out = vec![0i16; src.len()];
+        if is_exact_16bit {
+            for (o, &x) in out.iter_mut().zip(src.iter()) {
+                *o = quantize_f32_to_i16_exact(x);
+            }
+        } else {
+            for (o, &x) in out.iter_mut().zip(src.iter()) {
+                *o = quantize_f32_to_i16_with_dither(x, rng);
+            }
+        }
+        out
+    } else {
+        let len = channels[0].len().min(channels[1].len());
+        let mut out = vec![0i16; len * 2];
+        let (left, right) = (&channels[0][..len], &channels[1][..len]);
+        if is_exact_16bit {
+            for ((o, &l), &r) in out.chunks_exact_mut(2).zip(left.iter()).zip(right.iter()) {
+                o[0] = quantize_f32_to_i16_exact(l);
+                o[1] = quantize_f32_to_i16_exact(r);
+            }
+        } else {
+            for ((o, &l), &r) in out.chunks_exact_mut(2).zip(left.iter()).zip(right.iter()) {
+                o[0] = quantize_f32_to_i16_with_dither(l, rng);
+                o[1] = quantize_f32_to_i16_with_dither(r, rng);
+            }
+        }
+        out
+    }
+}
+
 /// Datos de origen ya decodificados que necesita la cola común de la importación.
 struct DecodedSource {
     channels: Vec<Vec<f32>>,
@@ -604,34 +648,7 @@ fn finish_decoded_track(
     // 4. Quantize to i16 (exact copy if source is 16-bit and sample rates match, else TPDF dither)
     let is_exact_16bit = bits_per_sample <= 16 && original_sample_rate == target_sample_rate;
     let mut rng = TpdfDitherRng::new(frame_count ^ (target_sample_rate as u64));
-    let mut pcm_samples = Vec::with_capacity((frame_count as usize) * (channels_count as usize));
-
-    if channels_count == 1 {
-        for &s in &resampled[0] {
-            let sample_i16 = if is_exact_16bit {
-                quantize_f32_to_i16_exact(s)
-            } else {
-                quantize_f32_to_i16_with_dither(s, &mut rng)
-            };
-            pcm_samples.push(sample_i16);
-        }
-    } else {
-        let len = resampled[0].len().min(resampled[1].len());
-        for i in 0..len {
-            let s0 = if is_exact_16bit {
-                quantize_f32_to_i16_exact(resampled[0][i])
-            } else {
-                quantize_f32_to_i16_with_dither(resampled[0][i], &mut rng)
-            };
-            let s1 = if is_exact_16bit {
-                quantize_f32_to_i16_exact(resampled[1][i])
-            } else {
-                quantize_f32_to_i16_with_dither(resampled[1][i], &mut rng)
-            };
-            pcm_samples.push(s0);
-            pcm_samples.push(s1);
-        }
-    }
+    let pcm_samples = quantize_channels_to_pcm(&resampled, &mut rng, is_exact_16bit);
 
     if let Some(flag) = cancel_flag {
         if flag.load(Ordering::Relaxed) {
@@ -1150,6 +1167,25 @@ mod tests {
                 (hash_archivo, ch_a, fc_a),
                 "la ruta por bytes difiere de la de archivo en el caso {name}"
             );
+        }
+    }
+
+
+    #[test]
+    fn test_round_half_away_fast_equivale_a_round() {
+        // Patrones de bits de 0 a 32768.0 con paso 97, en positivo y negativo.
+        let mut bits = 0u32;
+        while bits <= 0x4700_0000 {
+            let x = f32::from_bits(bits);
+            for v in [x, -x] {
+                assert_eq!(v.round() as i32, round_half_away_fast(v), "difiere en {v} ({bits:#x})");
+            }
+            bits += 97;
+        }
+        // Límites y empates.
+        for v in [0.0f32, -0.0, 0.5, -0.5, 1.5, -1.5, 2.5, -2.5, 0.49999997, -0.49999997, 0.50000006,
+                  32766.5, -32766.5, 32767.0, -32767.0, 32767.5, -32767.5, 32768.0, -32768.0, f32::NAN] {
+            assert_eq!(v.round() as i32, round_half_away_fast(v), "difiere en el límite {v}");
         }
     }
 }
