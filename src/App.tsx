@@ -262,6 +262,26 @@ export default function App() {
     return unsubscribeCache;
   }, []);
 
+  // Escritorio: la caché PCM nativa avisa por nativeAudioEngine (no por audioEngine). Sin esta
+  // suscripción las tarjetas del setlist y de En vivo no se redibujan al avanzar/terminar la generación.
+  useEffect(() => {
+    if (!isDesktopApp) return;
+    return nativeAudioEngine.subscribeCache(() => {
+      setRamCacheVersion((v) => v + 1);
+    });
+  }, [isDesktopApp]);
+
+  // Escritorio: consultar el estado real de la caché de cada canción del setlist al abrir la app
+  // y cada vez que cambia el conjunto de canciones/pistas.
+  const setlistCacheKey = setlistQueue.map((s) => `${s.id}:${s.tracks.length}`).join('|');
+  useEffect(() => {
+    if (!isDesktopApp || setlistQueue.length === 0) return;
+    nativeAudioEngine.refreshCacheStatuses(setlistQueue).catch((err) => {
+      console.error('[Cache] Error consultando el estado de la caché del setlist:', err);
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isDesktopApp, setlistCacheKey]);
+
   // 2. CACHÉ Y PRECARGA DE LA SIGUIENTE CANCIÓN:
   // Cuando una canción del setlist queda activa o el setlist cambia, recalcula cuál es la siguiente
   // y llama a preloadProject(nextSong) en segundo plano (manteniendo máx. 2 canciones en caché: actual + siguiente).
