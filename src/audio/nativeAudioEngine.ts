@@ -7,6 +7,7 @@
 // =============================================================================
 
 import { SongProject, TrackChannel, TransportState, MetersSnapshot } from '../types/project';
+import { MeterBallistics, NativeMetersSnapshot } from './meterBallistics';
 import { loadProjectStemsFromDb, extractStemArrayBuffer } from '../storage/projectDb';
 import {
   pickNativeFolder,
@@ -47,7 +48,13 @@ export interface NativePlaybackSnapshot {
   splitMono?: boolean;
   masterGain?: number;
   cueMasterGain?: number;
+  /** Picos reales medidos por el motor desde la consulta anterior. */
+  meters?: NativeMetersSnapshot;
 }
+
+/** Reloj para la caída de los medidores (performance.now si existe). */
+const meterNow = (): number =>
+  typeof performance !== 'undefined' && typeof performance.now === 'function' ? performance.now() : Date.now();
 
 export interface NativeImportProgress {
   percent: number;
@@ -72,6 +79,7 @@ export class NativeAudioEngine {
   private lastPositionSec: number = 0;
   private lastDurationSec: number = 0;
   private lastPlaybackState: NativePlaybackSnapshot | null = null;
+  private meterBallistics = new MeterBallistics();
   private wasPlayingBeforeEnd: boolean = false;
   private deviceDisconnectedAlerted: boolean = false;
 
@@ -306,6 +314,7 @@ export class NativeAudioEngine {
         if (!pb) return;
 
         this.lastPlaybackState = pb;
+        this.meterBallistics.update(pb.meters, meterNow());
         const curSec = pb.positionSec;
         const totSec = pb.durationSec;
         this.lastPositionSec = curSec;
@@ -1007,28 +1016,15 @@ export class NativeAudioEngine {
   // ===========================================================================
   // MÉTODOS DE COMPATIBILIDAD CON VISTAS (Mixer, Timeline, Setlist, Modales)
   // ===========================================================================
+  /**
+   * Niveles reales medidos por el motor nativo (pico post-fader con caída de ~20 dB/s).
+   * Incluye las pistas de la canción mostrada; una pista que no está sonando da 0.
+   */
   public getTrackMeters(): MetersSnapshot {
-    const tracks: Record<string, { rms: number; peak: number; clipping: boolean }> = {};
     const isPlaying = this.currentTransport.isPlaying;
-
-    if (this.currentProject) {
-      for (const t of this.currentProject.tracks) {
-        if (!isPlaying || t.muted) {
-          tracks[t.id] = { rms: 0, peak: 0, clipping: false };
-        } else {
-          // Nivel realista simulado proporcional a la ganancia de pista cuando suena
-          const base = 0.35 * Math.min(1.0, t.gain);
-          const jitter = (Math.sin(Date.now() / 80 + t.id.length) * 0.1);
-          const rms = Math.max(0, Math.min(1.0, base + jitter));
-          tracks[t.id] = { rms, peak: rms * 1.2, clipping: false };
-        }
-      }
-    }
-
-    return {
-      tracks,
-      master: { rms: isPlaying ? 0.4 : 0, peak: isPlaying ? 0.5 : 0, clipping: false },
-    };
+    if (!isPlaying) this.meterBallistics.reset();
+    const ids = this.currentProject ? this.currentProject.tracks.map((t) => t.id) : [];
+    return this.meterBallistics.snapshot(ids, meterNow(), isPlaying);
   }
 
   public isProjectPcmReady(song: SongProject): boolean {
