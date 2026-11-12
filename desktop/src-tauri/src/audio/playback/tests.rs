@@ -1134,3 +1134,165 @@
         assert_eq!(stats_before.underruns.load(Ordering::Relaxed), 0);
         assert_eq!(stats_after.underruns.load(Ordering::Relaxed), 0);
     }
+
+    // ---- Medidores de pico (ver docs/DISENO_MEDIDORES.md) ----
+
+    #[test]
+    fn test_peak_meter_registra_maximo_y_se_reinicia_al_leer() {
+        let m = PeakMeter::default();
+        m.record(0.2, -0.7);
+        m.record(-0.5, 0.1);
+        let (l, r) = m.take();
+        assert!((l - 0.5).abs() < 1e-6, "L debe ser el máximo absoluto, fue {l}");
+        assert!((r - 0.7).abs() < 1e-6, "R debe ser el máximo absoluto, fue {r}");
+        assert_eq!(m.take(), (0.0, 0.0), "tras leer, el pico vuelve a 0");
+        m.record(f32::NAN, f32::INFINITY);
+        assert_eq!(m.take(), (0.0, 0.0), "NaN e infinitos se ignoran");
+    }
+
+    #[test]
+    fn test_peak_meter_desde_varios_hilos_da_el_maximo_global() {
+        let m = Arc::new(PeakMeter::default());
+        let hs: Vec<_> = (1..=4)
+            .map(|k| {
+                let m = Arc::clone(&m);
+                std::thread::spawn(move || {
+                    for i in 0..1000 {
+                        let v = (k as f32) * 0.1 * (i as f32 / 999.0);
+                        m.record(v, -v);
+                    }
+                })
+            })
+            .collect();
+        for h in hs {
+            h.join().unwrap();
+        }
+        let (l, r) = m.take();
+        assert!((l - 0.4).abs() < 1e-6 && (r - 0.4).abs() < 1e-6, "máximo global 0,4; fue {l} / {r}");
+    }
+
+    /// Crea un motor con pistas sintéticas de amplitud constante (L = R = amplitud) en el bus Main.
+    fn engine_con_pistas(amplitudes: &[(&str, f32)], frames: usize) -> PlaybackEngine {
+        let engine = PlaybackEngine::new(Arc::new(AudioStreamStats::default()));
+        let mut active = Vec::new();
+        let mut handles = Vec::new();
+        for (id, amp) in amplitudes {
+            let (mut prod, cons) = rtrb::RingBuffer::<f32>::new(frames * 2 + 16);
+            for _ in 0..frames {
+                prod.push(*amp).unwrap();
+                prod.push(*amp).unwrap();
+            }
+            let t = ActiveTrack {
+                track_id: id.to_string(),
+                file_path: std::path::PathBuf::new(),
+                original_channels: 2,
+                total_frames: frames as u64,
+                gain: Arc::new(AtomicU32::new(1.0f32.to_bits())),
+                pan: Arc::new(AtomicI32::new(0)),
+                muted: Arc::new(AtomicBool::new(false)),
+                soloed: Arc::new(AtomicBool::new(false)),
+                bus: Arc::new(AtomicU8::new(TrackBus::Main as u8)),
+                consumer: Arc::new(std::sync::Mutex::new(cons)),
+                stop_signal: Arc::new(AtomicBool::new(false)),
+                seek_request: Arc::new(AtomicI64::new(-1)),
+                jump_request: Arc::new(std::sync::Mutex::new(None)),
+                is_vamping: Arc::new(AtomicBool::new(false)),
+                active_section_loop: Arc::new(std::sync::Mutex::new(None)),
+                pitch_semitones: Arc::new(AtomicI32::new(0)),
+                meter: Arc::new(PeakMeter::default()),
+            };
+            handles.push(StreamTrackHandle {
+                consumer: Arc::clone(&t.consumer),
+                gain: Arc::clone(&t.gain),
+                pan: Arc::clone(&t.pan),
+                muted: Arc::clone(&t.muted),
+                soloed: Arc::clone(&t.soloed),
+                bus: Arc::clone(&t.bus),
+                meter: Arc::clone(&t.meter),
+            });
+            active.push(t);
+        }
+        *engine.tracks.try_lock().unwrap() = active;
+        *engine.stream_tracks.lock().unwrap() = handles;
+        engine.total_frames.store(frames as u64, Ordering::SeqCst);
+        engine.is_playing.store(true, Ordering::SeqCst);
+        engine
+    }
+
+    fn nivel(state: &PlaybackStateSnapshot, id: &str) -> (f32, f32) {
+        state
+            .meters
+            .tracks
+            .iter()
+            .find(|t| t.track_id == id)
+            .map(|t| (t.l, t.r))
+            .unwrap_or((-1.0, -1.0))
+    }
+
+    #[test]
+    fn test_medidores_por_pista_post_fader_y_mute_solo() {
+        let k = std::f32::consts::FRAC_1_SQRT_2; // pan centro: cos(π/4) = sin(π/4)
+        let engine = engine_con_pistas(&[("a", 0.5), ("b", 0.25)], 4096);
+        let mut buf = vec![0.0f32; 512 * 2];
+
+        engine.simulate_callback_block(&mut buf, 2);
+        let s = engine.get_playback_state();
+        let (al, ar) = nivel(&s, "a");
+        let (bl, _) = nivel(&s, "b");
+        assert!((al - 0.5 * k).abs() < 1e-4 && (ar - 0.5 * k).abs() < 1e-4, "pista a: {al} / {ar}");
+        assert!((bl - 0.25 * k).abs() < 1e-4, "pista b: {bl}");
+
+        // Sin audio nuevo, la siguiente lectura da 0.
+        let s = engine.get_playback_state();
+        assert_eq!(nivel(&s, "a"), (0.0, 0.0), "tras leer, sin bloque nuevo, el pico es 0");
+
+        // Mute en b: su medidor queda a 0; a sigue midiendo.
+        engine.tracks.try_lock().unwrap()[1].muted.store(true, Ordering::SeqCst);
+        engine.simulate_callback_block(&mut buf, 2);
+        let s = engine.get_playback_state();
+        assert_eq!(nivel(&s, "b"), (0.0, 0.0), "pista en mute -> 0");
+        assert!(nivel(&s, "a").0 > 0.3, "la pista sin mute sigue midiendo");
+
+        // Solo en b (sin mute): a queda a 0.
+        engine.tracks.try_lock().unwrap()[1].muted.store(false, Ordering::SeqCst);
+        engine.tracks.try_lock().unwrap()[1].soloed.store(true, Ordering::SeqCst);
+        engine.simulate_callback_block(&mut buf, 2);
+        let s = engine.get_playback_state();
+        assert_eq!(nivel(&s, "a"), (0.0, 0.0), "fuera del solo -> 0");
+        assert!((nivel(&s, "b").0 - 0.25 * k).abs() < 1e-4, "la pista en solo mide");
+
+        // Ganancia 0,5 en b: el pico baja a la mitad (post-fader).
+        engine.tracks.try_lock().unwrap()[1].gain.store(0.5f32.to_bits(), Ordering::SeqCst);
+        engine.simulate_callback_block(&mut buf, 2);
+        let s = engine.get_playback_state();
+        assert!((nivel(&s, "b").0 - 0.125 * k).abs() < 1e-4, "post-fader: {}", nivel(&s, "b").0);
+    }
+
+    #[test]
+    fn test_medidor_main_sigue_la_suma_y_el_master() {
+        let k = std::f32::consts::FRAC_1_SQRT_2;
+        let engine = engine_con_pistas(&[("a", 0.5), ("b", 0.25)], 8192);
+        // Sin micro-fundido: interesa el nivel estable del bus.
+        *engine.fade.lock().unwrap() = FadeEnvelope::new(FADE_MS, 48000);
+        let mut buf = vec![0.0f32; 1024 * 2];
+
+        engine.simulate_callback_block(&mut buf, 2);
+        let s = engine.get_playback_state();
+        let esperado = 0.75 * k;
+        assert!((s.meters.main.l - esperado).abs() < 1e-3, "main = suma de pistas: {} vs {esperado}", s.meters.main.l);
+        assert!((s.meters.out.l - esperado).abs() < 1e-3, "salida sin cue = main: {}", s.meters.out.l);
+        assert!(!s.meters.clipped, "sin recorte");
+
+        engine.master_gain.store(0.5f32.to_bits(), Ordering::SeqCst);
+        engine.simulate_callback_block(&mut buf, 2);
+        let s = engine.get_playback_state();
+        assert!((s.meters.main.l - esperado * 0.5).abs() < 1e-3, "master a 0,5: {}", s.meters.main.l);
+
+        // Ganancia alta en a: la salida supera 1,0 antes del recorte.
+        engine.master_gain.store(1.0f32.to_bits(), Ordering::SeqCst);
+        engine.tracks.try_lock().unwrap()[0].gain.store(4.0f32.to_bits(), Ordering::SeqCst);
+        engine.simulate_callback_block(&mut buf, 2);
+        let s = engine.get_playback_state();
+        assert!(s.meters.clipped, "salida por encima de 1,0 -> recorte");
+        assert!(s.meters.out.l > 1.0, "el medidor de salida ve el valor antes del clamp: {}", s.meters.out.l);
+    }
