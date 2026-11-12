@@ -613,6 +613,8 @@ fn finish_decoded_track(
             for i in 0..len {
                 mono.push((decoded_channels[0][i] + decoded_channels[1][i]) * 0.5);
             }
+            // La copia estéreo ya no hace falta: se libera antes del remuestreo.
+            drop(decoded_channels);
             (true, vec![mono])
         } else {
             (false, decoded_channels)
@@ -625,11 +627,14 @@ fn finish_decoded_track(
 
     // 2. Resampling to target_sample_rate (if different)
     let resampled = if original_sample_rate != target_sample_rate {
-        resample_channels(
+        let out = resample_channels(
             &working_channels,
             original_sample_rate as usize,
             target_sample_rate as usize,
-        )?
+        )?;
+        // El audio a la frecuencia original ya no hace falta: se libera antes de cuantizar y escribir.
+        drop(working_channels);
+        out
     } else {
         working_channels
     };
@@ -656,6 +661,8 @@ fn finish_decoded_track(
     let is_exact_16bit = bits_per_sample <= 16 && original_sample_rate == target_sample_rate;
     let mut rng = TpdfDitherRng::new(frame_count ^ (target_sample_rate as u64));
     let pcm_samples = quantize_channels_to_pcm(&resampled, &mut rng, is_exact_16bit);
+    // Ya cuantizado: el audio en f32 no se usa más, así no coexiste con el búfer de escritura.
+    drop(resampled);
 
     if let Some(flag) = cancel_flag {
         if flag.load(Ordering::Relaxed) {
