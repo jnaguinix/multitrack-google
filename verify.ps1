@@ -3,16 +3,13 @@ param(
 )
 
 $ErrorActionPreference = "Continue"
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+$OutputEncoding = [System.Text.Encoding]::UTF8
 
-# Asegurar toolchain de Rust si no se encuentra en el PATH actual
+# Comprobar toolchain de Rust en el PATH
 if (-not (Get-Command cargo -ErrorAction SilentlyContinue)) {
-    $customCargo = "C:\Users\jpuerta\.codex\visualizations\2026\11\09\01a1be2f-be92-7153-bd62-a2684be8afbf\cargo"
-    $customRustup = "C:\Users\jpuerta\.codex\visualizations\2026\11\09\01a1be2f-be92-7153-bd62-a2684be8afbf\rustup"
-    if (Test-Path "$customCargo\bin\cargo.exe") {
-        $env:CARGO_HOME = $customCargo
-        $env:RUSTUP_HOME = $customRustup
-        $env:PATH = "$customCargo\bin;$env:PATH"
-    }
+    Write-Host 'cargo no está en el PATH; abre una terminal con Rust instalado' -ForegroundColor Red
+    exit 1
 }
 
 $steps = @(
