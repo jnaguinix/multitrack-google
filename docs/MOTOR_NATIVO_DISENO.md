@@ -1,7 +1,40 @@
-# Documento de Diseño: Motor de Audio Nativo para OmniTracks (Fase 0 - Revisión 3 - Aprobado para Fase 1)
+# Documento de Diseño: Motor de Audio Nativo para OmniTracks
 
-## 0. Estado del Documento
-Este documento es la especificación técnica completa y definitiva para la implementación del motor nativo en Rust para OmniTracks escritorio (Windows x64 sobre Tauri v2). Cumple con todas las directrices del documento `PROMPT_MOTOR_NATIVO.md` y resuelve los bloqueantes y decisiones de arquitectura requeridas para la Fase 0.
+## 0. Estado del Documento y Fases de Implementación
+
+Este documento es la especificación técnica completa del motor nativo en Rust para OmniTracks escritorio (Windows x64 sobre Tauri v2).
+
+### 0.1 Estado Real de las Fases (Verificado contra el código)
+
+| Fase | Descripción | Estado | Detalle técnico en el repositorio |
+|---|---|:---:|---|
+| **Fase 0** | Arquitectura y Diseño | **Hecha** | Especificación técnica, modelo de hilos, desacoplamiento I/O y comandos IPC definidos. |
+| **Fase 1** | Motor de Reproducción Básico en Rust | **Hecha** | Streaming desacoplado desde disco mediante `rtrb`, micro-fades de 8 ms, transporte y saltos cuantizados (`playback/`, `output.rs`). |
+| **Fase 2** | Caché PCM y Decodificación Nativa | **Hecha** | Decodificación nativa con `symphonia` y `rubato` en `import.rs`, `cache.rs`, `resampler.rs`; separación de biblioteca (`library.json`) y generación de caché bajo demanda al entrar al setlist. |
+| **Fase 3** | Metrónomo y Cues Sintéticos | **Hecha** | Metrónomo sample-accurate con aceleración varispeed en `metronome.rs`; síntesis de chimes de sección en `guide.rs`. |
+| **Fase 4** | Compensación de Fase y Latencia | **Hecha** | Alineación sinc y compensación de retardo de grupo (`resampler.rs`, tests unitarios de alineación). |
+| **Fase 5** | Ruteo Multicanal (> 2 salidas físicas) | **Diferida** | Actualmente la salida opera en estéreo o Split-Mono (Ch 1: Click/Guía, Ch 2: Main) sobre interfaz de 2 canales. Ruteo discreto a más de 2 salidas físicas pospuesto. |
+| **Fase 6** | Control Remoto Móvil por LAN | **Parcial** | Servidor Axum/Tokio HTTP y WebSocket en puerto 8765 (`lan.rs`) con emparejamiento QR/token y roles Músico/Sonidista para mezclas y transporte. Streaming de audio LAN a auriculares pendiente. |
+| **Fase 7** | Soporte de Drivers ASIO | **Diferida** | Pospuesto formalmente por decisión del dueño debido a restricciones de licencia del SDK de Steinberg. WASAPI en modo compartido es el driver activo y soportado. |
+
+### 0.2 Flujo de Desarrollo Real
+
+- **Desarrollo rápido de la interfaz web (UI):**
+  ```powershell
+  npm.cmd run dev
+  ```
+  Inicia el servidor local de Vite en `http://localhost:5173`. Permite iterar componentes visuales, hooks y estilos con recarga en caliente (HMR).
+- **Compilación y prueba del ejecutable de escritorio (`.exe`):**
+  ```powershell
+  npm.cmd --prefix desktop run build:portable
+  ```
+  Ejecuta `build-frontend.ps1` y compila el ejecutable nativo de Tauri v2 con el motor Rust y WebView2:
+  `desktop\src-tauri\target\x86_64-pc-windows-msvc\release\omnitracks-desktop.exe`
+- **Verificación rápida y completa:**
+  ```powershell
+  powershell -ExecutionPolicy Bypass -File .\verify.ps1            # Rápida (lint, tests web, cargo test --lib, build web)
+  powershell -ExecutionPolicy Bypass -File .\verify.ps1 -Completo  # Completa (+ cargo test completo y build:portable)
+  ```
 
 ---
 
