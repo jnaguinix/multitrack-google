@@ -616,19 +616,15 @@ export default function App() {
           showToast(`Carpeta reubicada para "${proj.title}".`);
 
           if (updatedProj.inSetlist) {
-            const filesToImport = updatedTracks
-              .filter((t) => t.filePath)
-              .map((t) => ({ filePath: t.filePath!, trackId: t.id }));
-            if (filesToImport.length > 0) {
-              const invoke = (window as any).__TAURI__?.core?.invoke;
-              if (invoke) {
-                invoke('audio_import_tracks', {
-                  projectId: updatedProj.id,
-                  files: filesToImport,
-                  targetSampleRate: null,
-                }).catch(() => {});
-              }
-            }
+            nativeAudioEngine
+              .generateNativeCacheForProject(updatedProj)
+              .then((ok) => {
+                if (!ok) showToast(`No se pudo regenerar la caché de "${updatedProj.title}".`);
+              })
+              .catch((err: any) => {
+                console.error('[Relink] Error regenerando caché:', err);
+                showToast(`Error al regenerar la caché de "${updatedProj.title}": ${err?.message || err}`);
+              });
           }
         } catch (err) {
           console.error('[Relink] Error reubicando carpeta en escritorio:', err);
@@ -1656,7 +1652,6 @@ export default function App() {
               updatedAt: Date.now(),
             };
 
-            nativeAudioEngine.markImportStarted(targetProjectId, `Actualizando ${scanned.files.length} pistas...`);
             audioEngine.prepareProjectShell(newSongProject);
             setMissingNativeCache(false);
             if (newSongProject.inSetlist) {
@@ -1697,7 +1692,6 @@ export default function App() {
               updatedAt: Date.now(),
             };
 
-            nativeAudioEngine.markImportStarted(targetProjectId, `Decodificando ${scanned.files.length} pistas...`);
             audioEngine.prepareProjectShell(newSongProject);
             setMissingNativeCache(false);
             if (newSongProject.inSetlist) {
@@ -1720,7 +1714,6 @@ export default function App() {
             updatedAt: Date.now(),
           };
 
-          nativeAudioEngine.markImportStarted(targetProjectId, `Decodificando ${scanned.files.length} pistas...`);
           setMissingNativeCache(false);
           audioEngine.updateProjectConfig(newSongProject);
           setCurrentProject(newSongProject);
@@ -1731,11 +1724,32 @@ export default function App() {
         }
 
         const mountMs = performance.now() - t0;
+
+        // Diseño aprobado: importar solo escanea y guarda metadatos (library.json + sidecar).
+        // La caché PCM se crea al añadir la canción al setlist o al cargarla sin caché.
+        // Solo se decodifica aquí si la canción YA está en el setlist (p. ej. se fusionó con una existente).
+        if (!newSongProject.inSetlist) {
+          console.info(
+            `[NativeImport] "${newSongProject.title}" importada en biblioteca en ${mountMs.toFixed(1)} ms (${scanned.files.length} pistas, solo metadatos; caché PCM diferida al añadir al setlist).`
+          );
+          showToast(`"${newSongProject.title}": añadida a la biblioteca (${scanned.files.length} pistas).`);
+          return;
+        }
+
         console.info(
-          `[NativeImport] "${newSongProject.title}" montada en UI en ${mountMs.toFixed(1)} ms. Decodificando ${scanned.files.length} pistas en segundo plano...`
+          `[NativeImport] "${newSongProject.title}" montada en UI en ${mountMs.toFixed(1)} ms. Decodificando ${scanned.files.length} pistas en segundo plano (ya está en el setlist)...`
         );
 
+        nativeAudioEngine.markImportStarted(
+          targetProjectId,
+          `Decodificando ${scanned.files.length} pistas...`,
+          scanned.files.length
+        );
         setImportStatusText(`Convirtiendo ${scanned.files.length} pistas en segundo plano (0%)...`);
+        const unsubscribeImportProgress = nativeAudioEngine.subscribeCache(() => {
+          const live = nativeAudioEngine.formatImportProgress(targetProjectId);
+          if (live) setImportStatusText(`Convirtiendo "${newSongProject.title}": ${live}`);
+        });
         showToast(`"${newSongProject.title}": montada en biblioteca. Decodificando pistas...`);
 
         const filesToImport = scanned.files.map((f) => ({
@@ -1749,6 +1763,7 @@ export default function App() {
           targetSampleRate: null,
         })
           .then((importResult: any) => {
+            unsubscribeImportProgress();
             nativeAudioEngine.markImportCompleted(targetProjectId);
             setImportStatusText(null);
             if (importResult?.tracks) {
@@ -1809,6 +1824,7 @@ export default function App() {
             }
           })
           .catch((importErr: any) => {
+            unsubscribeImportProgress();
             nativeAudioEngine.markImportCompleted(targetProjectId);
             console.error('[NativeImport] Error en decodificación de pistas:', importErr);
             setImportStatusText(null);
@@ -2030,31 +2046,27 @@ export default function App() {
     const doAdd = () => {
       // In desktop, ensure native PCM cache is generated for this song
       if (isDesktopApp) {
-        const invoke = (window as any).__TAURI__?.core?.invoke;
-        if (invoke) {
-          invoke('audio_get_project_cache_status', { projectId: song.id })
-            .then((status: any) => {
-              if (!status?.isComplete) {
-                const filesToImport = song.tracks
-                  .filter((t) => t.filePath)
-                  .map((t) => ({ filePath: t.filePath!, trackId: t.id }));
-                if (filesToImport.length > 0) {
-                  showToast(`Generando caché para "${song.title}"...`);
-                  invoke('audio_import_tracks', {
-                    projectId: song.id,
-                    files: filesToImport,
-                    targetSampleRate: null,
-                  })
-                    .then(() => {
-                      showToast(`"${song.title}": lista para sonar.`);
-                    })
-                    .catch((err: any) => {
-                      console.warn('[Cache] Error generando caché al añadir al setlist:', err);
-                    });
-                }
+        if (nativeAudioEngine.isProjectImporting(song.id)) {
+          showToast(`"${song.title}": la caché ya se está generando (${nativeAudioEngine.formatImportProgress(song.id) ?? '...'}).`);
+        } else {
+          nativeAudioEngine
+            .checkProjectCacheStatus(song)
+            .then(async (status) => {
+              if (status.isReady) return;
+              if (song.tracks.length === 0) return;
+              showToast(`Generando caché para "${song.title}"...`);
+              const ok = await nativeAudioEngine.generateNativeCacheForProject(song);
+              if (ok) {
+                if (currentProjectRef.current?.id === song.id) setMissingNativeCache(false);
+                showToast(`"${song.title}": lista para sonar.`);
+              } else {
+                showToast(`No se pudo generar la caché de "${song.title}". Revisa que los archivos originales existan.`);
               }
             })
-            .catch(() => {});
+            .catch((err: any) => {
+              console.error('[Cache] Error generando caché al añadir al setlist:', err);
+              showToast(`Error al generar la caché de "${song.title}": ${err?.message || err}`);
+            });
         }
       } else {
         isProjectPcmComplete(song).then((complete) => {
@@ -2446,20 +2458,32 @@ export default function App() {
       )}
 
       {/* Banner de aviso: Canción sin caché nativa a la frecuencia del dispositivo */}
-      {missingNativeCache && (
+      {missingNativeCache && (() => {
+        // Avance REAL por pista (evento audio://import-progress), no los saltos 5/15/100 %.
+        const liveProgress = currentProject ? nativeAudioEngine.formatImportProgress(currentProject.id) : null;
+        const isBusy = isGeneratingNativeCache || Boolean(liveProgress);
+        return (
         <div className="bg-amber-950/90 border-b border-amber-800/80 text-amber-200 px-4 py-2 flex items-center justify-between text-xs z-50 shadow-md">
           <div className="flex items-center gap-2">
             <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0" />
             <span>
               La canción actual <strong>"{currentProject?.title}"</strong> no dispone de caché PCM nativa para este dispositivo.
-              {isGeneratingNativeCache ? ` (${nativeCacheProgress.percent}% - ${nativeCacheProgress.text})` : ''}
+              {liveProgress
+                ? ` (${liveProgress})`
+                : isGeneratingNativeCache
+                ? ` (${nativeCacheProgress.percent}% - ${nativeCacheProgress.text})`
+                : ''}
             </span>
           </div>
           <button
             type="button"
-            disabled={isGeneratingNativeCache}
+            disabled={isBusy}
             onClick={async () => {
               if (!currentProject) return;
+              if (nativeAudioEngine.isProjectImporting(currentProject.id)) {
+                showToast(`"${currentProject.title}": la caché ya se está generando.`);
+                return;
+              }
               setIsGeneratingNativeCache(true);
               setNativeCacheProgress({ percent: 5, text: 'Iniciando verificación...' });
               try {
@@ -2482,10 +2506,11 @@ export default function App() {
             }}
             className="px-3 py-1 bg-amber-500 hover:bg-amber-400 text-black font-semibold rounded cursor-pointer transition-colors disabled:opacity-50 shrink-0"
           >
-            {isGeneratingNativeCache ? 'Generando...' : 'Generar caché nativa'}
+            {isBusy ? 'Generando...' : 'Generar caché nativa'}
           </button>
         </div>
-      )}
+        );
+      })()}
 
       {/* Studio Transport Deck (Shown when a song is loaded; the Live page has its own) */}
       {transportProject && (

@@ -49,6 +49,15 @@ export interface NativePlaybackSnapshot {
   cueMasterGain?: number;
 }
 
+export interface NativeImportProgress {
+  percent: number;
+  text: string;
+  completed: boolean;
+  /** Pista que se está decodificando (1-based). 0 si aún no se conoce. */
+  trackNumber: number;
+  totalTracks: number;
+}
+
 export class NativeAudioEngine {
   private currentProject: SongProject | null = null;
   private loadedProjectId: string | null = null;
@@ -81,7 +90,8 @@ export class NativeAudioEngine {
     lastCueMessage: null,
   };
 
-  private importProgressByProject = new Map<string, { percent: number; text: string; completed: boolean }>();
+  private importProgressByProject = new Map<string, NativeImportProgress>();
+  private generatingCachePromises = new Map<string, Promise<boolean>>();
   private playPendingProjectId: string | null = null;
 
   constructor() {
@@ -102,11 +112,17 @@ export class NativeAudioEngine {
       const percent = Math.round(payload.percent || 0);
       const text = payload.track_name || '';
       const completed = Boolean(payload.completed);
+      const totalTracks = Number(payload.total_tracks ?? payload.totalTracks ?? 0);
+      const rawIndex = Number(payload.track_index ?? payload.trackIndex ?? 0);
+      // El backend emite el índice 0-based al empezar cada pista.
+      const trackNumber = completed ? totalTracks : Math.min(rawIndex + 1, totalTracks || rawIndex + 1);
 
       this.importProgressByProject.set(projId, {
         percent,
         text,
         completed,
+        trackNumber,
+        totalTracks,
       });
 
       this.notifyCache();
@@ -119,7 +135,7 @@ export class NativeAudioEngine {
     });
   }
 
-  public getImportProgress(projectId: string): { percent: number; text: string; completed: boolean } | null {
+  public getImportProgress(projectId: string): NativeImportProgress | null {
     return this.importProgressByProject.get(projectId) || null;
   }
 
@@ -128,22 +144,37 @@ export class NativeAudioEngine {
     return Boolean(prog && !prog.completed);
   }
 
-  public markImportStarted(projectId: string, text = 'Iniciando decodificación...'): void {
+  public markImportStarted(projectId: string, text = 'Iniciando decodificación...', totalTracks = 0): void {
     this.importProgressByProject.set(projectId, {
       percent: 0,
       text,
       completed: false,
+      trackNumber: 0,
+      totalTracks,
     });
     this.notifyCache();
   }
 
   public markImportCompleted(projectId: string): void {
+    const prev = this.importProgressByProject.get(projectId);
     this.importProgressByProject.set(projectId, {
       percent: 100,
       text: 'Completado',
       completed: true,
+      trackNumber: prev?.totalTracks ?? 0,
+      totalTracks: prev?.totalTracks ?? 0,
     });
     this.notifyCache();
+  }
+
+  /** Texto "Pista N de M · P%" a partir del avance real emitido por el backend. */
+  public formatImportProgress(projectId: string): string | null {
+    const prog = this.importProgressByProject.get(projectId);
+    if (!prog || prog.completed) return null;
+    const pista = prog.totalTracks > 0 && prog.trackNumber > 0
+      ? `Pista ${prog.trackNumber} de ${prog.totalTracks} · `
+      : '';
+    return `${pista}${prog.percent}%`;
   }
 
   public consumePlayPending(projectId: string): boolean {
@@ -585,12 +616,81 @@ export class NativeAudioEngine {
         cachedCount: res?.cachedTracksCount || 0,
         totalCount: res?.totalTracksCount || project.tracks.length,
       };
-    } catch {
+    } catch (err) {
+      console.error(`[NativeAudioEngine] Error consultando el estado de la caché de '${project.id}':`, err);
       return { isReady: false, cachedCount: 0, totalCount: project.tracks.length };
     }
   }
 
+  /**
+   * Genera la caché PCM nativa de un proyecto. Nunca lanza dos decodificaciones a la vez
+   * para el mismo proyecto: si ya hay una en curso (propia o iniciada por otro camino,
+   * `isProjectImporting`), espera a esa y devuelve si la caché quedó lista.
+   */
   public async generateNativeCacheForProject(
+    project: SongProject,
+    onProgress?: (percent: number, text: string) => void
+  ): Promise<boolean> {
+    const inFlight = this.generatingCachePromises.get(project.id);
+    if (inFlight) {
+      const unsubscribe = this.forwardRealProgress(project.id, onProgress);
+      try {
+        return await inFlight;
+      } finally {
+        unsubscribe();
+      }
+    }
+
+    if (this.isProjectImporting(project.id)) {
+      const unsubscribe = this.forwardRealProgress(project.id, onProgress);
+      try {
+        await this.waitForImportToFinish(project.id);
+        return (await this.checkProjectCacheStatus(project)).isReady;
+      } finally {
+        unsubscribe();
+      }
+    }
+
+    this.markImportStarted(project.id, 'Preparando decodificación...', project.tracks.length);
+    const unsubscribe = this.forwardRealProgress(project.id, onProgress);
+    const task = this.runGenerateNativeCache(project, onProgress).finally(() => {
+      // Si el backend no llegó a emitir `completed` (error/cancelación), no dejar el proyecto
+      // marcado como "importando" para siempre.
+      if (this.isProjectImporting(project.id)) this.markImportCompleted(project.id);
+      this.generatingCachePromises.delete(project.id);
+      unsubscribe();
+    });
+    this.generatingCachePromises.set(project.id, task);
+    return task;
+  }
+
+  /** Reenvía a `onProgress` el avance real (audio://import-progress) mientras dure la decodificación. */
+  private forwardRealProgress(
+    projectId: string,
+    onProgress?: (percent: number, text: string) => void
+  ): () => void {
+    if (!onProgress) return () => {};
+    return this.subscribeCache(() => {
+      const prog = this.importProgressByProject.get(projectId);
+      if (!prog || prog.completed || prog.trackNumber === 0) return;
+      const label = this.formatImportProgress(projectId) ?? `${prog.percent}%`;
+      onProgress(prog.percent, `${label}${prog.text ? ` · ${prog.text}` : ''}`);
+    });
+  }
+
+  private waitForImportToFinish(projectId: string): Promise<void> {
+    return new Promise((resolve) => {
+      if (!this.isProjectImporting(projectId)) return resolve();
+      const unsubscribe = this.subscribeCache(() => {
+        if (!this.isProjectImporting(projectId)) {
+          unsubscribe();
+          resolve();
+        }
+      });
+    });
+  }
+
+  private async runGenerateNativeCache(
     project: SongProject,
     onProgress?: (percent: number, text: string) => void
   ): Promise<boolean> {

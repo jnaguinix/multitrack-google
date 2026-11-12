@@ -29,6 +29,7 @@ import {
   TransportState,
 } from '../types/project';
 import { audioEngine } from '../audio/audioEngine';
+import { nativeAudioEngine } from '../audio/nativeAudioEngine';
 import { extractAudioFilesFromDataTransfer } from '../utils/fileImportHelper';
 import { formatMmSs, formatTimecode } from './TransportDeck';
 import { getSongWaveformPeaks } from '../utils/songWaveform';
@@ -410,6 +411,8 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
             const isCurrent = project?.id === song.id;
             const isPlayingThis = isCurrent && transport.isPlaying;
             const cacheInfo = audioEngine.getSongRamCacheInfo(song);
+            // Avance real de decodificación (pista N de M) emitido por el motor nativo.
+            const liveCacheText = isDesktopApp() ? nativeAudioEngine.formatImportProgress(song.id) : null;
             const isPcmReady = audioEngine.isProjectPcmReady(song);
             const isStreamSong = audioEngine.getEffectiveEngineModeForProject(song) === 'stream';
             const pcmMB = audioEngine.getProjectPcmEstimatedMB(song);
@@ -554,11 +557,13 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
                           {isStreamSong
                             ? cacheInfo.isReady
                               ? 'Lista'
-                              : 'Disco'
+                              : liveCacheText ?? 'Disco'
                             : cacheInfo.isReady
                             ? `RAM`
                             : cacheInfo.skippedByRamBudget
                             ? 'Lím'
+                            : liveCacheText
+                            ? liveCacheText
                             : `${cacheInfo.cachedCount}/${cacheInfo.totalCount}`}
                         </span>
                       )}
