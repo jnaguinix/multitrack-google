@@ -1296,3 +1296,15 @@
         assert!(s.meters.clipped, "salida por encima de 1,0 -> recorte");
         assert!(s.meters.out.l > 1.0, "el medidor de salida ve el valor antes del clamp: {}", s.meters.out.l);
     }
+
+    #[test]
+    fn test_medidores_click_y_guia_llegan_al_estado() {
+        let engine = PlaybackEngine::new(Arc::new(AudioStreamStats::default()));
+        engine.bus_meters.click.record(0.3, 0.3);
+        engine.bus_meters.guide.record(0.1, 0.1);
+        let s = engine.get_playback_state();
+        assert!((s.meters.click.l - 0.3).abs() < 1e-6, "click: {}", s.meters.click.l);
+        assert!((s.meters.guide.l - 0.1).abs() < 1e-6, "guía: {}", s.meters.guide.l);
+        let s = engine.get_playback_state();
+        assert_eq!(s.meters.click.l, 0.0, "tras leer vuelve a 0");
+    }

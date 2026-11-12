@@ -977,10 +977,13 @@ impl PlaybackEngine {
                     // Medidores de bus: acumuladores locales en la pila; se publican una vez por bloque.
                     let (mut mk_l, mut mk_r, mut ck_l, mut ck_r, mut ok_l, mut ok_r) =
                         (0.0f32, 0.0f32, 0.0f32, 0.0f32, 0.0f32, 0.0f32);
+                    let (mut clk_pk, mut gde_pk) = (0.0f32, 0.0f32);
 
                     // Write into output buffer applying the micro-fade envelope and split-mono / stereo routing
                     for f in 0..frames {
                         let env_gain = fade.next_gain();
+                        clk_pk = clk_pk.max((click_buf[f] * cue_g * env_gain).abs());
+                        gde_pk = gde_pk.max((guide_buf[f] * cue_g * env_gain).abs());
 
                         if is_split {
                             // Split-Mono mode:
@@ -1028,6 +1031,8 @@ impl PlaybackEngine {
                     bus_meters_arc.main.record(mk_l, mk_r);
                     bus_meters_arc.cue.record(ck_l, ck_r);
                     bus_meters_arc.out.record(ok_l, ok_r);
+                    bus_meters_arc.click.record(clk_pk, clk_pk);
+                    bus_meters_arc.guide.record(gde_pk, gde_pk);
 
                     current_frame.fetch_add((frames as f64 * pitch_ratio).round() as u64, Ordering::Relaxed);
                     if current_frame.load(Ordering::Relaxed) >= total_frames.load(Ordering::Relaxed) && !vamping_arc.load(Ordering::Relaxed) {
