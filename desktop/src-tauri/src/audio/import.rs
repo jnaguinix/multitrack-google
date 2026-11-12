@@ -895,4 +895,108 @@ mod tests {
             let _ = std::fs::remove_dir_all(temp_dir);
         }
     }
+
+
+    // ---- Huellas del PCM generado (red de seguridad para las optimizaciones de rendimiento) ----
+
+    /// FNV-1a de 64 bits, igual que el de `examples/medir_cache.rs`.
+    fn fnv1a64(bytes: &[u8]) -> u64 {
+        let mut h: u64 = 0xcbf29ce484222325;
+        for &b in bytes {
+            h ^= b as u64;
+            h = h.wrapping_mul(0x100000001b3);
+        }
+        h
+    }
+
+    /// Escribe un WAV PCM entero (16 o 24 bit) con canales distintos. `frames[i]` es la lista de
+    /// canales del frame i, en el rango del tipo (±32767 para 16 bit, ±8388607 para 24 bit).
+    fn write_test_wav_interleaved(path: &Path, sample_rate: u32, bits: u16, frames: &[Vec<i32>]) {
+        use std::io::Write;
+        let channels = frames[0].len() as u16;
+        let bytes_per_sample = bits / 8;
+        let block_align = channels * bytes_per_sample;
+        let data_len = frames.len() as u32 * block_align as u32;
+        let mut f = File::create(path).unwrap();
+        f.write_all(b"RIFF").unwrap();
+        f.write_all(&(36 + data_len).to_le_bytes()).unwrap();
+        f.write_all(b"WAVEfmt ").unwrap();
+        f.write_all(&16u32.to_le_bytes()).unwrap();
+        f.write_all(&1u16.to_le_bytes()).unwrap();
+        f.write_all(&channels.to_le_bytes()).unwrap();
+        f.write_all(&sample_rate.to_le_bytes()).unwrap();
+        f.write_all(&(sample_rate * block_align as u32).to_le_bytes()).unwrap();
+        f.write_all(&block_align.to_le_bytes()).unwrap();
+        f.write_all(&bits.to_le_bytes()).unwrap();
+        f.write_all(b"data").unwrap();
+        f.write_all(&data_len.to_le_bytes()).unwrap();
+        for frame in frames {
+            for &v in frame {
+                f.write_all(&v.to_le_bytes()[..bytes_per_sample as usize]).unwrap();
+            }
+        }
+    }
+
+    /// Señal determinista sin funciones trigonométricas: dos ondas triangulares más ruido de un LCG.
+    fn synth_frames(n: usize, amp: i32, same_channels: bool) -> Vec<Vec<i32>> {
+        let mut state: u64 = 0x1234_5678_9abc_def0;
+        let mut noise = move || {
+            state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            ((state >> 40) as i32 & 0xff) - 128
+        };
+        let tri = |i: usize, period: usize| -> i32 {
+            let ph = (i % period) as i64;
+            let half = (period / 2) as i64;
+            let v = if ph < half { ph } else { period as i64 - ph };
+            (((v * 2 - half) * amp as i64) / (half.max(1) * 2)) as i32
+        };
+        (0..n)
+            .map(|i| {
+                let l = tri(i, 109) + tri(i, 37) / 3 + noise() * amp / 32768;
+                let r = if same_channels { l } else { tri(i, 151) + tri(i, 53) / 3 + noise() * amp / 32768 };
+                vec![l.clamp(-amp, amp), r.clamp(-amp, amp)]
+            })
+            .collect()
+    }
+
+    fn pcm_fingerprint(case: &str, sample_rate: u32, bits: u16, frames: &[Vec<i32>]) -> (u64, u16, u64) {
+        let temp_dir = std::env::temp_dir().join(format!(
+            "omnitracks_golden_{case}_{}",
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+        ));
+        std::fs::create_dir_all(&temp_dir).unwrap();
+        let wav_path = temp_dir.join("in.wav");
+        write_test_wav_interleaved(&wav_path, sample_rate, bits, frames);
+        let meta = decode_and_cache_track(&temp_dir, "golden", "stem", &wav_path, 48000, None).unwrap();
+        let pcm = std::fs::read(cache::get_track_pcm_path(&temp_dir, "golden", 48000, "stem")).unwrap();
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        (fnv1a64(&pcm), meta.channels, meta.frame_count)
+    }
+
+    /// Fija byte a byte el PCM que producen las rutas de importación. Si una optimización cambia
+    /// UN solo byte (dither, redondeo, remuestreo, mezcla mono), esta prueba falla.
+    /// Las constantes se capturaron sobre el código sin optimizar (ver docs/PLAN_TIEMPO_CACHE.md).
+    #[test]
+    fn test_pcm_golden_hashes() {
+        // (nombre, hz, bits, frames, canales iguales, amplitud, huella, canales esperados, frames esperados)
+        let cases: Vec<(&str, u32, u16, usize, bool, i32, u64, u16, u64)> = vec![
+            ("44k_estereo_16", 44100, 16, 44100, false, 20000, 0x75cd1937dc5c6ca0, 2, 48000),
+            ("44k_estereo_24", 44100, 24, 44100, false, 6_000_000, 0x3b55a46f3f1731e9, 2, 48000),
+            ("48k_estereo_16_exacto", 48000, 16, 48000, false, 20000, 0xdc25187a43e76cd7, 2, 48000),
+            ("44k_mono_efectivo", 44100, 16, 44100, true, 20000, 0xf27d628291716e12, 1, 48000),
+            ("44k_recorte", 44100, 16, 44100, false, 32767, 0x64ea83df63b7ba86, 2, 48000),
+        ];
+        let mut fallos = Vec::new();
+        for (name, hz, bits, n, same, amp, want_hash, want_ch, want_frames) in cases {
+            let frames = synth_frames(n, amp, same);
+            let (hash, ch, fc) = pcm_fingerprint(name, hz, bits, &frames);
+            println!("GOLDEN {name}: hash={hash:#018x} canales={ch} frames={fc}");
+            if hash != want_hash || ch != want_ch || fc != want_frames {
+                fallos.push(format!("{name}: obtenido hash={hash:#018x} canales={ch} frames={fc}"));
+            }
+        }
+        assert!(fallos.is_empty(), "El PCM cambió:
+{}", fallos.join("
+"));
+    }
 }
