@@ -13,7 +13,8 @@
 
 @layer base {
   :root {
-    --font-sans: 'Inter', system-ui, sans-serif;
+    --font-sans: 'Geist Variable', 'Inter', system-ui, sans-serif;
+    --font-mono: 'Geist Mono Variable', ui-monospace, monospace;
     --lt-bg: #101010;
     --lt-panel: #191919;
     --lt-strip: #242424;
@@ -1346,9 +1347,9 @@
 .lt-setlist.lt-setlist-plan {
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 10px;
   overflow-y: auto;
-  padding: clamp(14px, 2vw, 26px);
+  padding: 8px clamp(14px, 2vw, 26px) 12px;
 }
 .lt-plan-header { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px 18px; }
 .lt-plan-name { display: grid; gap: 4px; min-width: 0; flex: 1 1 320px; }
@@ -1473,7 +1474,7 @@
   align-items: stretch;
   gap: 0;
   overflow-x: auto;
-  padding: 14px 12px 12px;
+  padding: 6px 12px 8px;
   margin-inline: -10px;
   scroll-snap-type: x proximity;
 }
@@ -1563,7 +1564,7 @@
 .lt-map-header { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 14px; }
 .lt-map-header strong { font-size: 15px; font-weight: 650; margin-right: 10px; }
 .lt-map-header span { color: var(--lt-mut); font-size: 12px; }
-.lt-map-wave { height: clamp(150px, 26dvh, 240px); }
+.lt-map-wave { height: clamp(110px, calc(100dvh / var(--ui-zoom, 1) - 535px), 260px); }
 .lt-map-badge {
   position: absolute;
   top: 8px;

@@ -513,7 +513,7 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
       </div>
 
       {setlistQueue.length > 0 && !isProjectInSetlist && (
-        <p className="lt-plan-hint">Pulsa una canción para montarla en consola. Aquí verás su mapa con las secciones y tus notas.</p>
+        <p className="lt-plan-hint">Pulsa una canción para montarla en consola. Aquí verás su mapa con las secciones.</p>
       )}
 
       {mapPanel}
