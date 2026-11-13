@@ -2,7 +2,7 @@ import React from 'react';
 import { AudioLines, Plus, Settings2 } from 'lucide-react';
 import { AudioEngineMode } from '../types/project';
 
-export type WorkspaceView = 'setlist' | 'live' | 'arranger' | 'mixer' | 'remote' | 'library';
+export type WorkspaceView = 'setlist' | 'live' | 'arranger' | 'mixer' | 'library';
 
 interface TopBarProps {
   activeView: WorkspaceView;
@@ -24,7 +24,6 @@ const NAV_ITEMS: { id: WorkspaceView; label: string }[] = [
   { id: 'live', label: 'En vivo' },
   { id: 'arranger', label: 'Arreglo' },
   { id: 'mixer', label: 'Mezcla' },
-  { id: 'remote', label: 'Control rápido' },
   { id: 'library', label: 'Biblioteca' },
 ];
 

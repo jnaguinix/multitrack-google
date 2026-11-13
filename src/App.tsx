@@ -43,7 +43,6 @@ import { SetlistPageView } from './components/SetlistPageView';
 import { LiveSetView } from './components/LiveSetView';
 import { TimelineArranger } from './components/TimelineArranger';
 import { MultitrackMixer } from './components/MultitrackMixer';
-import { StageRemoteView } from './components/StageRemoteView';
 import {
   scanNativeFolder,
   deleteProjectNativeCache,
@@ -110,7 +109,6 @@ function getInitialViewFromHash(): WorkspaceView {
     hash === 'live' ||
     hash === 'arranger' ||
     hash === 'mixer' ||
-    hash === 'remote' ||
     hash === 'library'
   ) {
     return hash;
@@ -1517,47 +1515,6 @@ export default function App() {
                 </p>
                 <button type="button" onClick={() => handleSelectView('setlist')} className="lt-control mt-3">
                   Ir al Setlist
-                </button>
-              </div>
-            ))}
-
-          {/* 4. STAGE REMOTE VIEW */}
-          {activeView === 'remote' &&
-            (currentProject ? (
-              <StageRemoteView
-                project={currentProject}
-                transport={transport}
-                setlistQueue={setlistQueue}
-                onJumpSection={handleJumpSection}
-                onToggleClick={handleToggleClick}
-                onToggleGuide={handleToggleGuide}
-                onChangeQuantize={handleChangeQuantize}
-                onChangeClickGain={(gain) =>
-                  updateCurrentProject((p) => ({ ...p, clickGain: gain }))
-                }
-                onChangeGuideGain={(gain) =>
-                  updateCurrentProject((p) => ({ ...p, guideGain: gain }))
-                }
-                onChangeMasterGain={(gain) =>
-                  updateCurrentProject((p) => ({ ...p, masterGain: gain }))
-                }
-                onToggleTrackMute={handleToggleTrackMute}
-              />
-            ) : (
-              <div className="flex-1 flex flex-col items-center justify-center p-5 text-center">
-                <Music className="w-10 h-10 text-studio-ink mb-3 opacity-80" />
-                <h2 className="text-base font-bold text-neutral-100">
-                  Control rápido
-                </h2>
-                <p className="text-xs text-neutral-400 max-w-md mt-1 mb-4">
-                  Abre una canción desde Setlist o Arreglo para acceder a sus secciones y ajustes de mezcla.
-                </p>
-                <button
-                  type="button"
-                  onClick={() => handleSelectView('setlist')}
-                  className="px-4 py-2 rounded-lg bg-studio-ink text-studio-ground hover:bg-neutral-200 text-xs font-bold cursor-pointer"
-                >
-                  Ir a Setlist
                 </button>
               </div>
             ))}

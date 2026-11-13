@@ -61,21 +61,20 @@ El diagrama secuencial completo está en [`Manual.md`](Manual.md) §4.
 
 ### 2.2. Frontend compartido (`src/`)
 - [`src/main.tsx`](src/main.tsx): punto de entrada React.
-- [`src/App.tsx`](src/App.tsx): **orquestador global** (~3100 líneas). Estado de biblioteca (`projects`), canción montada (`currentProject`), `setlistQueue`, transporte y medidores; importación nativa y web; handlers `handleAddToSetlist`, `handleRemoveFromSetlist`, `handleClearSetlist`, `handleReorderSetlist`; resolución de ambigüedad por huella; atajos de teclado; vista inicial por hash (`#setlist`, `#live`, `#arranger`, `#mixer`, `#remote`, `#library`).
+- [`src/App.tsx`](src/App.tsx): **orquestador global** (~3100 líneas). Estado de biblioteca (`projects`), canción montada (`currentProject`), `setlistQueue`, transporte y medidores; importación nativa y web; handlers `handleAddToSetlist`, `handleRemoveFromSetlist`, `handleClearSetlist`, `handleReorderSetlist`; resolución de ambigüedad por huella; atajos de teclado; vista inicial por hash (`#setlist`, `#live`, `#arranger`, `#mixer`, `#library`).
 - [`src/types/project.ts`](src/types/project.ts): tipos `SongProject`, `TrackChannel`, `SongSection`, `TransportState`, `OutputBus` (`main | cue-click | both`), `QuantizeMode` (`1-bar | 2-bars | section-end | immediate`), `SplitRoutingMode`, `AudioEngineMode` (`buffer | stream`), `RemoteSyncMessage`, etc.
 - [`src/index.css`](src/index.css): estilos globales (Tailwind + clases `lt-*`).
 
 **Componentes (`src/components/`)**
 | Archivo | Función |
 |---|---|
-| [`TopBar.tsx`](src/components/TopBar.tsx) | Barra superior; vistas `Setlist`, `En vivo`, `Arreglo`, `Mezcla`, `Control rápido`, `Biblioteca` (`WorkspaceView`). Presupuesto de memoria, ajustes de audio y conexión remota. |
+| [`TopBar.tsx`](src/components/TopBar.tsx) | Barra superior; vistas `Setlist`, `En vivo`, `Arreglo`, `Mezcla`, `Biblioteca` (`WorkspaceView`). Presupuesto de memoria, ajustes de audio y conexión remota. |
 | [`TransportDeck.tsx`](src/components/TransportDeck.tsx) | Barra inferior: Play/Pausa, Stop, BPM, Pitch, Vamp, cuantización, reloj y medidores maestros. |
 | [`RepertoireTreeSidebar.tsx`](src/components/RepertoireTreeSidebar.tsx) | Panel lateral con la biblioteca, búsqueda, importación, badges `+ Set` / `✓`, «Limpiar sesión actual» y menú contextual. |
 | [`SetlistPageView.tsx`](src/components/SetlistPageView.tsx) | Vista Setlist: canción activa, onda maestra, saltos de sección, orden con arrastrar y soltar, mezclador flotante (se cierra con `Escape`), estado «Setlist vacío». |
 | [`LiveSetView.tsx`](src/components/LiveSetView.tsx) | Vista de escenario de alto contraste: botones de sección grandes, cuentas regresivas, siguiente canción. |
 | [`TimelineArranger.tsx`](src/components/TimelineArranger.tsx) | Vista Arreglo: pistas apiladas, zoom, edición de marcadores de sección. |
 | [`MultitrackMixer.tsx`](src/components/MultitrackMixer.tsx) | Mesa de mezcla: faders en dB (−40 a +10), pan, Mute/Solo, selector de bus, medidores. |
-| [`StageRemoteView.tsx`](src/components/StageRemoteView.tsx) | Vista «Control rápido» (`#remote`) para operar desde otro dispositivo/pantalla. |
 | [`LibraryAndModals.tsx`](src/components/LibraryAndModals.tsx) | `LibraryView`, `SongMetadataEditModal`, `ConfirmSongActionModal`, `SongFingerprintPromptModal`, `StemImporterModal`, `SectionEditorModal`, `OptimizationProgressModal` e `inferTrackRoleAndColor`. |
 
 **Motores y análisis de audio (`src/audio/`)**

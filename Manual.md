@@ -36,7 +36,7 @@ Dos plataformas comparten el mismo frontend React:
 graph TD
     subgraph Frontend["Frontend compartido (React 19 + TypeScript + Vite)"]
         App["src/App.tsx - orquestador de estado"]
-        Views["Vistas: Setlist / En vivo / Arreglo / Mezcla / Control rápido / Biblioteca"]
+        Views["Vistas: Setlist / En vivo / Arreglo / Mezcla / Biblioteca"]
         Facade["audioEngine (src/audio/audioEngine.ts) - elige motor"]
         ProjectDb["storage/projectDb.ts - saveProjectToDb"]
     end
@@ -115,7 +115,7 @@ El inventario archivo por archivo con su responsabilidad está en [`instruccione
   - `handleReorderSetlist(from, to)`: reasigna `setlistOrder` y guarda.
 - **Importación:** `scanNativeFolder`/`scanNativeFiles` → huella → creación o fusión de canción (si coincide con una existente conserva ediciones del usuario, secciones y mezcla) → `audio_import_tracks` en segundo plano → carga en el motor si no hay otra canción montada.
 - **Atajos:** Espacio (Play/Pausa), `V` (Vamp), `1`–`9` (salto a sección). `Esc` cierra el mezclador flotante de `SetlistPageView`.
-- **Vista inicial por hash:** `#setlist`, `#live`, `#arranger`, `#mixer`, `#remote`, `#library`.
+- **Vista inicial por hash:** `#setlist`, `#live`, `#arranger`, `#mixer`, `#library`.
 
 ### 3.2. Tipos (`src/types/project.ts`)
 `QuantizeMode = '1-bar' | '2-bars' | 'section-end' | 'immediate'` · `OutputBus = 'main' | 'cue-click' | 'both'` · `SplitRoutingMode = 'stereo' | 'split-mono'` · `AudioEngineMode = 'buffer' | 'stream'` · `RepertoireFolder = 'imported' | 'setlist' | 'demos'` · además `SongProject`, `TrackChannel`, `SongSection`, `TransportState`, `RemoteSyncMessage`.
