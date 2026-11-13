@@ -1,11 +1,7 @@
-import React, { useMemo, useRef, useState } from 'react';
-import { pickAudioSources } from '../storage/sourceFiles';
-import { isDesktopApp, pickNativeFiles, pickNativeFolder } from '../utils/nativeDialog';
+import React, { useMemo, useState } from 'react';
 import {
   Search,
   MoreHorizontal,
-  Upload,
-  FolderPlus,
   Trash2,
   Download,
   PanelLeftClose,
@@ -60,16 +56,11 @@ export const RepertoireTreeSidebar: React.FC<RepertoireTreeSidebarProps> = ({
   onEditMetadata,
   onDeleteProject,
   onExportJson,
-  onQuickImportNewSongFiles,
-  onQuickImportNativeFolder,
-  onQuickImportNativeFiles,
   onOpenNewSongModal,
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [showClearConfirm, setShowClearConfirm] = useState(false);
 
-  const multiFileInputRef = useRef<HTMLInputElement | null>(null);
-  const folderInputRef = useRef<HTMLInputElement | null>(null);
 
   const filteredProjects = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
@@ -97,71 +88,6 @@ export const RepertoireTreeSidebar: React.FC<RepertoireTreeSidebarProps> = ({
         >
           <PanelLeftOpen className="w-4 h-4" />
         </button>
-
-        <button
-          type="button"
-          onClick={() => {
-            if (isDesktopApp()) {
-              pickNativeFiles().then((paths) => {
-                if (paths && paths.length > 0) onQuickImportNativeFiles?.(paths);
-              });
-              return;
-            }
-            pickAudioSources('files', multiFileInputRef.current, onQuickImportNewSongFiles);
-          }}
-          title="Importar Nueva Canción (Stems)"
-          className="p-2 rounded-lg bg-studio-strip text-studio-ink hover:bg-neutral-700 cursor-pointer"
-        >
-          <Upload className="w-4 h-4" />
-        </button>
-
-        <button
-          type="button"
-          onClick={() => {
-            if (isDesktopApp()) {
-              pickNativeFolder().then((folder) => {
-                if (folder) onQuickImportNativeFolder?.(folder);
-              });
-              return;
-            }
-            pickAudioSources('folder', folderInputRef.current, onQuickImportNewSongFiles);
-          }}
-          title="Importar Carpeta de Canción"
-          className="p-2 rounded-lg bg-neutral-800 text-studio-ink hover:bg-neutral-700 border border-neutral-700 cursor-pointer"
-        >
-          <FolderPlus className="w-4 h-4" />
-        </button>
-
-        <input
-          ref={multiFileInputRef}
-          type="file"
-          multiple
-          accept="audio/*,.wav,.mp3,.ogg,.flac,.m4a,.aac,.webm,.opus,.aif,.aiff,.caf"
-          className="hidden"
-          onChange={(e) => {
-            if (e.target.files && e.target.files.length > 0) {
-              const files = Array.from(e.target.files);
-              e.target.value = '';
-              onQuickImportNewSongFiles(files);
-            }
-          }}
-        />
-        <input
-          ref={folderInputRef}
-          type="file"
-          multiple
-          // @ts-expect-error webkitdirectory is standard across browsers
-          webkitdirectory=""
-          directory=""
-          className="hidden"
-          onChange={(e) => {
-            if (e.target.files && e.target.files.length > 0) {
-              const files = Array.from(e.target.files);
-              e.target.value = '';
-              onQuickImportNewSongFiles(files);
-            }
-          }}
-        />
       </aside>
     );
   }
@@ -235,75 +161,6 @@ export const RepertoireTreeSidebar: React.FC<RepertoireTreeSidebarProps> = ({
             className="w-full bg-studio-ground border border-neutral-800 rounded-lg pl-8 pr-2.5 py-1.5 text-xs text-neutral-100 placeholder:text-neutral-400 focus:outline-none focus:border-studio-line"
           />
         </div>
-
-        <div className="grid grid-cols-2 gap-1.5">
-          <button
-            type="button"
-            onClick={() => {
-              if (isDesktopApp()) {
-                pickNativeFiles().then((paths) => {
-                  if (paths && paths.length > 0) onQuickImportNativeFiles?.(paths);
-                });
-                return;
-              }
-              pickAudioSources('files', multiFileInputRef.current, onQuickImportNewSongFiles);
-            }}
-            className="px-2.5 py-1.5 rounded-lg bg-studio-strip hover:bg-neutral-700 text-studio-ink text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
-            title="Selecciona los stems de una canción para guardarla en tu Repertorio"
-          >
-            <Upload className="w-3.5 h-3.5 shrink-0" />
-            <span className="truncate">Pistas</span>
-          </button>
-
-          <button
-            type="button"
-            onClick={() => {
-              if (isDesktopApp()) {
-                pickNativeFolder().then((folder) => {
-                  if (folder) onQuickImportNativeFolder?.(folder);
-                });
-                return;
-              }
-              pickAudioSources('folder', folderInputRef.current, onQuickImportNewSongFiles);
-            }}
-            className="px-2.5 py-1.5 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-neutral-100 border border-neutral-700 text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
-            title="Selecciona una carpeta completa de stems para convertirla en una sola canción"
-          >
-            <FolderPlus className="w-3.5 h-3.5 shrink-0 text-studio-ink" />
-            <span className="truncate">Carpeta</span>
-          </button>
-        </div>
-
-        <input
-          ref={multiFileInputRef}
-          type="file"
-          multiple
-          accept="audio/*,.wav,.mp3,.ogg,.flac,.m4a,.aac,.webm,.opus,.aif,.aiff,.caf"
-          className="hidden"
-          onChange={(e) => {
-            if (e.target.files && e.target.files.length > 0) {
-              const files = Array.from(e.target.files);
-              e.target.value = '';
-              onQuickImportNewSongFiles(files);
-            }
-          }}
-        />
-        <input
-          ref={folderInputRef}
-          type="file"
-          multiple
-          // @ts-expect-error webkitdirectory is standard across browsers
-          webkitdirectory=""
-          directory=""
-          className="hidden"
-          onChange={(e) => {
-            if (e.target.files && e.target.files.length > 0) {
-              const files = Array.from(e.target.files);
-              e.target.value = '';
-              onQuickImportNewSongFiles(files);
-            }
-          }}
-        />
       </div>
 
       {/* Scrollable Song List */}

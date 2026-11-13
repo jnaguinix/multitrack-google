@@ -4,8 +4,7 @@ import {
   Pause,
   Square,
   Repeat,
-  Sliders,
-  Flag,
+  Settings,
   SkipBack,
   SkipForward,
   X,
@@ -75,8 +74,7 @@ export const TransportDeck: React.FC<TransportDeckProps> = ({
   onToggleClick,
   onToggleGuide,
   onToggleSplitRouting,
-  onAddMarkerAtPlayhead,
-  onOpenSectionEditor,
+
   onCancelQueuedJump,
 }) => {
   const activeSection = project.sections.find((s) => s.id === transport.activeSectionId);
@@ -143,12 +141,8 @@ export const TransportDeck: React.FC<TransportDeckProps> = ({
       </div>
 
       <div className="lt-transport-tools flex items-center gap-1.5">
-        <button type="button" onClick={onAddMarkerAtPlayhead} className="lt-control lt-icon-control" aria-label="Marcar sección aquí" title="Marcar sección aquí">
-          <Flag size={16} />
-        </button>
-        <button type="button" onClick={onOpenSectionEditor} className="lt-control">Secciones</button>
-        <button type="button" popoverTarget="playback-settings" className="lt-control lt-icon-control" aria-label="Ajustes de reproducción" title="Ajustes de reproducción">
-          <Sliders size={16} />
+        <button type="button" popoverTarget="playback-settings" className="lt-control lt-icon-control" aria-label="Ajustes de reproducción" title="Ajustes de reproducción (tempo, tono, click, guía)">
+          <Settings size={16} />
         </button>
         <section id="playback-settings" popover="auto" className="lt-popover space-y-3" aria-label="Ajustes de reproducción">
           <h2 className="text-sm font-semibold">Ajustes de reproducción</h2>

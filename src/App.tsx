@@ -132,9 +132,8 @@ export default function App() {
   }, []);
 
   const [activeView, setActiveView] = useState<WorkspaceView>(getInitialViewFromHash);
-  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState<boolean>(
-    () => typeof window !== 'undefined' && window.innerWidth < 1280
-  );
+  // La biblioteca lateral empieza plegada: en Setlist se abre con «Añadir» o con su pestaña.
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState<boolean>(true);
   useEffect(() => {
     const narrowWorkspace = window.matchMedia('(max-width: 720px)');
     const collapseOnNarrowWorkspace = (event: MediaQueryListEvent) => {
@@ -1193,6 +1192,7 @@ export default function App() {
               ramCacheVersion={ramCacheVersion}
               setlistTransitionMode={setlistTransitionMode}
               metersRef={metersRef}
+              onOpenLibrary={() => setIsSidebarCollapsed(false)}
               onPlayPause={handlePlayPause}
               onStop={handleStop}
               onToggleVamp={handleToggleVamp}

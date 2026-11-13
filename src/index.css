@@ -1221,6 +1221,38 @@
 .lt-empty :is(h1, h2) { font-size: 22px; font-weight: 600; letter-spacing: -.025em; }
 .lt-empty p { font-size: 14px; color: var(--lt-mut); max-width: 46ch; line-height: 1.55; }
 
+/* Setlist en dos columnas: la lista a la izquierda (protagonista) y el detalle de la canción a la derecha. */
+.lt-setlist.lt-setlist-split {
+  display: grid;
+  grid-template-columns: minmax(280px, 380px) minmax(0, 1fr);
+  gap: 0;
+  padding: 0;
+  overflow: hidden;
+}
+.lt-setlist-list, .lt-setlist-detail {
+  min-height: 0;
+  overflow-y: auto;
+  padding: clamp(14px, 1.6vw, 22px);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.lt-setlist-list { border-right: 1px solid var(--lt-line); }
+.lt-setlist-split .lt-setlist-order-header { align-items: center; }
+.lt-setlist-split .lt-setlist-order-header h1 { font-size: 17px; font-weight: 650; letter-spacing: -.01em; }
+.lt-setlist-split .lt-setlist-queue { flex-direction: column; align-items: stretch; overflow-x: visible; padding-block: 0; gap: 6px; }
+.lt-setlist-split .lt-queue-item { width: auto; }
+.lt-setlist-split .lt-queue-item[data-current] { border-color: var(--lt-accent); }
+.lt-setlist-detail-header { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 12px; }
+.lt-setlist-detail-header p { color: var(--lt-mut); font-size: 13px; }
+.lt-setlist-split .lt-waveform { height: clamp(140px, 30dvh, 260px); }
+.lt-setlist-split .lt-empty { min-height: 170px; }
+@media (max-width: 860px) {
+  .lt-setlist.lt-setlist-split { grid-template-columns: minmax(0, 1fr); overflow-y: auto; }
+  .lt-setlist-list { border-right: 0; border-bottom: 1px solid var(--lt-line); }
+  .lt-setlist-list, .lt-setlist-detail { overflow: visible; }
+}
+
 @media (max-width: 1000px) {
   .lt-topbar { column-gap: 18px; }
   .lt-nav { gap: 13px; }
