@@ -24,6 +24,8 @@
     --lt-track: #121212;
     --lt-meter-bg: #111111;
     --lt-accent: #8dd6cd;
+    /* Versión viva del acento, para lo que debe llamar la atención (Iniciar en vivo, canción montada). */
+    --lt-vivid: #2dd4bf;
     --lt-solo: #e8ba68;
     --lt-mute: #d56a68;
   }
@@ -1214,7 +1216,7 @@
   pointer-events: none;
 }
 .lt-setlist-waveform-label { top: 10px; left: 14px; color: var(--lt-mut); font-size: 12px; }
-.lt-setlist-waveform-unplayed { inset-block: 0; right: 0; background: #10101052; }
+.lt-setlist-waveform-unplayed { inset-block: 0; right: 0; background: #10101028; }
 .lt-setlist-waveform-cursor { inset-block: 0; width: 2px; background: var(--lt-text); }
 .lt-setlist-waveform-cursor::before {
   content: "";
@@ -1384,18 +1386,19 @@
   align-items: center;
   gap: 8px;
   min-height: 36px;
-  padding: 0 14px;
-  border: 1px solid var(--lt-accent);
+  padding: 0 16px;
+  border: 0;
   border-radius: 8px;
-  background: color-mix(in srgb, var(--lt-accent) 16%, transparent);
-  color: var(--lt-accent);
+  background: var(--lt-vivid);
+  color: #032420;
   font-size: 14px;
-  font-weight: 650;
+  font-weight: 700;
   cursor: pointer;
-  transition: background .15s ease, color .15s ease;
+  transition: background .15s ease, transform .1s ease;
 }
-.lt-live-btn:hover:not(:disabled) { background: var(--lt-accent); color: #0b0b0b; }
-.lt-live-btn:disabled { opacity: .45; cursor: default; }
+.lt-live-btn:hover:not(:disabled) { background: #5eead4; }
+.lt-live-btn:active:not(:disabled) { transform: scale(.98); }
+.lt-live-btn:disabled { background: var(--lt-raised); color: var(--lt-mut); cursor: default; }
 .lt-plan-table { display: grid; border: 1px solid var(--lt-line); border-radius: 12px; overflow: hidden; background: var(--lt-panel); }
 .lt-plan-rows { display: grid; }
 .lt-plan-grid {
@@ -1490,13 +1493,13 @@
   transition: border-color .15s ease, background .15s ease;
 }
 .lt-tile:hover { background: var(--lt-strip); }
-.lt-tile[data-current] { border-color: var(--lt-accent); box-shadow: 0 0 0 1px var(--lt-accent); background: var(--lt-strip); }
+.lt-tile[data-current] { border-color: var(--lt-vivid); box-shadow: 0 0 0 1px var(--lt-vivid); background: var(--lt-strip); }
 .lt-tile[data-dragging] { border-color: var(--lt-text); }
 .lt-tile-top { display: flex; align-items: center; justify-content: space-between; color: var(--lt-mut); font-size: 12px; }
 .lt-tile-num { display: inline-flex; align-items: center; gap: 4px; }
 .lt-tile-wave { display: flex; align-items: flex-end; gap: 2px; height: 34px; }
 .lt-tile-wave i { flex: 1; min-height: 3px; border-radius: 1px; background: var(--lt-line); }
-.lt-tile-wave[data-active] i { background: var(--lt-accent); }
+.lt-tile-wave[data-active] i { background: var(--lt-vivid); }
 .lt-tile-title {
   font-size: 14px;
   font-weight: 650;
@@ -1553,7 +1556,7 @@
   cursor: pointer;
 }
 .lt-link-btn:hover { color: var(--lt-text); border-color: var(--lt-text); }
-.lt-link-btn[data-own] { color: var(--lt-accent); border-color: var(--lt-accent); }
+.lt-link-btn[data-own] { color: #032420; background: var(--lt-vivid); border-color: var(--lt-vivid); }
 
 /* Mapa de la canción montada: onda con las secciones como círculos de color. */
 .lt-map { display: grid; gap: 10px; }
@@ -1573,14 +1576,15 @@
   align-items: center;
   justify-content: center;
   border-radius: 999px;
-  border: 1.5px solid var(--sec);
-  background: color-mix(in srgb, var(--sec) 22%, var(--lt-track));
-  color: var(--lt-text);
+  border: 0;
+  background: var(--sec);
+  color: #0b0b0b;
   font-size: 11px;
-  font-weight: 650;
+  font-weight: 750;
   cursor: pointer;
 }
-.lt-map-badge:hover, .lt-map-badge[data-active] { background: var(--sec); color: #0b0b0b; }
+.lt-map-badge:hover { filter: brightness(1.15); }
+.lt-map-badge[data-active] { box-shadow: 0 0 0 2px #fff; }
 .lt-map-badge[data-queued] { box-shadow: 0 0 0 2px var(--lt-solo); }
 .lt-code {
   display: inline-flex;
@@ -1590,9 +1594,11 @@
   height: 26px;
   padding: 0 4px;
   border-radius: 999px;
-  border: 1.5px solid var(--sec);
+  border: 0;
+  background: var(--sec);
+  color: #0b0b0b;
   font-size: 11px;
-  font-weight: 650;
+  font-weight: 750;
 }
 
 /* (Obsoleto) Setlist en dos columnas */

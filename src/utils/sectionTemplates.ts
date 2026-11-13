@@ -10,16 +10,16 @@ export interface SectionTemplate {
 
 /** Secciones habituales de una canción de alabanza, con un color fijo por tipo. */
 export const SECTION_TEMPLATES: SectionTemplate[] = [
-  { key: 'count-in', name: 'Cuenta inicial', code: 'Ci', color: '#94A3B8' },
-  { key: 'intro', name: 'Intro', code: 'I', color: '#06B6D4' },
-  { key: 'verse-1', name: 'Verso 1', code: 'V1', color: '#8B5CF6' },
-  { key: 'verse-2', name: 'Verso 2', code: 'V2', color: '#8B5CF6' },
-  { key: 'verse-3', name: 'Verso 3', code: 'V3', color: '#8B5CF6' },
-  { key: 'verse-4', name: 'Verso 4', code: 'V4', color: '#8B5CF6' },
-  { key: 'chorus', name: 'Coro', code: 'C', color: '#F59E0B' },
-  { key: 'bridge', name: 'Puente', code: 'P', color: '#EC4899' },
+  { key: 'count-in', name: 'Cuenta inicial', code: 'Ci', color: '#FACC15' },
+  { key: 'intro', name: 'Intro', code: 'I', color: '#22D3EE' },
+  { key: 'verse-1', name: 'Verso 1', code: 'V1', color: '#A855F7' },
+  { key: 'verse-2', name: 'Verso 2', code: 'V2', color: '#A855F7' },
+  { key: 'verse-3', name: 'Verso 3', code: 'V3', color: '#A855F7' },
+  { key: 'verse-4', name: 'Verso 4', code: 'V4', color: '#A855F7' },
+  { key: 'chorus', name: 'Coro', code: 'C', color: '#FB923C' },
+  { key: 'bridge', name: 'Puente', code: 'P', color: '#F43F5E' },
   { key: 'instrumental', name: 'Instrumental', code: 'In', color: '#3B82F6' },
-  { key: 'outro', name: 'Final', code: 'F', color: '#10B981' },
+  { key: 'outro', name: 'Final', code: 'F', color: '#22C55E' },
 ];
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
