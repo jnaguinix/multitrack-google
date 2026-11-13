@@ -34,11 +34,8 @@ interface LibraryViewProps {
   onSelectProject: (projectId: string) => void;
   onAddToSetlist: (projectId: string) => void;
   onRemoveFromSetlist?: (projectId: string) => void;
-  onCreateNewProject: (title: string, artist: string, bpm: number, keySig: string) => void;
   onDeleteProject: (projectId: string) => void;
   onExportJson: (project: SongProject) => void;
-  onImportJsonFile: (file: File) => void;
-  onOpenStemImporter: () => void;
   onOptimizeProject: (project: SongProject) => void;
   onRelinkProject?: (project: SongProject) => void;
   onUpdateSongMetadata?: (updated: SongProject) => void;
@@ -50,38 +47,18 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
   onSelectProject,
   onAddToSetlist,
   onRemoveFromSetlist,
-  onCreateNewProject,
   onDeleteProject,
   onExportJson,
-  onImportJsonFile,
-  onOpenStemImporter,
   onOptimizeProject,
   onRelinkProject,
   onUpdateSongMetadata,
 }) => {
   const [editingMetadataSong, setEditingMetadataSong] = useState<SongProject | null>(null);
-  const [newTitle, setNewTitle] = useState('');
-  const [newArtist, setNewArtist] = useState('');
-  const [newBpm, setNewBpm] = useState(120);
-  const [newKey, setNewKey] = useState('C Major');
-
-  const handleCreate = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newTitle.trim()) return;
-    onCreateNewProject(
-      newTitle.trim(),
-      newArtist.trim() || 'Artista en Vivo',
-      newBpm,
-      newKey
-    );
-    setNewTitle('');
-    setNewArtist('');
-  };
 
   return (
     <div className="flex-1 min-w-0 bg-studio-ground p-4 sm:p-6 overflow-y-auto">
       <div className="max-w-6xl mx-auto space-y-8">
-        {/* Header & JSON Project Import/Export */}
+        {/* Cabecera */}
         <div className="flex flex-wrap items-center justify-between gap-4 border-b border-neutral-800 pb-5">
           <div>
             <h1 className="text-2xl font-bold text-neutral-100">
@@ -94,43 +71,17 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
             </p>
           </div>
 
-          <div className="flex items-center gap-3">
-            <label className="px-4 py-2 rounded-lg bg-neutral-900 hover:bg-neutral-800 border border-neutral-800 text-xs font-semibold text-neutral-200 flex items-center gap-2 cursor-pointer transition-colors">
-              <Upload className="w-4 h-4 text-studio-ink" />
-              <span>Importar proyecto JSON</span>
-              <input
-                type="file"
-                accept=".json,application/json"
-                className="hidden"
-                onChange={(e) => {
-                  const file = e.target.files?.[0];
-                  if (file) onImportJsonFile(file);
-                  e.target.value = '';
-                }}
-              />
-            </label>
-
-            <button
-              type="button"
-              onClick={onOpenStemImporter}
-              className="px-4 py-2 rounded-lg bg-studio-ink hover:bg-neutral-200 text-studio-ground text-xs font-semibold flex items-center gap-2 cursor-pointer transition-colors"
-            >
-              <Music className="w-4 h-4" />
-              <span>Importar pistas</span>
-            </button>
-          </div>
         </div>
 
-        {/* Grid of Saved & Demo Projects + Create New Project Form */}
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-          {/* Saved Songs List (8 cols) */}
-          <div className="lg:col-span-8 space-y-3">
+        {/* Lista de canciones */}
+        <div>
+                    <div className="space-y-3">
             <h2 className="text-base font-semibold text-neutral-200">
               Canciones ({projects.length})
             </h2>
 
             <div className="divide-y divide-studio-line">
-              {projects.length === 0 && <p className="rounded-lg bg-studio-panel p-4 text-sm text-studio-muted">Importa pistas o crea una canción para empezar.</p>}
+              {projects.length === 0 && <p className="rounded-lg bg-studio-panel p-4 text-sm text-studio-muted">Pulsa «Importar» arriba para añadir tu primera canción.</p>}
               {projects.map((proj, index) => {
                 const isCurrent = proj.id === currentProjectId;
                 const durSec =
@@ -313,82 +264,6 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
               })}
             </div>
           </div>
-
-          {/* Create New Song Project Card (4 cols) */}
-          <form
-            onSubmit={handleCreate}
-            className="lg:col-span-4 bg-studio-panel border border-neutral-800 rounded-xl p-5 space-y-4"
-          >
-            <h2 className="text-base font-bold text-neutral-100">
-              Crear canción
-            </h2>
-            <p className="text-xs text-neutral-400">
-              Inicia una sesión vacía o suelta directamente tus archivos de audio para crearla.
-            </p>
-
-            <div>
-              <label className="block text-xs font-medium text-neutral-300 mb-1">
-                Título de la Canción
-              </label>
-              <input
-                type="text"
-                required
-                placeholder="Ej. Amanecer Eléctrico (Live)"
-                value={newTitle}
-                onChange={(e) => setNewTitle(e.target.value)}
-                className="w-full bg-studio-ground border border-neutral-800 rounded-lg px-3 py-2 text-sm text-neutral-100 focus:outline-none focus:border-studio-line"
-              />
-            </div>
-
-            <div>
-              <label className="block text-xs font-medium text-neutral-300 mb-1">
-                Artista / Ensamble
-              </label>
-              <input
-                type="text"
-                placeholder="Ej. Banda Principal"
-                value={newArtist}
-                onChange={(e) => setNewArtist(e.target.value)}
-                className="w-full bg-studio-ground border border-neutral-800 rounded-lg px-3 py-2 text-sm text-neutral-100 focus:outline-none focus:border-studio-line"
-              />
-            </div>
-
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="block text-xs font-medium text-neutral-300 mb-1">
-                  Tempo (BPM)
-                </label>
-                <input
-                  type="number"
-                  min={50}
-                  max={220}
-                  value={newBpm}
-                  onChange={(e) => setNewBpm(Number(e.target.value))}
-                  className="w-full bg-studio-ground border border-neutral-800 rounded-lg px-3 py-2 text-sm tabular-nums text-neutral-100 focus:outline-none focus:border-studio-line"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-medium text-neutral-300 mb-1">
-                  Tonalidad
-                </label>
-                <input
-                  type="text"
-                  value={newKey}
-                  onChange={(e) => setNewKey(e.target.value)}
-                  className="w-full bg-studio-ground border border-neutral-800 rounded-lg px-3 py-2 text-sm text-neutral-100 focus:outline-none focus:border-studio-line"
-                />
-              </div>
-            </div>
-
-            <button
-              type="submit"
-              className="w-full py-2.5 bg-studio-ink hover:bg-neutral-200 text-studio-ground font-semibold text-xs rounded-lg flex items-center justify-center gap-1.5 cursor-pointer transition-colors"
-            >
-              <Plus className="w-4 h-4" />
-              <span>Crear Proyecto y Abrir Consola</span>
-            </button>
-          </form>
         </div>
       </div>
 

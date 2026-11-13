@@ -70,7 +70,6 @@ El diagrama secuencial completo está en [`Manual.md`](Manual.md) §4.
 |---|---|
 | [`TopBar.tsx`](src/components/TopBar.tsx) | Barra superior; vistas `Setlist`, `En vivo`, `Arreglo`, `Mezcla`, `Biblioteca` (`WorkspaceView`). Presupuesto de memoria, ajustes de audio y conexión remota. |
 | [`TransportDeck.tsx`](src/components/TransportDeck.tsx) | Barra inferior: Play/Pausa, Stop, BPM, Pitch, Vamp, cuantización, reloj y medidores maestros. |
-| [`RepertoireTreeSidebar.tsx`](src/components/RepertoireTreeSidebar.tsx) | Panel lateral con la biblioteca, búsqueda, importación, badges `+ Set` / `✓`, «Limpiar sesión actual» y menú contextual. |
 | [`SetlistPageView.tsx`](src/components/SetlistPageView.tsx) | Vista Setlist: canción activa, onda maestra, saltos de sección, orden con arrastrar y soltar, mezclador flotante (se cierra con `Escape`), estado «Setlist vacío». |
 | [`LiveSetView.tsx`](src/components/LiveSetView.tsx) | Vista de escenario de alto contraste: botones de sección grandes, cuentas regresivas, siguiente canción. |
 | [`TimelineArranger.tsx`](src/components/TimelineArranger.tsx) | Vista Arreglo: pistas apiladas, zoom, edición de marcadores de sección. |

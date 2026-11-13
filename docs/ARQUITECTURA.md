@@ -124,7 +124,7 @@ src/hooks/
 ```
 
 1. **Importar**: `handleImportNative` (TS, `useImportFlow.ts`) invoca `audio_scan_folder` o `audio_scan_files` (Rust, `audio/mod.rs`), extrae metadatos y guarda la canción en `library.json` mediante `library_save_song` y el sidecar `omnitracks.project.json` mediante `library_write_sidecar`. **No se genera caché PCM en este paso**.
-2. **Biblioteca**: `library_load` carga `library.json` al iniciar. La UI lista las canciones en `RepertoireTreeSidebar.tsx` y `LibraryView.tsx`.
+2. **Biblioteca**: `library_load` carga `library.json` al iniciar. La UI lista las canciones en `LibraryView.tsx` (`LibraryAndModals.tsx`).
 3. **Añadir al Setlist**: `handleAddToSetlist` (TS, `useSetlist.ts`) añade la canción a `setlistQueue`. Verifica la caché con `nativeAudioEngine.checkProjectCacheStatus` (`audio_get_project_cache_status`). Si `isReady == false`, invoca `nativeAudioEngine.generateNativeCacheForProject`.
 4. **Caché PCM**: `audio_import_tracks` (`audio/mod.rs`) decodifica cada stem con `import::decode_and_cache_track` (`audio/import.rs`), remuestrea al `target_sample_rate` y escribe `stem-*.pcm` y `stem-*.json` en disco vía `cache::write_track_pcm_and_metadata` (`audio/cache.rs`), emitiendo eventos `audio://import-progress`.
 5. **Reproducir**: `activateProject` invoca `nativeAudioEngine.loadProject` (`audio_load_project`). `PlaybackEngine::load_project` prellena los buffers circulares `rtrb` mediante los hilos feeder (`playback/feeder_io.rs`). `audio_play` inicia el micro-fundido de 8 ms y el callback de salida CPAL en `ensure_stream` (`playback/mod.rs`) entrega las muestras a WASAPI sin alocaciones ni bloqueos.

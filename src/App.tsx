@@ -38,7 +38,6 @@ import { TopBar, WorkspaceView } from './components/TopBar';
 import { formatTimecode, TransportDeck } from './components/TransportDeck';
 import { resolveTransition } from './utils/setlistTransition';
 import { SECTION_TEMPLATES, insertTemplateSection } from './utils/sectionTemplates';
-import { RepertoireTreeSidebar } from './components/RepertoireTreeSidebar';
 import { SetlistPageView } from './components/SetlistPageView';
 import { LiveSetView } from './components/LiveSetView';
 import { TimelineArranger } from './components/TimelineArranger';
@@ -70,7 +69,6 @@ import {
   OptimizationProgressModal,
   SectionEditorModal,
   SongFingerprintPromptModal,
-  SongMetadataEditModal,
   StemImporterModal,
 } from './components/LibraryAndModals';
 import {
@@ -132,17 +130,6 @@ export default function App() {
   }, []);
 
   const [activeView, setActiveView] = useState<WorkspaceView>(getInitialViewFromHash);
-  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState<boolean>(
-    () => typeof window !== 'undefined' && window.innerWidth < 1280
-  );
-  useEffect(() => {
-    const narrowWorkspace = window.matchMedia('(max-width: 720px)');
-    const collapseOnNarrowWorkspace = (event: MediaQueryListEvent) => {
-      if (event.matches) setIsSidebarCollapsed(true);
-    };
-    narrowWorkspace.addEventListener('change', collapseOnNarrowWorkspace);
-    return () => narrowWorkspace.removeEventListener('change', collapseOnNarrowWorkspace);
-  }, []);
   const [isDockedMixerOpen, setIsDockedMixerOpen] = useState<boolean>(false);
   const [projects, setProjects] = useState<SongProject[]>([]);
   const [currentProject, setCurrentProject] = useState<SongProject | null>(null);
@@ -184,7 +171,6 @@ export default function App() {
 
   const [songToDeleteFromLibrary, setSongToDeleteFromLibrary] = useState<SongProject | null>(null);
   const [missingFolderSong, setMissingFolderSong] = useState<SongProject | null>(null);
-  const [editingMetadataSong, setEditingMetadataSong] = useState<SongProject | null>(null);
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
   const [importStatusText, setImportStatusText] = useState<string | null>(null);
   const [fingerprintPrompt, setFingerprintPrompt] = useState<{
@@ -965,11 +951,9 @@ export default function App() {
 
   const {
     handleLoadProjectImmediately,
-    handleCreateNewProject,
     handleUpdateSongMetadata,
     handleDeleteProject,
     handleExportJson,
-    handleImportJsonFile,
   } = useProjectActions({
     projects,
     projectsRef,
@@ -1180,32 +1164,6 @@ export default function App() {
 
       {/* Main Body: Dockable Left Repertoire Sidebar + Active Workspace */}
       <div className="relative flex-1 flex overflow-hidden min-h-0">
-        {activeView === 'library' && (
-          <RepertoireTreeSidebar
-            projects={projects}
-            setlistQueue={setlistQueue}
-            currentProjectId={currentProject?.id || null}
-            isCollapsed={isSidebarCollapsed}
-            onToggleCollapse={() => setIsSidebarCollapsed((prev) => !prev)}
-            onRequestSongAction={(song) => setConfirmSongCandidate(song)}
-            onAddToSetlist={handleAddToSetlist}
-            onRemoveFromSetlist={handleRemoveFromSetlist}
-            onClearSetlist={handleClearSetlist}
-            onEditMetadata={(song) => setEditingMetadataSong(song)}
-            onDeleteProject={handleDeleteProject}
-            onExportJson={handleExportJson}
-            onQuickImportNewSongFiles={(files) =>
-              handleInstantImportFiles(files, 'main', 'new-song')
-            }
-            onQuickImportNativeFolder={(folder) =>
-              handleImportNative({ folderPath: folder }, 'main', 'new-song')
-            }
-            onQuickImportNativeFiles={(paths) =>
-              handleImportNative({ filePaths: paths }, 'main', 'new-song')
-            }
-            onOpenNewSongModal={() => handleSelectView('library')}
-          />
-        )}
 
         {/* Active Workspace Drop Zone */}
         <div
@@ -1530,11 +1488,8 @@ export default function App() {
               }}
               onAddToSetlist={handleAddToSetlist}
               onRemoveFromSetlist={handleRemoveFromSetlist}
-              onCreateNewProject={handleCreateNewProject}
               onDeleteProject={handleDeleteProject}
               onExportJson={handleExportJson}
-              onImportJsonFile={handleImportJsonFile}
-              onOpenStemImporter={() => setIsImportModalOpen(true)}
               onOptimizeProject={handleStartOptimizeProject}
               onRelinkProject={handleRelinkProject}
               onUpdateSongMetadata={handleUpdateSongMetadata}
@@ -1735,17 +1690,6 @@ export default function App() {
           <DesktopAudioSettings triggerHost={audioTriggerHost} />
         </React.Suspense>
       )}
-
-      {/* Edit Song Metadata Modal */}
-      <SongMetadataEditModal
-        song={editingMetadataSong}
-        isOpen={Boolean(editingMetadataSong)}
-        onClose={() => setEditingMetadataSong(null)}
-        onSave={(updated) => {
-          handleUpdateSongMetadata(updated);
-          setEditingMetadataSong(null);
-        }}
-      />
 
       {/* Non-intrusive Action Feedback Toast */}
       {toastMessage && (
