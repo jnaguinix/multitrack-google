@@ -7,6 +7,7 @@ import { audioEngine } from '../../src/audio/audioEngine';
 import { applyMix, matches, snapshot, targets, trackIdentity } from './remoteState';
 import type { Clock, Dispatch, Receipt, Source } from './remoteState';
 import DesktopUpdates from './DesktopUpdates';
+import { previewInvoke } from './previewInvoke';
 import './connection.css';
 
 type Invoke = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
@@ -23,7 +24,8 @@ type Props = Pick<Source, 'project' | 'setlist'> & {
 };
 
 const host = window as Window & { __TAURI__?: { core: { invoke: Invoke } } };
-const invoke = host.__TAURI__?.core.invoke;
+// En el servidor de desarrollo (navegador) se usa una simulación solo para ver el diseño.
+const invoke = host.__TAURI__?.core.invoke ?? (import.meta.env.DEV ? previewInvoke : undefined);
 const EXCHANGE_MS = 100;
 const COMMIT_TIMEOUT_MS = 600;
 const roleName: Record<Role, string> = { monitor: 'Músicos', mixer: 'Sonidista' };

@@ -75,7 +75,7 @@ import {
   FingerprintCandidate,
 } from './audio/fingerprint';
 
-const DesktopRemoteBridge = import.meta.env.VITE_OMNITRACKS_DESKTOP === '1'
+const DesktopRemoteBridge = (import.meta.env.VITE_OMNITRACKS_DESKTOP === '1' || import.meta.env.DEV)
   ? React.lazy(() => import('../desktop/frontend/RemoteConnectionBridge'))
   : null;
 
@@ -1036,7 +1036,7 @@ export default function App() {
   });
 
   const transportProject = activeView === 'live' ? null : currentProject;
-  const remoteTriggerRef = DesktopRemoteBridge && window.location.origin === 'https://tauri.localhost'
+  const remoteTriggerRef = DesktopRemoteBridge && (window.location.origin === 'https://tauri.localhost' || import.meta.env.DEV)
     ? setRemoteTriggerHost : undefined;
   const audioTriggerRef = DesktopAudioSettings && window.location.origin === 'https://tauri.localhost'
     ? setAudioTriggerHost : undefined;
