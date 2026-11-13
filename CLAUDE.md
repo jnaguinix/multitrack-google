@@ -12,7 +12,7 @@ Reproductor de multitracks optimizado para cultos y música en vivo. Dispone de 
 - `src/hooks/*`: Custom hooks desacoplados (`useImportFlow`, `useOptimization`, `useSetlist`, `useProjectActions`, `useMixerActions`, `useDawDragDrop`).
 - `src/audio/nativeAudioEngine.ts`: Adaptador puente TypeScript para invocar los comandos Tauri del motor nativo en Rust (`audio_*`).
 - `src/audio/meterBallistics.ts`: Balística (caída ~20 dB/s, retención de recorte) de los picos reales que mide el motor nativo para los medidores de Arreglo y Mezcla.
-- `src/audio/audioEngine.ts`: Motor de audio Web (Web Audio API / OPFS), activo en la versión de navegador; en proceso de retiro para escritorio.
+- `src/audio/audioEngine.ts`: Motor de audio Web (Web Audio API / OPFS). La versión web ya no se usa ni se mantiene; el archivo sigue porque el escritorio aún depende de partes de él (retiro pendiente).
 - `src/storage/*`: Persistencia en IndexedDB (`projectDb.ts`), OPFS (`opfsStorage.ts`), File System Access (`sourceFiles.ts`) y puente desktop (`desktopLibrary.ts`).
 - `desktop/src-tauri/src/audio/*`: Motor nativo: `playback/` (transporte, buffers `rtrb`, callback CPAL), `cache.rs` (caché PCM i16 y picos), `import.rs` (decodificación Symphonia/Hound), `output.rs` (dispositivos WASAPI), `resampler.rs` (remuestreo `rubato`), `metronome.rs` (click sintético), `mod.rs` (comandos `audio_*`).
 - `desktop/src-tauri/src/library/`: Gestión de `library.json`, persistencia atómica y sidecars `omnitracks.project.json` (comandos `library_*`).
@@ -46,7 +46,10 @@ Reproductor de multitracks optimizado para cultos y música en vivo. Dispone de 
 ---
 
 ## 5. Reglas de trabajo
-- Trabajar siempre en rama aparte creada a partir de la rama indicada. Nunca realizar commits ni merges directos a `main`.
+- **Rama principal**: `main` contiene el motor nativo de escritorio desde la versión 0.3.0 (migración del 2026-11-12). La rama `motor-nativo` quedó congelada como referencia y ya no se desarrolla. Las ramas nuevas salen de `main`.
+- **Versión web anterior**: conservada en la etiqueta `main-web-final`. Es el punto de retorno si hiciera falta.
+- Trabajar siempre en rama aparte creada a partir de la rama indicada. Nunca realizar commits ni merges directos a `main`, salvo que el dueño lo pida de forma expresa (como en la migración a 0.3.0).
+- No lanzar `verify.ps1 -Completo` por iniciativa propia: tarda cerca de una hora. Por commit basta el verify rápido; el completo lo pide el dueño.
 - Un cambio lógico por commit, con mensaje descriptivo y preciso.
 - Nunca tragar errores: terminantemente prohibido `.catch(() => {})` o silenciar excepciones sin log o notificación visual al usuario.
 - En reportes de verificación, marcar explícitamente como «No medido» toda prueba o métrica no ejecutada.
@@ -55,7 +58,9 @@ Reproductor de multitracks optimizado para cultos y música en vivo. Dispone de 
 ---
 
 ## 6. Pendientes conocidos
-- **Decodificación de caché**: Se realiza en paralelo (3-4 hilos, `desktop/src-tauri/src/audio/mod.rs:140-142`); los tiempos reales en el `.exe` de producción están sin medir.
+- **Decodificación de caché**: Se realiza en paralelo (3-4 hilos, `desktop/src-tauri/src/audio/mod.rs`). Medido en el `.exe` el 2026-11-12: 7 pistas de 4:20 en ~4,1 s y 10 pistas de 8:00 en ~10,7 s. El límite es el procesador. Más hilos o trabajar a 44,1 kHz serían decisiones del dueño, aún sin tomar.
+- **Medidores sin medir en el callback**: Los medidores de nivel (`PeakMeter`) añaden operaciones al callback de audio. No se midieron underruns ni tiempo de callback antes y después; el dueño ensayó y no notó problemas.
+- **Verificación completa sin cerrar**: `verify.ps1 -Completo` no se completó sobre `main` tras la migración (faltaron `verify_manual_flow` y `build:portable`). Las pruebas rápidas sí pasaron.
 - **Importación HTML/arrastre vs nativa**: La importación por selector HTML o arrastre de archivos sigue decodificando al importar (`src/hooks/useImportFlow.ts:250, 440`); solo la ruta nativa de carpeta importa sin decodificar.
 - **Saltos cuantizados tardíos**: Si el compás objetivo ya cayó dentro de los ~500 ms prellenados en el ring buffer `rtrb`, el salto se pospone al siguiente compás.
 - **Fase 5 diferida**: Ruteo libre multicanal a más de 2 salidas físicas independientes de la tarjeta.

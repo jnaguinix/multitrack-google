@@ -2,6 +2,8 @@
 
 Este documento detalla la estructura modular de la aplicación tras la división de archivos monolíticos (`desktop/src-tauri/src/audio/playback/` y `src/hooks/`), las especificaciones de todos los módulos del backend y frontend, las reglas obligatorias de codificación y el ciclo de vida del audio.
 
+> **Versión 0.3.0 (2026-11-12):** `main` es la rama del motor nativo de escritorio. La versión web anterior se conserva en la etiqueta `main-web-final` y ya no se mantiene. La rama `motor-nativo` quedó congelada como referencia.
+
 ---
 
 ## 1. Regla Obligatoria de Codificación (UTF-8 sin BOM)

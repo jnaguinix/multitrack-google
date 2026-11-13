@@ -1,7 +1,7 @@
 {
   "name": "omnitracks-desktop",
   "private": true,
-  "version": "0.2.2",
+  "version": "0.3.0",
   "scripts": {
     "build": "tauri build --target x86_64-pc-windows-msvc",
     "build:portable": "tauri build --no-bundle --target x86_64-pc-windows-msvc"
