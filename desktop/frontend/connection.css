@@ -1,17 +1,18 @@
 
-.lt-control.lt-remote-trigger {
-  gap: 6px;
-  border: 1px solid #a45c27;
-  background: #3a2518;
-  color: #ffb577;
+/* «Conexión remota»: botón estándar (lt-control) con un palpitar azul, igual de suave que «Iniciar en vivo». */
+.lt-control.lt-remote-trigger { gap: 6px; animation: lt-remote-pulse 1.8s ease-in-out infinite; }
+.lt-remote-trigger svg { color: #5B85FF; animation: lt-remote-icon 1.8s ease-in-out infinite; }
+.lt-control.lt-remote-trigger[data-active="true"] { background: #3D6BFF; color: #fff; }
+.lt-control.lt-remote-trigger[data-active="true"]:hover:not(:disabled) { background: #5B85FF; }
+.lt-remote-trigger[data-active="true"] svg { color: #fff; }
+@keyframes lt-remote-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(61, 107, 255, 0); }
+  50% { box-shadow: 0 0 0 2px rgba(61, 107, 255, .85), 0 0 14px 1px rgba(61, 107, 255, .45); }
 }
-.lt-control.lt-remote-trigger:hover:not(:disabled) { background: #56311b; }
-.lt-control.lt-remote-trigger[data-active="true"] {
-  border-color: #ffad68;
-  background: #ffad68;
-  color: #281608;
+@keyframes lt-remote-icon {
+  0%, 100% { opacity: .4; }
+  50% { opacity: 1; }
 }
-.lt-control.lt-remote-trigger[data-active="true"]:hover:not(:disabled) { background: #ffc095; }
 @media (max-width: 1100px) {
   .lt-control.lt-remote-trigger { width: 36px; padding-inline: 0; }
   .lt-remote-trigger > span { display: none; }

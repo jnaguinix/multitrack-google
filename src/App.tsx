@@ -1050,7 +1050,7 @@ export default function App() {
         engineMode={engineMode}
         ramBudgetMB={ramBudgetMB}
         cachedRamMB={audioEngine.getTotalCachedMB()}
-        remoteTriggerRef={transportProject ? undefined : remoteTriggerRef}
+        remoteTriggerRef={remoteTriggerRef}
         audioTriggerRef={audioTriggerRef}
         onChangeEngineMode={handleChangeEngineMode}
         onChangeRamBudgetMB={handleChangeRamBudgetMB}
@@ -1140,7 +1140,6 @@ export default function App() {
         <TransportDeck
           project={transportProject}
           transport={transport}
-          remoteTriggerRef={remoteTriggerRef}
           setlistQueue={setlistQueue}
           setlistTransitionMode={setlistTransitionMode}
           importStatusText={importStatusText}

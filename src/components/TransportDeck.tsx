@@ -19,7 +19,6 @@ import {
 interface TransportDeckProps {
   project: SongProject;
   transport: TransportState;
-  remoteTriggerRef?: React.Ref<HTMLSpanElement>;
   setlistQueue: SongProject[];
   setlistTransitionMode: SetlistTransitionMode;
   importStatusText: string | null;
@@ -58,7 +57,6 @@ export function formatMmSs(sec: number): string {
 export const TransportDeck: React.FC<TransportDeckProps> = ({
   project,
   transport,
-  remoteTriggerRef,
   setlistQueue,
   setlistTransitionMode,
   importStatusText,
@@ -127,7 +125,6 @@ export const TransportDeck: React.FC<TransportDeckProps> = ({
             <span key={index} className="lt-beat" data-active={transport.isPlaying && transport.currentBeat === index + 1 || undefined} data-downbeat={index === 0 || undefined} />
           ))}
         </div>
-        {remoteTriggerRef && <span ref={remoteTriggerRef} />}
         {queuedSection && (
           <div className="flex items-center gap-1 min-w-0 text-xs text-amber-300" title={`Salto en cola a ${queuedSection.name}`}>
             <span className="truncate">→ {queuedSection.code}</span>
