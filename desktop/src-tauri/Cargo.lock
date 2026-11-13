@@ -2476,7 +2476,7 @@ dependencies = [
 
 [[package]]
 name = "omnitracks-desktop"
-version = "0.2.2"
+version = "0.3.0"
 dependencies = [
  "axum",
  "base64 0.22.1",
