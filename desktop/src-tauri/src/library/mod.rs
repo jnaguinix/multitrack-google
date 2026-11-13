@@ -117,6 +117,9 @@ pub struct LibrarySong {
     pub pitch_semitones: Option<i32>,
     #[serde(default)]
     pub is_title_custom: Option<bool>,
+    /// Notas de la canción para el servicio (por ejemplo «entrar con el coro»).
+    #[serde(default)]
+    pub notes: Option<String>,
     #[serde(default)]
     pub created_at: Option<u64>,
     #[serde(default)]
@@ -773,5 +776,38 @@ mod tests {
         assert_eq!(c3.artist.as_deref(), Some("Juan Carlos A"));
         assert_eq!(c3.key.as_deref(), Some("Bb"));
         assert_eq!(c3.bpm, Some(124.0));
+    }
+
+
+    #[test]
+    fn test_library_song_conserva_las_notas() {
+        let tmp_dir = std::env::temp_dir().join(format!("omnitracks_notas_{}", current_timestamp_ms()));
+        let _ = fs::create_dir_all(&tmp_dir);
+
+        let mut lib = LibraryFile::default();
+        lib.songs.push(LibrarySong {
+            id: "song-notas".to_string(),
+            title: "Friend of God".to_string(),
+            artist: "Israel Houghton".to_string(),
+            bpm: 120.0,
+            key_signature: "C Major".to_string(),
+            notes: Some("Entrar con el coro; subir medio tono en el puente".to_string()),
+            updated_at: current_timestamp_ms(),
+            ..Default::default()
+        });
+        assert!(save_library_internal(&tmp_dir, &lib).is_ok());
+
+        let loaded = load_library_internal(&tmp_dir).unwrap();
+        assert_eq!(
+            loaded.songs[0].notes.as_deref(),
+            Some("Entrar con el coro; subir medio tono en el puente")
+        );
+
+        // Una biblioteca guardada antes de existir el campo sigue cargando (notes = None).
+        let json = r#"{"id":"vieja","title":"x","artist":"y","bpm":100.0,"keySignature":"C","updatedAt":1}"#;
+        let old: LibrarySong = serde_json::from_str(json).unwrap();
+        assert_eq!(old.notes, None);
+
+        let _ = fs::remove_dir_all(tmp_dir);
     }
 }

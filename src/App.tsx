@@ -808,6 +808,29 @@ export default function App() {
     window.history.replaceState(null, '', `#${view}`);
   };
 
+  // Notas de la canción para el servicio: se guardan con la canción (IndexedDB o library.json).
+  const handleUpdateSongNotes = (songId: string, notes: string) => {
+    const song = projectsRef.current.find((p) => p.id === songId);
+    if (!song) return;
+    const updated: SongProject = { ...song, notes };
+    setProjects((prev) => prev.map((p) => (p.id === songId ? updated : p)));
+    if (currentProjectRef.current?.id === songId) setCurrentProject(updated);
+    saveProjectToDb(updated).catch((err) => {
+      console.error(`[Setlist] No se pudieron guardar las notas de '${song.title}':`, err);
+      showToast(`No se pudieron guardar las notas de "${song.title}"`);
+    });
+  };
+
+  // «Iniciar en vivo»: monta la primera canción del setlist (sin reproducirla) y abre En vivo.
+  const handleStartLive = () => {
+    const first = setlistQueue[0];
+    if (!first) return;
+    handleSelectView('live');
+    if (currentProjectRef.current?.id !== first.id) {
+      handleLoadProjectImmediately(first.id, false);
+    }
+  };
+
   const { handleInstantImportFiles, handleImportNative } = useImportFlow({
     projects,
     projectsRef,
@@ -1193,7 +1216,8 @@ export default function App() {
               ramCacheVersion={ramCacheVersion}
               setlistTransitionMode={setlistTransitionMode}
               metersRef={metersRef}
-
+              onUpdateSongNotes={handleUpdateSongNotes}
+              onStartLive={handleStartLive}
               onPlayPause={handlePlayPause}
               onStop={handleStop}
               onToggleVamp={handleToggleVamp}

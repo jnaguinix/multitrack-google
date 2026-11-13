@@ -77,6 +77,8 @@ export interface SongProject {
   cueMasterGain?: number; // Master output gain for the Click / Cue bus ("Auriculares banda")
   pitchSemitones: number; // -6 to +6 semitones detune for stems
   isTitleCustom?: boolean;
+  /** Notas de la canción para el servicio (por ejemplo «entrar con el coro»). */
+  notes?: string;
   createdAt?: number;
   lastUsedAt?: number;
   sections: SongSection[];

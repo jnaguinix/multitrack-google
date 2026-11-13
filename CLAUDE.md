@@ -10,6 +10,7 @@ Reproductor de multitracks optimizado para cultos y música en vivo. Dispone de 
 ## 2. Dónde está cada cosa
 - `src/App.tsx`: Componente raíz, orquestador de vistas, modales globales, layout y referencias principales.
 - `src/hooks/*`: Custom hooks desacoplados (`useImportFlow`, `useOptimization`, `useSetlist`, `useProjectActions`, `useMixerActions`, `useDawDragDrop`).
+- `src/hooks/useSetlistMeta.ts`: Nombre y fecha del servicio (almacenamiento local de la app).
 - `src/components/SongPickerModal.tsx`: Explorador de canciones superpuesto de la página Setlist (buscar en la biblioteca, ordenar, añadir o quitar del setlist e importar).
 - `src/audio/nativeAudioEngine.ts`: Adaptador puente TypeScript para invocar los comandos Tauri del motor nativo en Rust (`audio_*`).
 - `src/audio/meterBallistics.ts`: Balística (caída ~20 dB/s, retención de recorte) de los picos reales que mide el motor nativo para los medidores de Arreglo y Mezcla.
