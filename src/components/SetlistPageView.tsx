@@ -216,7 +216,7 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
         const startX = (section.startTimeSec / totalDurationSec) * width;
         const endX = (section.endTimeSec / totalDurationSec) * width;
         const queued = section.id === transport.queuedSectionId;
-        ctx.fillStyle = queued ? '#e8ba68' : section.color || '#8dd6cd';
+        ctx.fillStyle = queued ? '#e8ba68' : section.color || '#F5F5F3';
         ctx.globalAlpha = queued || section.id === activeSection?.id ? 0.34 : 0.2;
         ctx.fillRect(startX, 0, Math.max(0, endX - startX), height);
         ctx.globalAlpha = 0.6;
@@ -246,7 +246,7 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
         const seconds = ((i + 0.5) / barCount) * totalDurationSec;
         const section = sections.find((item) => item.startTimeSec <= seconds && seconds < item.endTimeSec);
         const x = (i + 0.5) * stepX;
-        ctx.strokeStyle = section?.color || '#8dd6cd';
+        ctx.strokeStyle = section?.color || '#F5F5F3';
         ctx.beginPath();
         ctx.moveTo(x, centerY - half);
         ctx.lineTo(x, centerY + half);

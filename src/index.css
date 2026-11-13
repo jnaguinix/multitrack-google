@@ -1389,14 +1389,14 @@
   padding: 0 16px;
   border: 0;
   border-radius: 8px;
-  background: var(--lt-vivid);
-  color: #0b2b27;
+  background: #FF7A1A;
+  color: #1f0d00;
   font-size: 14px;
   font-weight: 700;
   cursor: pointer;
   transition: background .15s ease, transform .1s ease;
 }
-.lt-live-btn:hover:not(:disabled) { background: #a6e3db; }
+.lt-live-btn:hover:not(:disabled) { background: #FF9440; }
 .lt-live-btn:active:not(:disabled) { transform: scale(.98); }
 .lt-live-btn:disabled { background: var(--lt-raised); color: var(--lt-mut); cursor: default; }
 .lt-plan-table { display: grid; border: 1px solid var(--lt-line); border-radius: 12px; overflow: hidden; background: var(--lt-panel); }
