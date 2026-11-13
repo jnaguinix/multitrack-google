@@ -1705,3 +1705,9 @@ html { zoom: var(--ui-zoom); }
 .lt-confirm-actions .lt-confirm-primary:hover:not(:disabled) { background: #ddd; }
 .lt-confirm-danger { color: var(--lt-mute); }
 @media (max-width: 420px) { .lt-confirm-actions { grid-template-columns: 1fr; } }
+
+/* Biblioteca: barra de búsqueda y orden; lista larga por tandas. */
+.lt-library-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; }
+.lt-library-toolbar h2 { margin-right: auto; }
+.lt-library-toolbar .lt-picker-search { flex: 0 1 340px; min-width: 220px; }
+.lt-list-more { display: flex; justify-content: center; padding: 14px 0 6px; }

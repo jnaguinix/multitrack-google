@@ -1,5 +1,6 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
+  Search,
   FolderOpen,
   Upload,
   Download,
@@ -27,6 +28,8 @@ import { PcmOptimizationProgress } from '../storage/pcmOptimizer';
 import { isFsAccessSupported, pickAudioSources } from '../storage/sourceFiles';
 import { isDesktopApp, pickNativeFiles, pickNativeFolder } from '../utils/nativeDialog';
 import { formatMmSs } from './TransportDeck';
+import { filterSongs } from '../utils/songSearch';
+import { useProgressiveList } from '../hooks/useProgressiveList';
 
 interface LibraryViewProps {
   projects: SongProject[];
@@ -54,6 +57,19 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
   onUpdateSongMetadata,
 }) => {
   const [editingMetadataSong, setEditingMetadataSong] = useState<SongProject | null>(null);
+  const [query, setQuery] = useState('');
+  const [sort, setSort] = useState<'name' | 'recent' | 'bpm'>('name');
+
+  const visibleProjects = useMemo(() => {
+    const filtered = filterSongs(projects, query);
+    filtered.sort((a, b) => {
+      if (sort === 'recent') return (b.updatedAt || 0) - (a.updatedAt || 0);
+      if (sort === 'bpm') return (a.bpm || 0) - (b.bpm || 0);
+      return a.title.localeCompare(b.title, 'es', { sensitivity: 'base' });
+    });
+    return filtered;
+  }, [projects, query, sort]);
+  const { shown, hasMore, remaining, showMore, sentinelRef } = useProgressiveList(visibleProjects, `${query}|${sort}`);
 
   return (
     <div className="flex-1 min-w-0 bg-studio-ground p-4 sm:p-6 overflow-y-auto">
@@ -76,13 +92,33 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
         {/* Lista de canciones */}
         <div>
                     <div className="space-y-3">
-            <h2 className="text-base font-semibold text-neutral-200">
-              Canciones ({projects.length})
-            </h2>
+            <div className="lt-library-toolbar">
+              <h2 className="text-base font-semibold text-neutral-200">
+                Canciones ({query.trim() ? `${visibleProjects.length} de ${projects.length}` : projects.length})
+              </h2>
+              <label className="lt-picker-search">
+                <Search size={15} aria-hidden="true" />
+                <input
+                  type="search"
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  placeholder="Buscar por nombre, artista, tono o BPM"
+                  aria-label="Buscar canción"
+                />
+              </label>
+              <div className="lt-picker-sort" role="group" aria-label="Ordenar por">
+                {([['name', 'Nombre'], ['recent', 'Recientes'], ['bpm', 'BPM']] as const).map(([key, label]) => (
+                  <button key={key} type="button" className="lt-control" aria-pressed={sort === key} onClick={() => setSort(key)}>
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </div>
 
             <div className="divide-y divide-studio-line">
               {projects.length === 0 && <p className="rounded-lg bg-studio-panel p-4 text-sm text-studio-muted">Pulsa «Importar» arriba para añadir tu primera canción.</p>}
-              {projects.map((proj, index) => {
+              {projects.length > 0 && visibleProjects.length === 0 && <p className="rounded-lg bg-studio-panel p-4 text-sm text-studio-muted">Ninguna canción coincide con «{query}».</p>}
+              {shown.map((proj, index) => {
                 const isCurrent = proj.id === currentProjectId;
                 const durSec =
                   proj.durationSec || ((proj.totalBars || 24) * 4 * 60) / (proj.bpm || 120);
@@ -263,6 +299,13 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                 );
               })}
             </div>
+            {hasMore && (
+              <div ref={sentinelRef} className="lt-list-more">
+                <button type="button" className="lt-control" onClick={showMore}>
+                  Mostrar {Math.min(remaining, 40)} más ({remaining} sin mostrar)
+                </button>
+              </div>
+            )}
           </div>
         </div>
       </div>

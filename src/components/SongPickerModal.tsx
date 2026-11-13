@@ -4,6 +4,8 @@ import { SongProject } from '../types/project';
 import { pickAudioSources } from '../storage/sourceFiles';
 import { isDesktopApp, pickNativeFiles, pickNativeFolder } from '../utils/nativeDialog';
 import { formatMmSs } from './TransportDeck';
+import { filterSongs } from '../utils/songSearch';
+import { useProgressiveList } from '../hooks/useProgressiveList';
 
 interface SongPickerModalProps {
   songs: SongProject[];
@@ -55,16 +57,7 @@ export const SongPickerModal: React.FC<SongPickerModalProps> = ({
   }, [onClose]);
 
   const visible = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    const filtered = q
-      ? songs.filter(
-          (s) =>
-            s.title.toLowerCase().includes(q) ||
-            (s.artist || '').toLowerCase().includes(q) ||
-            (s.keySignature || '').toLowerCase().includes(q) ||
-            String(s.bpm).includes(q)
-        )
-      : songs.slice();
+    const filtered = filterSongs(songs, query);
     filtered.sort((a, b) => {
       if (sort === 'recent') return (b.updatedAt || 0) - (a.updatedAt || 0);
       if (sort === 'bpm') return (a.bpm || 0) - (b.bpm || 0);
@@ -72,6 +65,8 @@ export const SongPickerModal: React.FC<SongPickerModalProps> = ({
     });
     return filtered;
   }, [songs, query, sort]);
+
+  const { shown, hasMore, remaining, showMore, sentinelRef } = useProgressiveList(visible, `${query}|${sort}`);
 
   const importFiles = () => {
     if (isDesktopApp()) {
@@ -156,7 +151,7 @@ export const SongPickerModal: React.FC<SongPickerModalProps> = ({
               <p>Ninguna canción coincide con «{query}».</p>
             </div>
           ) : (
-            visible.map((song) => {
+            shown.map((song) => {
               const inSet = setlistIds.has(song.id);
               return (
                 <div
@@ -198,6 +193,11 @@ export const SongPickerModal: React.FC<SongPickerModalProps> = ({
                 </div>
               );
             })
+          )}
+          {hasMore && (
+            <div ref={sentinelRef} className="lt-list-more">
+              <button type="button" className="lt-control" onClick={showMore}>Mostrar {Math.min(remaining, 40)} más ({remaining} sin mostrar)</button>
+            </div>
           )}
         </div>
 
