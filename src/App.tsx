@@ -132,8 +132,9 @@ export default function App() {
   }, []);
 
   const [activeView, setActiveView] = useState<WorkspaceView>(getInitialViewFromHash);
-  // La biblioteca lateral empieza plegada: en Setlist se abre con «Añadir» o con su pestaña.
-  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState<boolean>(true);
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState<boolean>(
+    () => typeof window !== 'undefined' && window.innerWidth < 1280
+  );
   useEffect(() => {
     const narrowWorkspace = window.matchMedia('(max-width: 720px)');
     const collapseOnNarrowWorkspace = (event: MediaQueryListEvent) => {
@@ -1119,7 +1120,7 @@ export default function App() {
 
       {/* Main Body: Dockable Left Repertoire Sidebar + Active Workspace */}
       <div className="relative flex-1 flex overflow-hidden min-h-0">
-        {(activeView === 'setlist' || activeView === 'library') && (
+        {activeView === 'library' && (
           <RepertoireTreeSidebar
             projects={projects}
             setlistQueue={setlistQueue}
@@ -1192,7 +1193,7 @@ export default function App() {
               ramCacheVersion={ramCacheVersion}
               setlistTransitionMode={setlistTransitionMode}
               metersRef={metersRef}
-              onOpenLibrary={() => setIsSidebarCollapsed(false)}
+
               onPlayPause={handlePlayPause}
               onStop={handleStop}
               onToggleVamp={handleToggleVamp}

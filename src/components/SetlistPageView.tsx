@@ -33,6 +33,7 @@ import { formatMmSs, formatTimecode } from './TransportDeck';
 import { getSongWaveformPeaks } from '../utils/songWaveform';
 import { MultitrackMixer, gainToDb } from './MultitrackMixer';
 import { isDesktopApp } from '../utils/nativeDialog';
+import { SongPickerModal } from './SongPickerModal';
 
 interface SetlistPageViewProps {
   project: SongProject | null;
@@ -80,8 +81,6 @@ interface SetlistPageViewProps {
   onChangeCueMasterGain: (gain: number) => void;
   onResetMixer: () => void;
   onOptimizeProject: (song: SongProject) => void;
-  /** Abre la biblioteca lateral para añadir canciones al setlist. */
-  onOpenLibrary: () => void;
 }
 
 function closePopover(event: React.MouseEvent<HTMLButtonElement>) {
@@ -96,6 +95,7 @@ function formatTrackDb(gain: number): string {
 
 export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
   project,
+  allProjects,
   setlistQueue,
   transport,
   ramCacheVersion: _ramCacheVersion,
@@ -115,6 +115,8 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
   onOpenSectionEditor,
   onAddStemsToCurrentSong,
   onQuickImportNewSongFiles,
+  onQuickImportNativeFolder,
+  onQuickImportNativeFiles,
   onToggleTrackMute,
   onToggleTrackSolo,
   onChangeTrackGain,
@@ -129,7 +131,6 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
   onChangeMasterGain,
   onChangeCueMasterGain,
   onResetMixer,
-  onOpenLibrary,
 }) => {
   const [trackFilterText, setTrackFilterText] = useState('');
   const [isFilterOpen, setIsFilterOpen] = useState(false);
@@ -137,6 +138,9 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
   const [cursorNotice, setCursorNotice] = useState<string | null>(null);
   const [isFloatingMixerOpen, setIsFloatingMixerOpen] = useState(false);
   const [showClearConfirm, setShowClearConfirm] = useState(false);
+  const [isPickerOpen, setIsPickerOpen] = useState(false);
+  const openPicker = () => setIsPickerOpen(true);
+  const setlistIds = useMemo(() => new Set(setlistQueue.map((s) => s.id)), [setlistQueue]);
 
   const masterCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const addAudioInputRef = useRef<HTMLInputElement | null>(null);
@@ -299,7 +303,7 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
                 <RotateCcw size={15} />
               </button>
             )}
-            <button type="button" onClick={onOpenLibrary} className="lt-control" title="Abrir la biblioteca para añadir canciones">
+            <button type="button" onClick={openPicker} className="lt-control" title="Buscar canciones en la biblioteca y añadirlas">
               <Plus size={16} /> Añadir
             </button>
           </div>
@@ -309,8 +313,8 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
           <div className="lt-empty">
             <Music size={24} className="text-neutral-400" aria-hidden="true" />
             <h2>Setlist vacío</h2>
-            <p>Abre la biblioteca y pulsa «+ Set» en cada canción, o arrástrala hasta aquí.</p>
-            <button type="button" onClick={onOpenLibrary} className="lt-primary"><Plus size={16} /> Añadir canción</button>
+            <p>Busca canciones en tu biblioteca y añádelas, o suelta aquí los archivos de audio.</p>
+            <button type="button" onClick={openPicker} className="lt-primary"><Plus size={16} /> Añadir canción</button>
           </div>
         ) : (
           <div className="lt-setlist-queue" role="group" aria-label="Canciones del setlist">
@@ -693,6 +697,19 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
           </div>
         )}
       </div>
+
+      {isPickerOpen && (
+        <SongPickerModal
+          songs={allProjects}
+          setlistIds={setlistIds}
+          onClose={() => setIsPickerOpen(false)}
+          onAddToSetlist={onAddToSetlist}
+          onRemoveFromSetlist={onRemoveFromSetlist}
+          onQuickImportNewSongFiles={onQuickImportNewSongFiles}
+          onQuickImportNativeFolder={onQuickImportNativeFolder}
+          onQuickImportNativeFiles={onQuickImportNativeFiles}
+        />
+      )}
 
       {/* 4. FLOATING MIXER CARD MODAL / DRAWER (Opens on demand, closes with 1 click or Esc) */}
       {isFloatingMixerOpen && filteredProjectForMixer && (
