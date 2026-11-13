@@ -1381,25 +1381,19 @@
 .lt-plan-ok { color: #7ad8a3; }
 .lt-plan-warn { color: var(--lt-solo); }
 .lt-plan-header-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
-/* «Iniciar en vivo»: color de acento y icono de transmisión, para no confundirlo con Reproducir. */
-.lt-live-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  min-height: 36px;
-  padding: 0 16px;
-  border: 0;
-  border-radius: 8px;
-  background: #FF7A1A;
-  color: #1f0d00;
-  font-size: 14px;
-  font-weight: 700;
-  cursor: pointer;
-  transition: background .15s ease, transform .1s ease;
+/* «Iniciar en vivo»: igual que los demás botones (lt-control), con un parpadeo suave naranja que invita a pulsarlo. */
+.lt-start-live { gap: 8px; }
+.lt-start-live:not(:disabled) { animation: lt-live-blink 1.8s ease-in-out infinite; }
+.lt-start-live:not(:disabled) svg { color: #FF7A1A; animation: lt-live-icon 1.8s ease-in-out infinite; }
+.lt-start-live:disabled { animation: none; }
+@keyframes lt-live-blink {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(255, 122, 26, 0); }
+  50% { box-shadow: 0 0 0 2px rgba(255, 122, 26, .85), 0 0 14px 1px rgba(255, 122, 26, .45); }
 }
-.lt-live-btn:hover:not(:disabled) { background: #FF9440; }
-.lt-live-btn:active:not(:disabled) { transform: scale(.98); }
-.lt-live-btn:disabled { background: var(--lt-raised); color: var(--lt-mut); cursor: default; }
+@keyframes lt-live-icon {
+  0%, 100% { opacity: .35; }
+  50% { opacity: 1; }
+}
 .lt-plan-table { display: grid; border: 1px solid var(--lt-line); border-radius: 12px; overflow: hidden; background: var(--lt-panel); }
 .lt-plan-rows { display: grid; }
 .lt-plan-grid {

@@ -463,7 +463,7 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
             type="button"
             onClick={onStartLive}
             disabled={setlistQueue.length === 0}
-            className="lt-live-btn"
+            className="lt-control lt-start-live"
             title="Monta la primera canción y abre la página En vivo"
           >
             <Radio size={16} aria-hidden="true" /> Iniciar en vivo
