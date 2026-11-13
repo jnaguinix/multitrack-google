@@ -1695,7 +1695,8 @@ html { zoom: var(--ui-zoom); }
 
 /* Página Mezcla: cada tira necesita ~96 px para las dos escalas, el fader y los dos medidores sin salirse.
    Las tiras se desplazan en horizontal, así que ensanchar no cuesta espacio útil (antes, a <=1366 px, medían 76 px y los números se salían). */
-.lt-console-full .lt-channels > .lt-strip { width: 92px; padding: 0 6px 8px; max-width: none; }
+/* Ancho fijo: con pocas pistas las tiras no se estiran para llenar la pantalla. */
+.lt-console-full .lt-channels > .lt-strip { flex: 0 0 92px; width: 92px; max-width: 92px; padding: 0 6px 8px; }
 .lt-console-full .lt-strip.lt-bus { width: 112px; }
 .lt-console-full .lt-strip .lt-cap { margin-inline: -6px; }
 .lt-console-full .lt-strip .lt-name { font-size: 12px; }
