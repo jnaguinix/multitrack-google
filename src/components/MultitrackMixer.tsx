@@ -191,6 +191,7 @@ const StudioFader: React.FC<StudioFaderProps> = ({
 
   const peakDbfs = peak && Number.isFinite(peak) ? 20 * Math.log10(peak) : -Infinity;
   const peakLabel = Number.isFinite(peakDbfs) ? `${peakDbfs.toFixed(1)} dBFS` : '−∞ dBFS';
+  const peakTitle = `Pico de muestras del analizador de pista en mono, después de la ganancia y el paneo: ${peakLabel}`;
 
   return (
     <>
@@ -287,8 +288,8 @@ const StudioFader: React.FC<StudioFaderProps> = ({
 
       <div className="lt-db">{formatDb(db)}</div>
       {peak !== undefined && (
-        <div className="lt-peak-readout" title="Pico de muestras del analizador de pista en mono, después de la ganancia y el paneo">
-          Pico {peakLabel}
+        <div className="lt-peak-readout" title={peakTitle}>
+          {peakLabel}
         </div>
       )}
     </>

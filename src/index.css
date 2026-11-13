@@ -121,12 +121,15 @@
   user-select: none;
 }
 
+/* Mezcla flotante: cada tira necesita ~90 px para dos escalas, el fader y el medidor sin encimarse.
+   El panel desplaza en horizontal, así que ensanchar no cuesta nada. */
 .lt-docked .lt-strip {
-  width: 82px;
+  width: 92px;
   border-radius: 10px;
   padding: 0 6px 8px;
   gap: 5px;
 }
+.lt-docked .lt-strip.lt-bus { width: 118px; }
 
 .lt-strip:hover {
   border-color: var(--lt-line);
@@ -169,7 +172,8 @@
   font-size: 11px;
   color: var(--lt-mut);
   margin-top: -5px;
-  white-space: nowrap;
+  text-align: center;
+  line-height: 1.15;
 }
 
 /* Rotary Pan Knob */
@@ -430,6 +434,12 @@
   font-size: 12.5px;
 }
 
+/* Los buses no llevan paneo, M/S ni ruteo: su fader crece para ocupar la altura de las pistas. */
+.lt-strip.lt-bus .lt-fx {
+  flex: 1 1 auto;
+  margin-top: 8px;
+}
+
 .lt-strip.lt-bus .lt-handle {
   height: 28px;
   margin-bottom: -14px;
@@ -451,7 +461,6 @@
 
 @media (max-width: 1366px) {
   .lt-strip { width: 76px; padding: 0 5px 8px; }
-  .lt-docked .lt-strip { width: 74px; }
   .lt-strip.lt-bus { width: 90px; }
   .lt-console-full .lt-cap { margin-inline: -5px; }
   .lt-console { gap: 8px; }
