@@ -16,6 +16,7 @@ import {
   RotateCcw,
   Sliders,
   Repeat,
+  Radio,
 } from 'lucide-react';
 import {
   MetersSnapshot,
@@ -472,10 +473,10 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
             type="button"
             onClick={onStartLive}
             disabled={setlistQueue.length === 0}
-            className="lt-primary"
+            className="lt-live-btn"
             title="Monta la primera canción y abre la página En vivo"
           >
-            <Play size={16} fill="currentColor" /> Iniciar en vivo
+            <Radio size={16} aria-hidden="true" /> Iniciar en vivo
           </button>
         </div>
       </header>

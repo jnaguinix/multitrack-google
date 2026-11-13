@@ -1378,6 +1378,24 @@
 .lt-plan-ok { color: #7ad8a3; }
 .lt-plan-warn { color: var(--lt-solo); }
 .lt-plan-header-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+/* «Iniciar en vivo»: color de acento y icono de transmisión, para no confundirlo con Reproducir. */
+.lt-live-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 36px;
+  padding: 0 14px;
+  border: 1px solid var(--lt-accent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--lt-accent) 16%, transparent);
+  color: var(--lt-accent);
+  font-size: 14px;
+  font-weight: 650;
+  cursor: pointer;
+  transition: background .15s ease, color .15s ease;
+}
+.lt-live-btn:hover:not(:disabled) { background: var(--lt-accent); color: #0b0b0b; }
+.lt-live-btn:disabled { opacity: .45; cursor: default; }
 .lt-plan-table { display: grid; border: 1px solid var(--lt-line); border-radius: 12px; overflow: hidden; background: var(--lt-panel); }
 .lt-plan-rows { display: grid; }
 .lt-plan-grid {
