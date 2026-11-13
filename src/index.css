@@ -1697,3 +1697,11 @@ html { zoom: var(--ui-zoom); }
 .lt-console-full .lt-strip .lt-cap { margin-inline: -6px; }
 .lt-console-full .lt-strip .lt-name { font-size: 12px; }
 .lt-console-full .lt-fx { width: 100%; }
+
+/* Ventana «¿Montar esta canción?»: tres botones del mismo tamaño y estilo; el rojo solo marca el texto y el icono de lo destructivo. */
+.lt-confirm-actions { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; padding-top: 4px; }
+.lt-confirm-actions .lt-control { display: inline-flex; align-items: center; gap: 6px; width: 100%; min-height: 40px; padding: 0 10px; white-space: nowrap; }
+.lt-confirm-primary { background: var(--lt-text); color: var(--lt-bg); font-weight: 650; }
+.lt-confirm-actions .lt-confirm-primary:hover:not(:disabled) { background: #ddd; }
+.lt-confirm-danger { color: var(--lt-mute); }
+@media (max-width: 420px) { .lt-confirm-actions { grid-template-columns: 1fr; } }

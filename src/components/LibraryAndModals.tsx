@@ -479,7 +479,7 @@ export const ConfirmSongActionModal: React.FC<ConfirmSongActionModalProps> = ({
 
   return (
     <div className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4">
-      <div className="bg-studio-panel border border-neutral-800 rounded-2xl max-w-md w-full p-6 space-y-5 shadow-2xl">
+      <div className="bg-studio-panel border border-neutral-800 rounded-2xl max-w-xl w-full p-6 space-y-5 shadow-2xl">
         <div className="flex items-start justify-between gap-3">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-xl bg-studio-strip border border-studio-line flex items-center justify-center shrink-0">
@@ -523,19 +523,17 @@ export const ConfirmSongActionModal: React.FC<ConfirmSongActionModalProps> = ({
           ¿Confirmas que deseas montar esta canción en el DAW ahora, o prefieres enviarla a la cola del Modo Setlist?
         </p>
 
-        <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5 pt-1">
+        <div className="lt-confirm-actions">
           <button
             type="button"
             onClick={() => {
               onConfirmLoadInDaw(song.id);
               onClose();
             }}
-            className="flex-1 py-2.5 px-4 rounded-xl bg-studio-ink hover:bg-neutral-200 text-studio-ground font-bold text-xs flex items-center justify-center gap-2 cursor-pointer transition-colors"
+            className="lt-control lt-confirm-primary"
           >
             <Play className="w-3.5 h-3.5 fill-current" />
-            <span>
-              {isAlreadyInDaw ? 'Reiniciar en el DAW' : 'Sí, Cargar en el DAW'}
-            </span>
+            <span>{isAlreadyInDaw ? 'Reiniciar' : 'DAW'}</span>
           </button>
 
           {isInSetlist && onConfirmRemoveFromSetlist ? (
@@ -545,7 +543,7 @@ export const ConfirmSongActionModal: React.FC<ConfirmSongActionModalProps> = ({
                 onConfirmRemoveFromSetlist(song.id);
                 onClose();
               }}
-              className="py-2.5 px-4 rounded-xl bg-rose-500/15 hover:bg-rose-500/25 border border-rose-500/40 text-rose-300 font-semibold text-xs flex items-center justify-center gap-1.5 cursor-pointer transition-colors"
+              className="lt-control lt-confirm-danger"
             >
               <Trash2 className="w-3.5 h-3.5" />
               <span>Quitar de la sesión</span>
@@ -557,18 +555,14 @@ export const ConfirmSongActionModal: React.FC<ConfirmSongActionModalProps> = ({
                 onConfirmAddToSetlist(song.id);
                 onClose();
               }}
-              className="py-2.5 px-4 rounded-xl bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/40 text-amber-300 font-semibold text-xs flex items-center justify-center gap-1.5 cursor-pointer transition-colors"
+              className="lt-control"
             >
               <ListMusic className="w-3.5 h-3.5" />
               <span>Añadir al Setlist</span>
             </button>
           )}
 
-          <button
-            type="button"
-            onClick={onClose}
-            className="py-2.5 px-3.5 rounded-xl bg-neutral-800 hover:bg-neutral-700 text-neutral-300 text-xs font-medium cursor-pointer transition-colors"
-          >
+          <button type="button" onClick={onClose} className="lt-control">
             Cancelar
           </button>
         </div>
