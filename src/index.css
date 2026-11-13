@@ -698,19 +698,21 @@
 .lt-live-jump-tabs {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
-  border-bottom: 1px solid var(--lt-line);
+  gap: 6px;
 }
 .lt-live-jump-tabs button {
-  min-height: 44px;
+  min-height: 40px;
   padding: 5px 10px;
-  border-bottom: 1px solid transparent;
-  color: var(--lt-mut);
+  border-radius: 6px;
+  background: var(--lt-strip);
+  color: var(--lt-text);
   font-size: 13px;
+  font-weight: 550;
   cursor: pointer;
 }
-.lt-live-jump-tabs button:hover,
-.lt-live-jump-tabs button[aria-pressed="true"] { color: var(--lt-text); }
-.lt-live-jump-tabs button[aria-pressed="true"] { border-bottom-color: var(--lt-solo); }
+.lt-live-jump-tabs button:hover { background: var(--lt-raised); }
+.lt-live-jump-tabs button[aria-pressed="true"] { background: var(--lt-accent); color: #0b2b27; }
+.lt-live-jump-tabs button[aria-pressed="true"]:hover { background: #a6e3db; }
 .lt-live-section-picker { display: none; margin-top: 8px; }
 .lt-live-section-picker[data-needed] { display: block; }
 
@@ -1078,8 +1080,10 @@
 }
 
 .lt-control { background: var(--lt-strip); color: var(--lt-text); }
-.lt-control:hover:not(:disabled), .lt-control[aria-pressed="true"] { background: var(--lt-raised); }
-.lt-control[aria-pressed="true"] { box-shadow: inset 0 -2px var(--lt-text); }
+.lt-control:hover:not(:disabled) { background: var(--lt-raised); }
+/* Botón seleccionado o activado: relleno con el color de acento (sin subrayados ni bordes extra). */
+.lt-control[aria-pressed="true"] { background: var(--lt-accent); color: #0b2b27; }
+.lt-control[aria-pressed="true"]:hover:not(:disabled) { background: #a6e3db; }
 .lt-control:disabled, .lt-primary:disabled { opacity: .4; cursor: default; }
 .lt-icon-control { padding: 0; width: 36px; }
 .lt-primary { border-radius: 999px; background: var(--lt-text); color: var(--lt-bg); }
@@ -1296,7 +1300,6 @@
 }
 .lt-picker-sort { display: flex; gap: 4px; }
 .lt-picker-sort .lt-control { min-height: 30px; padding-inline: 10px; font-size: 12px; }
-.lt-picker-sort .lt-control[aria-pressed="true"] { border-color: var(--lt-accent); color: var(--lt-accent); }
 .lt-picker-list {
   flex: 1 1 auto;
   min-height: 160px;
