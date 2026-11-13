@@ -246,24 +246,25 @@
 
 .lt-scale {
   position: relative;
-  flex: 0 0 18px;
-  font-size: 11px;
-  color: var(--lt-mut);
-  text-align: right;
-  width: 18px;
+  flex: 0 0 10px;
+  width: 10px;
   padding: 0;
   pointer-events: none;
 }
 
+/* Escalas en rayitas, sin números: la rayita larga y clara marca 0 dB; el valor exacto va en el recuadro de abajo. */
 .lt-scale span {
   position: absolute;
   right: 0;
-  line-height: 1;
+  width: 6px;
+  height: 1px;
+  background: #9a9a97;
   transform: translateY(50%);
 }
+.lt-scale span[data-zero] { width: 10px; height: 2px; background: var(--lt-text); }
 
 .lt-fx:has(.lt-peak-meter) { gap: 3px; }
-.lt-peak-scale { flex-basis: 16px; }
+.lt-peak-scale { flex-basis: 10px; }
 .lt-peak-scale span { left: 0; right: auto; }
 
 .lt-docked .lt-fx:has(.lt-peak-meter) .lt-fader { width: 18px; }
@@ -1691,9 +1692,8 @@ html { zoom: var(--ui-zoom); }
 
 /* Página Mezcla: cada tira necesita ~96 px para las dos escalas, el fader y los dos medidores sin salirse.
    Las tiras se desplazan en horizontal, así que ensanchar no cuesta espacio útil (antes, a <=1366 px, medían 76 px y los números se salían). */
-.lt-console-full .lt-channels > .lt-strip { width: 100px; padding: 0 6px 8px; max-width: none; }
-.lt-console-full .lt-strip.lt-bus { width: 120px; }
+.lt-console-full .lt-channels > .lt-strip { width: 92px; padding: 0 6px 8px; max-width: none; }
+.lt-console-full .lt-strip.lt-bus { width: 112px; }
 .lt-console-full .lt-strip .lt-cap { margin-inline: -6px; }
 .lt-console-full .lt-strip .lt-name { font-size: 12px; }
 .lt-console-full .lt-fx { width: 100%; }
-.lt-console-full .lt-peak-scale { flex-basis: 22px; width: 22px; }

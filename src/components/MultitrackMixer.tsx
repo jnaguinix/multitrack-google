@@ -198,9 +198,7 @@ const StudioFader: React.FC<StudioFaderProps> = ({
       <div className="lt-fx">
         <div className="lt-scale" aria-hidden="true">
           {GAIN_TICKS.map((tick) => (
-            <span key={tick} style={{ bottom: `${posFromDb(tick) * 100}%` }}>
-              {tick > 0 ? `+${tick}` : tick}
-            </span>
+            <span key={tick} data-zero={tick === 0 || undefined} style={{ bottom: `${posFromDb(tick) * 100}%` }} />
           ))}
         </div>
 
@@ -268,7 +266,7 @@ const StudioFader: React.FC<StudioFaderProps> = ({
             </div>
             <div className="lt-scale lt-peak-scale" aria-hidden="true">
               {PEAK_TICKS.map((tick) => (
-                <span key={tick} style={{ bottom: `${peakPosition(tick) * 100}%` }}>{tick}</span>
+                <span key={tick} data-zero={tick === 0 || undefined} style={{ bottom: `${peakPosition(tick) * 100}%` }} />
               ))}
             </div>
           </>
