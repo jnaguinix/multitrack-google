@@ -140,6 +140,9 @@ export const LiveSetView: React.FC<LiveSetViewProps> = ({
   const total = Math.max(1, transport.totalDurationSec || project?.durationSec || 1);
   const now = Math.min(total, Math.max(0, transport.currentTimeSec));
   const remaining = total - now;
+  // El tiempo restante nunca puede superar el total que se muestra (el total se trunca a segundos y lo restante se redondea hacia arriba).
+  const remainingShown = Math.min(Math.ceil(remaining), Math.floor(total));
+  const hasRealArtist = Boolean(project?.artist) && !/^artista\s+desconocid[oa]$/i.test(project!.artist.trim());
   const playheadPct = (now / total) * 100;
   const clock = clockParts(now);
   const queuedSection = sections.find((s) => s.id === transport.queuedSectionId) || null;
@@ -174,7 +177,7 @@ export const LiveSetView: React.FC<LiveSetViewProps> = ({
               </h1>
               {project && (
                 <p className="lt-live-song-details">
-                  {project.artist && <span>{project.artist}</span>}
+                  {hasRealArtist && <span>{project.artist}</span>}
                   <strong>{project.keySignature}</strong>
                   <span>{project.bpm} BPM</span>
                   <span>{sections.length} {sections.length === 1 ? 'sección' : 'secciones'}</span>
@@ -187,7 +190,7 @@ export const LiveSetView: React.FC<LiveSetViewProps> = ({
                 <div className="lt-live-clock">
                   {clock.main}<span className="lt-live-clock-tenths">.{clock.tenths}</span>
                 </div>
-                <p className="lt-live-secondary">Quedan {mmss(Math.ceil(remaining))} de {mmss(total)}</p>
+                <p className="lt-live-secondary">Quedan {mmss(remainingShown)} de {mmss(total)}</p>
               </div>
             )}
           </header>
