@@ -1688,3 +1688,12 @@
 html { zoom: var(--ui-zoom); }
 /* Con zoom, las unidades de viewport no se escalan: se compensa para que la app siga llenando la ventana. */
 .app-shell { height: calc(100dvh / var(--ui-zoom)) !important; min-height: 0 !important; }
+
+/* Página Mezcla: cada tira necesita ~96 px para las dos escalas, el fader y los dos medidores sin salirse.
+   Las tiras se desplazan en horizontal, así que ensanchar no cuesta espacio útil (antes, a <=1366 px, medían 76 px y los números se salían). */
+.lt-console-full .lt-channels > .lt-strip { width: 100px; padding: 0 6px 8px; max-width: none; }
+.lt-console-full .lt-strip.lt-bus { width: 120px; }
+.lt-console-full .lt-strip .lt-cap { margin-inline: -6px; }
+.lt-console-full .lt-strip .lt-name { font-size: 12px; }
+.lt-console-full .lt-fx { width: 100%; }
+.lt-console-full .lt-peak-scale { flex-basis: 22px; width: 22px; }
