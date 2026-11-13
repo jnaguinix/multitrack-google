@@ -99,6 +99,11 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
   setlistQueue,
   transport,
   ramCacheVersion: _ramCacheVersion,
+  setlistTransitionMode,
+  onChangeSetlistTransitionMode,
+  onChangeQuantize,
+  onChangePitch,
+  onChangeBpm,
   metersRef,
   onPlayPause,
   onLoadAndPlaySong,
@@ -256,6 +261,8 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
   }, [project, trackFilterText]);
 
   const isProjectInSetlist = Boolean(project && setlistQueue.some((s) => s.id === project.id));
+  const currentSetlistIdx = project ? setlistQueue.findIndex((s) => s.id === project.id) : -1;
+  const nextSong = currentSetlistIdx >= 0 ? setlistQueue[currentSetlistIdx + 1] ?? null : null;
   const setlistTotalSec = setlistQueue.reduce(
     (sum, song) => sum + (song.durationSec || ((song.totalBars || 24) * 4 * 60) / (song.bpm || 120)),
     0
@@ -598,6 +605,24 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
           })}
           </div>
         )}
+
+        {setlistQueue.length > 0 && (
+          <div className="lt-setlist-foot">
+            {nextSong ? (
+              <div className="lt-next">
+                <span>Siguiente</span>
+                <strong title={nextSong.title}>{nextSong.title}</strong>
+                <small>{nextSong.keySignature} · {nextSong.bpm} BPM</small>
+              </div>
+            ) : (
+              <div className="lt-next lt-next-empty">
+                <span>Siguiente</span>
+                <small>{isProjectInSetlist ? 'Es la última del setlist.' : 'Monta una canción para ver la siguiente.'}</small>
+              </div>
+            )}
+            <p>Duración del set {formatMmSs(setlistTotalSec)}</p>
+          </div>
+        )}
       </div>
 
       {/* Columna derecha: detalle de la canción montada (onda y secciones) */}
@@ -684,6 +709,75 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
                 </div>
               )}
             </section>
+
+            <div className="lt-setlist-cards">
+              <section className="lt-card" aria-label="Ajustes de la canción">
+                <h3>Ajustes de la canción</h3>
+                <div className="lt-card-grid">
+                  <label className="lt-field">
+                    Tempo (BPM)
+                    <input
+                      type="number"
+                      min={50}
+                      max={220}
+                      value={project.bpm}
+                      onChange={(e) => {
+                        const bpm = Number(e.target.value);
+                        if (bpm >= 50 && bpm <= 220) onChangeBpm(bpm);
+                      }}
+                    />
+                  </label>
+                  <label className="lt-field">
+                    Tono
+                    <select value={project.pitchSemitones} onChange={(e) => onChangePitch(Number(e.target.value))}>
+                      {Array.from({ length: 13 }, (_, i) => i - 6).map((st) => (
+                        <option key={st} value={st}>{st > 0 ? '+' : ''}{st} st</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="lt-field">
+                    Salto de sección
+                    <select value={project.quantizeMode} onChange={(e) => onChangeQuantize(e.target.value as QuantizeMode)}>
+                      <option value="immediate">Inmediato</option>
+                      <option value="1-bar">Al siguiente compás</option>
+                      <option value="2-bars">Cada dos compases</option>
+                      <option value="section-end">Al final de la sección</option>
+                    </select>
+                  </label>
+                  <label className="lt-field">
+                    Al terminar la canción
+                    <select value={setlistTransitionMode} onChange={(e) => onChangeSetlistTransitionMode(e.target.value as SetlistTransitionMode)}>
+                      <option value="stop">Detener</option>
+                      <option value="cue-next">Preparar la siguiente</option>
+                      <option value="auto-play">Reproducir la siguiente</option>
+                    </select>
+                  </label>
+                </div>
+                <div className="flex flex-wrap gap-1.5">
+                  <button type="button" onClick={onToggleClick} aria-pressed={project.clickEnabled} className="lt-control">Click</button>
+                  <button type="button" onClick={onToggleGuide} aria-pressed={project.guideCuesEnabled} className="lt-control">Guía</button>
+                </div>
+              </section>
+
+              <section className="lt-card" aria-label="Pistas de la canción">
+                <h3>
+                  Pistas
+                  <span>{project.tracks.length}</span>
+                </h3>
+                <ul className="lt-card-tracks">
+                  {project.tracks.slice(0, 10).map((track) => (
+                    <li key={track.id} title={track.name}>
+                      <i style={{ background: track.color }} aria-hidden="true" />
+                      <span>{track.name}</span>
+                      <em>{track.bus === 'cue-click' ? 'Cue' : track.bus === 'both' ? 'Ambos' : 'Main'}</em>
+                    </li>
+                  ))}
+                </ul>
+                <button type="button" onClick={() => setIsFloatingMixerOpen(true)} className="lt-card-link">
+                  {project.tracks.length > 10 ? `+ ${project.tracks.length - 10} más · ` : ''}Abrir mezcla
+                </button>
+              </section>
+            </div>
           </>
         ) : (
           <div className="lt-empty">
