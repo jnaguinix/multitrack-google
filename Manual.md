@@ -1,256 +1,327 @@
-# Manual Técnico y de Arquitectura — OmniTracks (DAW & Setlist Multitrack Player)
+# Manual Técnico y de Arquitectura — OmniTracks
 
-Este documento está diseñado como **guía de transferencia técnica (Handoff Manual)** para que cualquier IA o desarrollador pueda retomar el proyecto inmediatamente, comprender su arquitectura interna al 100%, diagnosticar los problemas actuales de memoria/almacenamiento y ejecutar el plan de mejora propuesto.
+Referencia técnica de **OmniTracks** (reproductor multipista / DAW en vivo). Su objetivo es que cualquier desarrollador o IA pueda entender el sistema, localizar cualquier pieza y extenderlo con seguridad.
+
+- Para empezar rápido (estado del repo, mapa de archivos, comandos, reglas): [`instrucciones.md`](instrucciones.md).
+- Diseño detallado del motor de audio: [`docs/MOTOR_NATIVO_DISENO.md`](docs/MOTOR_NATIVO_DISENO.md).
+- Empaquetado, firma y publicación: [`desktop/README.md`](desktop/README.md).
+
+> **Principio:** si este manual y el código discrepan, gana el código. Todas las afirmaciones de este documento fueron contrastadas con el código fuente (ver nota de verificación al final).
 
 ---
 
-## 1. Visión General del Proyecto
+## 1. Visión general
 
-**OmniTracks** es una aplicación web tipo DAW / reproductor multipista en vivo (estilo *Ableton Live / Playback / Reaper* para músicos y directores de alabanza/escenario). Permite importar canciones por carpetas o stems sueltos (`.wav`, `.mp3`, `.flac`, `.ogg`, `.m4a`), armar un **Setlist**, controlar secciones en tiempo real (saltos cuantizados, loops tipo *Vamp*, metrónomo/click dinámico, guía hablada/cues), mezclar niveles/paneos/buses (`MAIN` y `CUE/CLICK`), y controlar el escenario desde una vista remota vía `BroadcastChannel`.
+OmniTracks reproduce varias pistas (*stems*) sincronizadas al muestreo (WAV, MP3, FLAC, M4A, OGG, AAC) pensadas para conciertos: saltos de sección cuantizados al compás, bucles *Vamp*, cambio de tono/velocidad sin clics, metrónomo y guía hablada por una salida independiente (*Split-Mono*), mezcla por pista y control remoto desde teléfonos.
+
+Dos plataformas comparten el mismo frontend React:
+
+| | Escritorio (Windows x64) — producto principal | Web (navegador) |
+|---|---|---|
+| Contenedor | Tauri v2 + WebView2 | Build estático Vite (`dist/`) |
+| Motor | Rust: `cpal` (WASAPI) + `symphonia` + `rubato` + `rtrb` | Web Audio API (`audioEngine.ts`) |
+| Modos | Caché PCM en disco + hilos feeder por pista | `buffer` (RAM, presupuesto 256–4096 MB, defecto 1200) y `stream` (OPFS + `SyncAccessHandle` en Worker) |
+| Datos | `library.json` + sidecars en disco | IndexedDB `OmniTracksWebDB` + OPFS |
+| Control remoto | Servidor LAN en Rust (TCP 8765) | No disponible |
+
+### Modelo de dos niveles
+- **Biblioteca** (`library.json`): catálogo permanente. Sin audio; los originales del usuario jamás se tocan.
+- **Setlist**: sesión del día, `inSetlist: true` + `setlistOrder` por canción y `activeSetlist` (ids) en `library.json`. Se vacía o edita sin afectar la biblioteca.
 
 ---
 
-## 2. Mapa de Archivos Clave y Responsabilidades
+## 2. Arquitectura global
 
-```text
-/
-├── src/
-│   ├── App.tsx                        # Estado global, cola de Setlist, importación instantánea, atajos y BroadcastChannel
-│   ├── types/project.ts               # Contratos de datos (SongProject, TrackChannel, SongSection, TransportState, etc.)
-│   ├── audio/
-│   │   ├── audioEngine.ts             # Motor de audio híbrido ('buffer' en RAM y 'stream' desde OPFS) + Lookahead Scheduler
-│   │   ├── streamingTrack.ts          # Ventana deslizante (ring buffer) por pista para reproducción por chunks desde OPFS
-│   │   ├── pcmReaderClient.ts         # Cliente en hilo principal que gestiona peticiones al Worker de lectura OPFS
-│   │   ├── pcmReader.worker.ts        # Web Worker dedicado que lee archivos .pcm usando FileSystemSyncAccessHandle
-│   │   ├── smartAnalyzer.ts           # Inferencia automática de título, BPM, tonalidad y nombres limpios de pistas al importar
-│   │   └── demoSynthesizer.ts         # Extracción de picos de forma de onda (extractWaveformPeaks)
-│   ├── storage/
-│   │   ├── projectDb.ts               # Capa IndexedDB ('projects' para metadatos JSON y 'audioBuffers' para Blobs nativos)
-│   │   ├── opfsStorage.ts             # Capa OPFS (Origin Private File System) para lectura/escritura de archivos .pcm
-│   │   └── pcmOptimizer.ts            # Conversor secuencial de Stems (IndexedDB -> AudioBuffer -> OPFS .pcm)
-│   ├── utils/
-│   │   └── fileImportHelper.ts        # Lectura ultrarrápida de cabeceras WAV (<1ms) y extracción de archivos por Drag & Drop
-│   └── components/
-│       ├── TopBar.tsx                 # Selector de vista, selector de modo ('buffer' | 'stream'), presupuesto RAM
-│       ├── TransportDeck.tsx          # Controles Play/Pause/Stop/Vamp, BPM, Pitch, Cuantización, Transición de Setlist
-│       ├── RepertoireTreeSidebar.tsx  # Árbol lateral de repertorio y cola del Setlist
-│       ├── SetlistPageView.tsx        # Vista principal del Setlist con badges de estado en RAM / OPFS y botón de optimización
-│       ├── TimelineArranger.tsx       # Línea de tiempo con ondas, secciones (mm:ss) y playhead a 60fps
-│       ├── MultitrackMixer.tsx        # Consola de mezcla multipista con medidores RMS/Peak y ruteo Main/Cue
-│       ├── StageRemoteView.tsx        # Control remoto táctil sincronizado entre pestañas/tablets
-│       └── LibraryAndModals.tsx       # Modales de importación, progreso de optimización OPFS y edición de secciones
+```mermaid
+graph TD
+    subgraph Frontend["Frontend compartido (React 19 + TypeScript + Vite)"]
+        App["src/App.tsx - orquestador de estado"]
+        Views["Vistas: Setlist / En vivo / Arreglo / Mezcla / Control rápido / Biblioteca"]
+        Facade["audioEngine (src/audio/audioEngine.ts) - elige motor"]
+        ProjectDb["storage/projectDb.ts - saveProjectToDb"]
+    end
+
+    subgraph DesktopJS["Solo escritorio (JS)"]
+        NativeEngine["nativeAudioEngine.ts"]
+        NativeDialog["utils/nativeDialog.ts"]
+        DesktopLib["storage/desktopLibrary.ts"]
+        DesktopUI["desktop/frontend: RemoteConnectionBridge, DesktopAudioSettings, DesktopUpdates"]
+    end
+
+    subgraph WebOnly["Solo web"]
+        WebEngine["webAudioEngine (Web Audio API)"]
+        Opfs["opfsStorage + streamingTrack + pcmReader.worker"]
+        IDB["IndexedDB OmniTracksWebDB"]
+    end
+
+    subgraph Rust["Backend Rust (desktop/src-tauri/src)"]
+        Main["main.rs - comandos Tauri y estado"]
+        Lib["library/mod.rs"]
+        AudioMod["audio/mod.rs - comandos audio_*"]
+        Playback["audio/playback.rs - PlaybackEngine"]
+        Output["audio/output.rs - dispositivos y estado"]
+        Cache["audio/cache.rs"]
+        Import["audio/import.rs"]
+        Lan["lan.rs + protocol.rs (axum)"]
+    end
+
+    subgraph Disk["Disco"]
+        LibJson["%LOCALAPPDATA%/org.omnitracks.desktop/library.json"]
+        Settings["audio_settings.json"]
+        Pcm["pcm/song_id/sample_rate/track_id.pcm + .json"]
+        Sidecar["carpeta de la canción/omnitracks.project.json"]
+        UserAudio["audios originales (solo lectura)"]
+    end
+
+    App --> Views
+    App --> Facade
+    App --> ProjectDb
+    Facade --> NativeEngine
+    Facade -.-> WebEngine
+    ProjectDb --> DesktopLib
+    ProjectDb -.-> IDB
+    WebEngine -.-> Opfs
+    NativeEngine -->|invoke audio_*| AudioMod
+    NativeDialog -->|invoke| AudioMod
+    DesktopLib -->|invoke library_*| Lib
+    DesktopUI -->|invoke remote_*| Main
+    Main --> Lan
+    AudioMod --> Playback
+    AudioMod --> Import
+    Playback --> Output
+    Playback --> Cache
+    Import --> Cache
+    Import --> UserAudio
+    Cache --> Pcm
+    Lib --> LibJson
+    Lib --> Sidecar
+    Output --> Settings
 ```
 
----
-
-## 3. Cómo Funciona Actualmente el Sistema
-
-### 3.1. Flujo de Importación (`handleInstantImportFiles` en `src/App.tsx`)
-El sistema importa canciones en 2 fases sin bloquear la interfaz:
-1. **Fase 1 (Montaje instantáneo < 5 ms):**
-   - Inspecciona los primeros bytes de cada archivo WAV (`parseWavHeaderFast`) para conocer la duración sin decodificar.
-   - Crea el objeto `SongProject` y sus `TrackChannel[]`.
-   - Monta el "cascarón" en el motor (`audioEngine.prepareProjectShell`) para que los canales aparezcan de inmediato en la UI.
-   - Guarda los `File` originales directamente como **Blobs nativos en IndexedDB** (`saveStemsBatchToDb` en `projectDb.ts`) sin recodificar.
-2. **Fase 2 (Hidratación y Decodificación en lotes de 4):**
-   - Decodifica los archivos de 4 en 4 mediante `ctx.decodeAudioData()`.
-   - Extrae los picos de onda (`peaks`) y monta cada `AudioBuffer` en el motor (`audioEngine.mountDecodedTrack`).
-
-### 3.2. Los Dos Modos del Motor de Audio (`src/audio/audioEngine.ts`)
-El motor `LibreTracksAudioEngine` cuenta con dos modos seleccionables en el `TopBar`:
-
-#### A. Modo `buffer` (Por defecto)
-- **Cómo funciona:** Decodifica todas las pistas de la canción completa en objetos `AudioBuffer` de Web Audio API en la memoria RAM (`projectBufferCache: Map<projectId, Map<trackId, AudioBuffer>>`).
-- **Reproducción:** Al dar Play, crea un `AudioBufferSourceNode` por pista apuntando al `AudioBuffer` completo en RAM.
-- **Presupuesto de RAM (`maxCacheBytes`):** Por defecto es **1200 MB** (`DEFAULT_RAM_BUDGET_MB = 1200`).
-
-#### B. Modo `stream` (Estilo REAPER desde OPFS)
-- **Requisito previo:** La canción debe haber pasado por `optimizeProjectForStreaming` (`src/storage/pcmOptimizer.ts`), lo cual genera archivos `.pcm` crudos en el disco privado del navegador (`OPFS: pcm/{projectId}/{trackId}.pcm`). Si una canción no tiene archivos `.pcm`, el motor hace *fallback* automático a modo `buffer`.
-- **Cómo funciona:**
-  - En lugar de subir toda la canción a RAM, cada pista se envuelve en una instancia de `StreamingTrack` (`src/audio/streamingTrack.ts`).
-  - El audio se divide en bloques (`CHUNK_SEC = 2` segundos).
-  - Mantiene en RAM únicamente una ventana deslizante de **10 segundos hacia adelante** (`TARGET_AHEAD_SEC = 10`) y descarta los bloques que ya sonaron (`discardBefore = currentChunk - 1`).
-  - Un Web Worker dedicado (`pcmReader.worker.ts`) lee los bloques desde OPFS usando `FileSystemSyncAccessHandle` con cola de prioridades (`seek > active > next`).
-  - **Staging de siguiente canción:** Pre-carga únicamente los primeros **6 segundos** (`NEXT_SONG_STAGE_SEC = 6`) de la siguiente canción (~12 MB en RAM) para permitir un cambio instantáneo (`FAST SWAP < 2 ms`).
-
-### 3.3. Reloj y Scheduler Musical
-- Un Web Worker interno (`schedulerWorker` en `audioEngine.ts`) emite un `tick` cada **25 ms** (inmune al *throttling* de pestañas en segundo plano).
-- En cada tick se ejecuta `runLookaheadSchedulerTick()` con una ventana de anticipación de **120 ms** (`SCHEDULER_LOOKAHEAD_SEC = 0.12`), programando con precisión de muestras:
-  - Clicks del metrónomo y avisos de guía.
-  - Saltos cuantizados entre secciones (`1-bar`, `2-bars`, `section-end`) con micro-crossfades de **8 ms** (`FADE_DURATION_SEC = 0.008`) para evitar chasquidos.
-  - Loops de sección (*Vamp*).
-  - Recarga de chunks si el motor está en modo `stream`.
+La fachada se decide al cargar `audioEngine.ts`: `isDesktopEnvironment = Boolean(window.__TAURI__)` → `nativeAudioEngine`; si no, `webAudioEngine`. `nativeAudioEngine` hace *polling* de `audio_get_playback_state` (intervalo propio) para refrescar posición, sección activa, medidores y estado del dispositivo.
 
 ---
 
-## 4. Diagnóstico Detallado de los Problemas Actuales
+## 3. Frontend (`src/`)
 
-Durante las pruebas reales con canciones multipista (~183 MB por canción y un Setlist de 3 canciones), se identificaron dos grandes problemas arquitectónicos. A continuación se documenta la **causa raíz exacta en el código** para cada uno:
+El inventario archivo por archivo con su responsabilidad está en [`instrucciones.md`](instrucciones.md) §2.2. Aquí, solo los contratos clave.
 
----
+### 3.1. `App.tsx` (estado global)
+- **Biblioteca:** `projects` (todas las canciones), `projectsRef` (copia para callbacks), `currentProject` (montada en el motor).
+- **Setlist:** `setlistQueue` es un `useMemo` derivado de `projects.filter(inSetlist)` ordenado por `setlistOrder`. Acciones:
+  - `handleAddToSetlist(id)`: ignora si ya está; en escritorio verifica archivos originales (`audio_check_files_exist`; si faltan abre el flujo de carpeta perdida), regenera la caché PCM si `audio_get_project_cache_status` no está completa, asigna `inSetlist=true` y `setlistOrder = max+1`, y guarda con `saveProjectToDb`.
+  - `handleRemoveFromSetlist(id)`: detiene si suena, expulsa la canción de la caché RAM (`evictSongFromRamCache`), **borra su caché nativa** (`deleteProjectNativeCache`), pone `inSetlist=false` y retira el id de `activeSetlist` en `library.json`.
+  - `handleClearSetlist()`: aplica lo anterior a toda la cola y deja `activeSetlist = []`.
+  - `handleReorderSetlist(from, to)`: reasigna `setlistOrder` y guarda.
+- **Importación:** `scanNativeFolder`/`scanNativeFiles` → huella → creación o fusión de canción (si coincide con una existente conserva ediciones del usuario, secciones y mezcla) → `audio_import_tracks` en segundo plano → carga en el motor si no hay otra canción montada.
+- **Atajos:** Espacio (Play/Pausa), `V` (Vamp), `1`–`9` (salto a sección). `Esc` cierra el mezclador flotante de `SetlistPageView`.
+- **Vista inicial por hash:** `#setlist`, `#live`, `#arranger`, `#mixer`, `#remote`, `#library`.
 
-### PROBLEMA 1: ¿Por qué una canción de 183 MB pasa a ocupar ~800 MB tras OPFS (y en estimaciones de RAM)?
+### 3.2. Tipos (`src/types/project.ts`)
+`QuantizeMode = '1-bar' | '2-bars' | 'section-end' | 'immediate'` · `OutputBus = 'main' | 'cue-click' | 'both'` · `SplitRoutingMode = 'stereo' | 'split-mono'` · `AudioEngineMode = 'buffer' | 'stream'` · `RepertoireFolder = 'imported' | 'setlist' | 'demos'` · además `SongProject`, `TrackChannel`, `SongSection`, `TransportState`, `RemoteSyncMessage`.
 
-Existen **4 factores acumulativos** en el código actual que inflan el peso entre **4x y 4.5x**:
+### 3.3. Persistencia (`src/storage/`)
+`saveProjectToDb(song)` es el **único punto de escritura**:
+- **Escritorio:** `saveDesktopSong` → comando `library_save_song`.
+- **Web:** IndexedDB (`OmniTracksWebDB`, stores `projects` y `audioBuffers`), memoria de presets en `localStorage`, sidecar vía File System Access cuando hay permisos (con *debounce*).
 
-#### Causa 1.1: Conversión forzada de pistas MONO a ESTÉREO en OPFS (Duplica el peso 2x innecesariamente)
-- **Dónde ocurre:** `src/storage/opfsStorage.ts` (líneas 124–179, función `writeTrackPcmFromAudioBuffer`).
-- **Qué hace el código actual:**
-  ```ts
-  const leftChannel = audioBuffer.getChannelData(0);
-  const rightChannel = numChannels > 1 ? audioBuffer.getChannelData(1) : leftChannel;
-  // ... escribe siempre 2 canales intercalados (L, R) en Int16 (4 bytes por frame)
-  ```
-- **Por qué infla el peso:** En una sesión multipista típica (Click, Guía, Bajo, Bombo, Caja, Voces, Guitarras mono), muchas o la mayoría de las pistas son **Mono (1 canal)** o están comprimidas (FLAC/MP3/WAV 16-bit mono). Al convertir a OPFS, el código **duplica el canal izquierdo en el derecho para forzar que todas las pistas sean Estéreo de 2 canales**. Una pista mono pasa inmediatamente a pesar **el doble (2x)** en disco sin aportar ninguna información estéreo real.
+### 3.4. Huella de canción (`src/audio/fingerprint.ts`)
+`findSongFingerprintMatches(incomingTracks, existingSongs)` devuelve candidatos con `matchRatio ≥ 0.80`, ordenados:
+1. Descarta canciones cuyo número de pistas difiere en más de **±1**.
+2. Empareja pistas una a una (sin reutilizar) cuando coinciden **duración** (±1 s) **y tamaño** (diferencia 0, `< 64 KB` o `< 2 %`); si falta uno de los dos datos en ambos lados, basta el otro.
+3. `matchRatio = emparejadas / max(pistas entrantes, pistas existentes)`.
+Un candidato abre `SongFingerprintPromptModal` para que el usuario decida (vincular a la existente o crear nueva).
 
-#### Causa 1.2: Resampleo automático a 48,000 Hz al decodificar
-- **Dónde ocurre:** `src/storage/pcmOptimizer.ts` (líneas 118–122).
-- **Qué hace el código actual:** Crea un `new AudioContext()` sin especificar la frecuencia de muestreo original del archivo (`sampleRate`). En la mayoría de las tarjetas de sonido y navegadores, `AudioContext` opera a **48,000 Hz**.
-- **Por qué infla el peso:** Si las pistas originales están a **44,100 Hz**, `decodeAudioData` las remuestrea a **48,000 Hz**, aumentando el número de frames en un **+8.84%** adicional. Si además los archivos originales eran formatos comprimidos sin pérdida (`.flac`) o con pérdida (`.mp3`, `.m4a`, `.ogg`), al expandirlos a PCM crudo sin comprimir el tamaño se multiplica entre **2x y 8x**.
-
-#### Causa 1.3: Duplicación total de almacenamiento entre IndexedDB y OPFS (No se borran ni compactan los Blobs originales)
-- **Dónde ocurre:** `src/storage/pcmOptimizer.ts` (líneas 33 y 69–75).
-- **Qué hace el código actual:**
-  - Al importar la canción, los **183 MB originales** se guardan en IndexedDB (`LibreTracksWebDB -> store: audioBuffers`).
-  - Al optimizar a OPFS, se escriben los archivos `.pcm` en OPFS (~400–600 MB), **pero se conservan intactos los 183 MB originales en IndexedDB**.
-  - Resultado en el almacenamiento del navegador (`navigator.storage.estimate()`): El navegador suma **IndexedDB (183 MB) + OPFS (~600 MB) = ~783 MB (~800 MB)** consumidos en el origen.
-
-#### Causa 1.4: Expansión a Float32 (32-bit) en Web Audio API y sobreestimación en `estimateProjectBytes`
-- **Dónde ocurre:** `src/audio/audioEngine.ts` (líneas 398–406 y 437–454).
-- **Qué hace el código actual:**
-  - En memoria RAM (`AudioBuffer` nativo de C++ en el navegador), cada muestra se almacena obligatoriamente en **Float32 (4 bytes por muestra)**, no en 16-bit (2 bytes) ni 24-bit (3 bytes).
-  - Además, `estimateProjectBytes(project)` calcula el peso estimado con la fórmula fija:
-    ```ts
-    Math.ceil(durationSec * sampleRate * 2 * 4 * project.tracks.length);
-    ```
-  - Es decir, asume que **todas las pistas son Estéreo (2 canales) a 4 bytes (32 bits) y 48,000 Hz**.
-  - **Matemática exacta del caso real (183 MB -> ~800 MB):**
-    - Si una canción de 183 MB está compuesta por WAVs en 16-bit (2 bytes por muestra) o 24-bit (3 bytes) con varias pistas mono:
-    - Al pasar a `Float32` (4 bytes por muestra) + asumir 2 canales en `estimateProjectBytes` + pasar de 44.1kHz a 48kHz, `183 MB` se convierte en **~732 MB a ~800 MB** en RAM y en el indicador de caché de la interfaz.
+### 3.5. Limpieza de títulos (`src/audio/smartAnalyzer.ts`)
+`cleanSongTitleAndMetadata(raw)` transforma, por ejemplo, `Multitrack _ERES BENDITO_ ORIGINAL Jaime Murrel-G major-108bpm-440hz` en: título «Eres Bendito», artista «Jaime Murrel», tono «G major», BPM 108. `inferSongMetadataFromFiles(files)` aplica la heurística a nombres de carpeta/archivos. Rust tiene su propia versión (`library::clean_song_title_and_metadata`) para el escaneo nativo: **mantener ambas coherentes**. Cubierto por `test/titleCleaning.test.ts`.
 
 ---
 
-### PROBLEMA 2: ¿Por qué al cargar 3 canciones y tocar la 1ª, la 2ª no estaba en RAM, y al terminar la 2ª la 3ª tampoco estaba en RAM?
+## 4. Ciclo de vida de una canción (escritorio)
 
-El usuario cargó 3 canciones. Cuando tocó la Canción 1, la Canción 2 no estaba lista en RAM; y cuando terminó la Canción 2, la Canción 3 tampoco estaba en RAM. Esto ocurre por **4 fallos en la lógica de caché y precarga**:
+```mermaid
+sequenceDiagram
+    autonumber
+    actor U as Usuario
+    participant UI as Frontend (App.tsx)
+    participant Lib as Rust library/mod.rs
+    participant Aud as Rust audio/mod.rs + import.rs
+    participant Disk as Disco
 
-#### Causa 2.1: `evictBeforeDecode` borra agresivamente todas las demás canciones aunque sobre RAM
-- **Dónde ocurre:** `src/audio/audioEngine.ts` (líneas 482–500).
-- **Qué hace el código actual:**
-  ```ts
-  private evictBeforeDecode(incomingBytes: number, protectedIds: string[] = []) {
-    const activeId = this.project?.id;
-    const protectedSet = new Set<string>(protectedIds.filter(Boolean));
-    if (activeId) protectedSet.add(activeId);
+    U->>UI: Importa carpeta o archivos
+    UI->>Aud: audio_scan_folder / audio_scan_files
+    Aud-->>UI: pistas, duraciones, secciones, título/artista/BPM/tono
+    UI->>UI: Huella (fingerprint)
+    alt Coincide >= 80 % con una existente
+        UI->>U: Modal de confirmación
+    end
+    UI->>Lib: library_save_song (inSetlist=false)
+    Lib->>Disk: library.json (+ backup) y omnitracks.project.json
+    UI->>Aud: audio_import_tracks (segundo plano)
+    Aud->>Disk: pcm/song_id/sample_rate/track_id.pcm + .json
+    Aud-->>UI: picos, duración, canales por pista
+    UI->>Lib: library_save_song (metadatos completos)
+    UI->>Aud: audio_load_project (si no hay otra montada)
 
-    // First pass: evict any song not in protectedSet (oldest first)
-    for (const candidateId of [...this.cacheOrder]) {
-      if (candidateId === activeId) continue;
-      if (!protectedSet.has(candidateId)) {
-        // ¡EXPULSA INCONDICIONALMENTE CUALQUIER CANCIÓN QUE NO ESTÉ EN protectedSet,
-        // SIN IMPORTAR SI CABE EN EL PRESUPUESTO DE RAM!
-        this.projectBufferCache.delete(candidateId);
-      }
-    }
-  ```
-- **Qué provoca esto:**
-  1. Cuando el usuario importa la Canción 1, queda en RAM.
-  2. Cuando importa la Canción 2, `mountDecodedTrack` (línea 1457) llama a `this.evictBeforeDecode(incomingBytes, [this.project.id])` pasando **únicamente** la canción recién importada como protegida. El *First pass* **borra inmediatamente la Canción 1 de la RAM**.
-  3. Cuando importa la Canción 3, **borra inmediatamente la Canción 2 de la RAM**, dejando únicamente la Canción 3 en RAM.
-  4. Luego, cuando el usuario selecciona la Canción 1 para empezar a tocar, `loadProject` (línea 749) llama a `this.evictBeforeDecode(estimatedBytes, [project.id])` pasando solo `[Cancion1.id]`, lo cual **borra la Canción 3 de la RAM** antes de decodificar la Canción 1.
+    U->>UI: "+ Set"
+    UI->>Aud: audio_check_files_exist
+    UI->>Aud: audio_get_project_cache_status (regenera si incompleta)
+    UI->>Lib: library_save_song (inSetlist=true, setlistOrder)
 
-#### Causa 2.2: Condición de carrera entre `activateProject` y el `useEffect` de precarga en `App.tsx`
-- **Dónde ocurre:** `src/App.tsx` (líneas 176–202 y 301–328).
-- **Qué pasa paso a paso cuando el usuario selecciona la Canción 1:**
-  1. En `activateProject` (línea 301), se llama a `setCurrentProject(normalizedProj)` **antes** de que `await audioEngine.loadProject(normalizedProj)` termine de cargar la Canción 1.
-  2. Ese `setCurrentProject` dispara el `useEffect` de precarga (línea 176), que lanza un `setTimeout(..., 100ms)` para llamar a `audioEngine.preloadProject(Cancion2)`.
-  3. A los 100 ms, la Canción 1 **todavía se está decodificando** desde IndexedDB (tarda ~1–2 segundos).
-  4. Por tanto, `decodeProjectIntoCache(Cancion1)` y `preloadProject(Cancion2)` compiten al mismo tiempo por `ctx.decodeAudioData()` y por `evictBeforeDecode()`, o bien el cálculo de presupuesto falla.
+    U->>UI: Play
+    UI->>Aud: audio_play (el engine nativo hace polling del estado)
 
-#### Causa 2.3: El presupuesto de RAM por defecto (1200 MB) rechaza la 2ª canción porque cada canción se estima en ~750–800 MB
-- **Dónde ocurre:** `src/audio/audioEngine.ts` (líneas 754–773).
-- **Qué hace el código actual:**
-  ```ts
-  // Check if active song + estimated next song fits within MAX_CACHE_BYTES
-  if (activeBytes + estimatedBytes > this.maxCacheBytes) {
-    this.skippedByRamBudgetIds.add(project.id);
-    // ¡ABORTA LA PRECARGA DE LA SIGUIENTE CANCIÓN!
-    return new Map<string, AudioBuffer>();
-  }
-  ```
-- **Por qué bloquea la Canción 2 y la Canción 3:**
-  - Como vimos en el Problema 1.4, una canción de 183 MB en disco ocupa o se estima en **~750–800 MB** en `AudioBuffer` Float32 en RAM.
-  - El presupuesto por defecto (`DEFAULT_RAM_BUDGET_MB`) es de **1200 MB**.
-  - Al intentar precargar la Canción 2 mientras la Canción 1 está activa:
-    `activeBytes (~780 MB) + estimatedBytes (~780 MB) = ~1560 MB > 1200 MB`.
-  - Como `1560 MB > 1200 MB`, el motor **aborta silenciosamente la precarga de la Canción 2** y la marca con `skippedByRamBudget = true`.
-  - Cuando termina la Canción 1 y pasa a la Canción 2, la Canción 2 no estaba en RAM (tuvo que cargarse en ese instante). Y al intentar precargar la Canción 3 mientras suena la Canción 2, vuelve a ocurrir lo mismo: `Canción 2 (~780 MB) + Canción 3 (~780 MB) > 1200 MB`, por lo que **tampoco precarga la Canción 3**.
+    U->>UI: Quitar del setlist
+    UI->>Aud: audio_stop si suena + audio_delete_project_cache
+    UI->>Lib: library_save_song (inSetlist=false)
+```
 
-#### Causa 2.4: La optimización OPFS es hoy 100% manual y el modo por defecto es `'buffer'`
-- **Dónde ocurre:** `src/audio/audioEngine.ts` (línea 82: `return 'buffer';`) y `src/App.tsx` (`handleStartOptimizeProject`).
-- **Qué pasa:** Al importar 3 canciones, ninguna se optimiza automáticamente en OPFS en segundo plano, y aunque se optimicen manualmente, el motor sigue en modo `'buffer'` a menos que el usuario cambie manualmente el selector a `'stream'` en la barra superior.
+Eliminar de la biblioteca: `library_delete_song` (quita de `library.json` y `activeSetlist`, descarga del motor si estaba cargada y borra `pcm/<song_id>`).
 
 ---
 
-## 5. Arquitectura Propuesta por el Usuario (Hoja de Ruta para la Siguiente IA)
+## 5. Almacenamiento en disco (escritorio)
 
-El usuario ha diseñado una estrategia híbrida muy sólida para resolver ambos problemas:
+Directorio de datos: `%LOCALAPPDATA%\org.omnitracks.desktop\` (`app_local_data_dir` de Tauri).
 
-> **Idea Central del Usuario:**
-> 1. **Solucionar primero el sobrepeso en OPFS** (por qué 183 MB pasan a 800 MB).
-> 2. **Estrategia Híbrida de Setlist:** Mantener las **2 primeras canciones siempre precargadas en RAM** para ejecución inmediata, y **a partir de la 3ª canción (o desde la 2ª en adelante), procesar y operar automáticamente en segundo plano vía OPFS (Streaming)** sin intervención manual del usuario.
+| Elemento | Detalle |
+|---|---|
+| `library.json` | `LibraryFile { version (=1), updatedAt, activeSetlist: string[], songs: LibrarySong[] }`, JSON camelCase. Escritura: `library.json.tmp` → copia previa a `library.backup.json` → `rename` atómico (con *fallback* a escritura directa). Lectura: si falta o está corrupto, se restaura desde `library.backup.json`; si tampoco sirve, error. |
+| `omnitracks.project.json` | **Sidecar canónico** en la carpeta de la canción: el `LibrarySong` serializado. Se escribe con `.tmp` + `rename`; si la carpeta es de solo lectura se ignora el fallo (no es fatal). Lectura con compatibilidad del nombre heredado `.omnitracks.json`. |
+| `audio_settings.json` | `AudioSettings { host ("WASAPI" por defecto), deviceName, sampleRate, bufferSize, testChannel }`. |
+| `pcm/<song_id>/<sample_rate>/<track_id>.pcm` | Audio decodificado, **`i16` little-endian**, a la frecuencia del dispositivo. Pistas mono reales se guardan con 1 canal (`is_effectively_mono`, umbral lateral −40 dB). |
+| `pcm/<song_id>/<sample_rate>/<track_id>.json` | `TrackPcmMetadata` (`formatVersion`=1, rutas/tamaño/fecha del original para detectar reconversión, canales, `frameCount`, `durationSec`, 320 picos de onda, `createdAt`). Escritura atómica; antes de escribir se comprueba espacio libre. |
 
----
-
-### Paso 1: Reducir drásticamente el peso en OPFS (De ~800 MB a ~150–183 MB)
-
-Para que una canción de 183 MB no se infle a 800 MB al pasar a OPFS, la siguiente IA debe aplicar estas mejoras en `src/storage/opfsStorage.ts`, `src/storage/pcmOptimizer.ts` y `src/audio/pcmReader.worker.ts`:
-
-1. **Respetar el número real de canales (Mono vs. Estéreo) por pista (`channels: 1 | 2`):**
-   - En `writeTrackPcmFromAudioBuffer` (`opfsStorage.ts`), inspeccionar `audioBuffer.numberOfChannels` (o incluso detectar si el canal L y R de un WAV estéreo son idénticos: *dual-mono* con diferencia RMS < `1e-5`).
-   - Si la pista es Mono (o dual-mono), guardarla en OPFS como **1 solo canal Int16 (`2 bytes por frame` en vez de `4 bytes por frame`)** y registrar `channels: 1` en `TrackPcmMetadata`.
-   - En `pcmReader.worker.ts`, si `channels === 1`, leer `requestedFrames * 2` bytes y copiar el mismo `Float32Array` a `leftChannel` (o construir un `AudioBuffer` de 1 canal en `StreamingTrack`, ya que Web Audio API soporta `ctx.createBuffer(1, frameCount, sampleRate)` de forma nativa y el `StereoPannerNode` lo panea en estéreo automáticamente).
-   - **Impacto directo:** Reduce a la **mitad (50% menos de RAM y 50% menos de disco OPFS)** todas las pistas mono (Click, Guide, Bass, Kick, Snare, Voces, Guitarras mono).
-
-2. **Preservar el `sampleRate` original o usar el del encabezado WAV:**
-   - Al decodificar en `pcmOptimizer.ts`, usar `OfflineAudioContext` o `AudioContext({ sampleRate: detectedWavSampleRate })` (por ejemplo, 44,100 Hz si los WAVs vienen a 44.1 kHz) para no inflar un +8.8% extra de muestras.
-
-3. **Eliminar los Blobs duplicados de IndexedDB una vez verificado el archivo OPFS:**
-   - En `optimizeProjectForStreaming` (`pcmOptimizer.ts`), después de verificar con `isProjectPcmComplete(updatedProject)` que el `.pcm` de una pista está 100% escrito e íntegro en OPFS, **eliminar el Blob crudo duplicado de esa pista en IndexedDB (`STORE_AUDIO`)** (o ofrecer una función `deleteProjectStemsFromDb(projectId)`).
-   - **Impacto directo:** Elimina los **183 MB duplicados** en IndexedDB una vez que la canción ya vive en OPFS.
+La caché es **derivable**: puede borrarse sin pérdida (se regenera desde los originales). Se limpia al quitar una canción del setlist, al eliminarla de la biblioteca y con `audio_clean_orphan_caches` (carpetas de ids que ya no existen).
 
 ---
 
-### Paso 2: Implementar el Motor Híbrido Automático (Canciones 1 y 2 en RAM + Resto en OPFS Background)
+## 6. Motor nativo de audio (Rust)
 
-Para cumplir exactamente el flujo que pide el usuario:
+### 6.1. Hilos y flujo de datos
+```
+Comandos Tauri (audio_*)  ──►  PlaybackEngine (playback.rs)
+                                   │
+   PCM en disco ──► hilo feeder por pista "omni-feed-<track_id>"
+                         (lee, remuestrea con rubato, empalma saltos/vamp con crossfade de 8 ms)
+                                   │  rtrb (búfer circular lock-free por pista)
+                                   ▼
+                          Callback CPAL (WASAPI): mezcla por bus, ruteo, click, guía, fade, salida
+```
+Detalle de tamaños de búfer, saltos y decisiones: [`docs/MOTOR_NATIVO_DISENO.md`](docs/MOTOR_NATIVO_DISENO.md).
 
-1. **Precarga garantizada de las 2 primeras canciones (o Canción Activa + Siguiente Canción) en RAM:**
-   - **Corregir `evictBeforeDecode` (`src/audio/audioEngine.ts`):**
-     - Eliminar el "First pass" destructivo que borra canciones aunque no se haya superado el límite de RAM, o proteger explícitamente siempre la pareja `[activeSongId, nextSetlistSongId]`.
-     - Garantizar que las **2 canciones prioritarias del Setlist** (Canción 1 y Canción 2 al inicio; o Canción Actual y Canción Siguiente) **jamás sean bloqueadas por el estimador de presupuesto**, permitiendo que siempre haya 2 canciones listas para reproducirse con latencia 0 ms.
-   - **Esperar a que termine `loadProject(activeSong)` antes de disparar `preloadProject(nextSong)`:**
-     - En `App.tsx`, no disparar `preloadProject(nextSong)` a los 100 ms mientras `loadProject` aún está decodificando la canción activa. Dispararlo justo al finalizar `await audioEngine.loadProject(...)` para que no compitan por CPU/disco y la transición sea determinista.
-   - **Usar `AudioBuffer` de 1 canal para pistas mono también en Modo Buffer:**
-     - Si una pista es mono (o sus canales L y R son idénticos tras `decodeAudioData`), conservar solo 1 canal en el `AudioBuffer` en RAM (`ctx.createBuffer(1, buf.length, buf.sampleRate)`). Esto reduce el consumo de RAM por canción de ~750 MB a ~375 MB, permitiendo que 2 o 3 canciones quepan holgadamente en RAM sin picos de memoria.
+### 6.2. Módulos
+- **`output.rs`:** `AudioSettings`, `AudioEngineState` (settings + estadísticas del stream + indicadores de import), `list_hosts()`/`list_devices(host)`, tono de prueba por canal, persistencia en `audio_settings.json`.
+- **`playback.rs`:**
+  - *Feeders:* un hilo por pista lee el PCM, aplica el remuestreo y llena el `rtrb` respetando un horizonte de lectura.
+  - *Varispeed/pitch:* `resampler.rs::TrackResampler` envuelve `rubato::SincFixedIn` (`sinc_len` 64, interpolación lineal); `set_pitch` usa `set_resample_ratio_relative` sin recrear el remuestreador.
+  - *Saltos y Vamp:* `audio_queue_jump` / `audio_cancel_jump` / `audio_toggle_vamp`; empalme con crossfade `FADE_MS = 8` ms (`crossfade_frames` según frecuencia del dispositivo). Limitación conocida: ver §10.
+  - *Ruteo:* cada pista tiene un `TrackBus` (`Main`, `CueClick`, `Both`).
+    - **Estéreo** (por defecto): mezcla Main+Both con `masterGain` y Cue+Both+click+guía con `cueMasterGain`, ambas sobre L/R.
+    - **Split-Mono:** **canal 0 (izquierdo, «in-ear») = bus Cue/Click + Both + click + guía**; **canal 1 (derecho, «principal») = bus Main + Both**; ambos sumados a mono y con el paneo de pista centrado.
+  - *Click:* `metronome.rs` genera pulsos de 45 ms con ataque de 2 ms y decaimiento exponencial, con barrido de frecuencia en los primeros 35 ms: tiempo fuerte 1680→820 Hz (onda triangular), negras 1120→540 Hz, subdivisiones 840→540 Hz (senoidales); alineado a la muestra y reubicable al hacer seek.
+  - *Guía (`GuideCueEngine`):* sintetiza avisos de sección sin muestras externas.
+  - *Dispositivo:* el *error callback* de CPAL marca `device_disconnected`; la posición se conserva y `audio_reopen_stream` reabre el stream sin reiniciar la app (test `test_device_disconnect_and_reopen_preserves_position`).
+- **`cache.rs`:** ver §5. Constantes `CACHE_FORMAT_VERSION=1`, `WAVEFORM_PEAKS_COUNT=320`, `MONO_SIDE_THRESHOLD_DB=-40`.
+- **`import.rs` + `audio/mod.rs`:** decodifica con Symphonia (`features = ["all"]`) y remuestrea a la frecuencia del dispositivo. `audio_import_tracks` procesa pistas con un semáforo de `clamp(núcleos/2, 2, 4)` tareas bloqueantes (`tokio::task::spawn_blocking`), con progreso emitido como eventos de Tauri (`app.emit`) y cancelación (`audio_cancel_import`). No usa `rayon`.
 
-2. **Cola de Optimización Automática en Background hacia OPFS para las canciones restantes (Canción 3+ o desde la 2ª en segundo plano):**
-   - Crear un gestor de cola en segundo plano (`BackgroundOpfsQueue` en `pcmOptimizer.ts` o `App.tsx`) que observe `setlistQueue`:
-     - **Canción 1 y Canción 2:** Se mantienen listas en RAM de inmediato al importarse.
-     - **Canciones 3 en adelante (y opcionalmente la 2 en baja prioridad cuando el motor esté en reposo):** Se encolan automáticamente en segundo plano para convertirse a OPFS (`optimizeProjectForStreaming`) una pista a la vez, cediendo el hilo entre chunks (`requestIdleCallback` o `setTimeout`) y pausando la conversión si el usuario está en los primeros segundos críticos de una carga.
-   - **Selección Híbrida Automática por Canción (`getEffectiveEngineModeForProject`):**
-     - Si la canción ya está 100% en caché RAM (`hasFullProjectInCache(project)`), usar sus `AudioBuffers` en RAM instantáneamente.
-     - Si la canción (ej. Canción 3, 4, 5...) ya fue optimizada automáticamente en OPFS (`isProjectPcmReady(project)`), reproducirla directamente con el motor de **Streaming OPFS** (que solo usa ~12 MB de staging para los primeros 6 segundos y ~40 MB durante la reproducción), asegurando que al pasar de la Canción 1 -> 2 -> 3 -> N **todas estén siempre listas al instante (< 2 ms) sin importar cuántas canciones tenga el Setlist**.
+### 6.3. Regla de tiempo real y estado actual
+Objetivo: el callback no reserva memoria, no hace E/S ni *logging* y no se bloquea. **Realidad:** hoy reserva `Vec`s por bloque y usa `std::sync::Mutex::lock()` sobre consumers, metrónomo, guía, secciones y fade (ver [`instrucciones.md`](instrucciones.md) §4 y §6). No existe llamada explícita a MMCSS/prioridad de hilo; solo se habilita la feature `realtime` de `cpal`. Cualquier cambio en esa zona debe acercarse al objetivo, no alejarse, y validarse con los tests de `playback.rs` y una prueba de carga.
+
+### 6.4. Dependencias Rust principales
+`tauri 2` (+`tauri-plugin-dialog`, `tauri-plugin-updater`), `cpal 0.18` (feature `realtime`), `symphonia 0.5` (`all`), `rubato 0.16`, `rtrb 0.3`, `axum 0.8` (`ws`), `tokio`, `tokio-util`, `serde`/`serde_json`, `base64`, `qrcode`, `if-addrs`, `subtle` (comparación de tokens en tiempo constante), `getrandom`, `tracing`. Dev: `tokio-tungstenite`, `futures-util`.
 
 ---
 
-## 6. Comandos de Desarrollo y Verificación
+## 7. Servidor LAN y protocolo remoto (`lan.rs`, `protocol.rs`, `desktop/web/`)
 
-- **Instalar dependencias:** `npm install`
-- **Servidor de desarrollo (Puerto 3000):** `npm run dev`
-- **Verificar tipos y linting:** `npm run lint` (ejecuta `tsc --noEmit`)
-- **Compilar para producción:** `npm run build`
-- **Inspección de telemetría en consola del navegador:**
-  - Los logs de caché RAM llevan el prefijo `[AudioEngine][RAM]`.
-  - Los logs de streaming OPFS llevan el prefijo `[AudioEngine][Stream]` y `[AudioEngine][Staging]`.
-  - En la consola de DevTools se puede invocar `window.__pcmReaderClient.getMetrics()` para inspeccionar tiempos de lectura (`avgReadMs`, `p95ReadMs`, `syncHandlesSupported`).
+### 7.1. Arranque
+Lo inicia el usuario desde **Conexión remota** (`RemoteConnectionBridge`). `remote_start(address)` exige una IPv4 **privada** de este equipo y escucha en `address:8765`. `remote_stop(epoch)` lo apaga. Cada arranque genera un `epoch`, un token por rol y los QR; apagar/encender los regenera y termina todas las sesiones.
+
+### 7.2. Rutas HTTP/WS
+| Ruta | Función |
+|---|---|
+| `GET /monitor`, `GET /mezclador` | Página del rol (`remote.html`). |
+| `GET /remote.js`, `GET /remote.css` | Recursos estáticos. |
+| `GET /session/{role}` | ¿Hay sesión válida (cookie)? |
+| `POST /session/{role}` | Empareja con `{token}` → crea sesión y cookie. |
+| `GET /ws/{role}` | WebSocket de estado/comandos. |
+
+Roles: `monitor` (solo lectura: canción, sección, cuenta atrás, reloj, setlist) y `mezclador` (además recibe pistas, `revision`, niveles y puede enviar comandos).
+
+### 7.3. Emparejamiento y seguridad
+1. El QR codifica `http://<IP>:8765/<rol>#<token>`; el token va en el **fragmento** (no viaja en la petición HTTP).
+2. La página hace `POST /session/{rol}` con el token; el servidor lo compara en tiempo constante (`subtle`) y comprueba el `Origin`.
+3. Responde con cookie `lt_monitor` / `lt_mixer` (`HttpOnly; SameSite=Strict; Path=/`, valor de 43 caracteres aleatorios).
+4. El WebSocket valida cookie y `Origin`; mensajes y *frames* limitados a **1024 bytes**, cuerpo HTTP limitado a 1 KB.
+5. **Máximo 16 sesiones**; si se llena, una sesión nueva reutiliza el cupo de la desconectada más antigua. **Expulsar** revoca la sesión (cierre `4403`) y descarta su cola de comandos.
+6. Solo el rol `mezclador` puede enviar comandos, y solo estos (`deny_unknown_fields`): `setTrackGain`, `setTrackMute`, `setTrackPan`, `setTrackSolo`, cada uno con `revision` y `trackIndex`. Ganancia válida: `0 … 3.1623` (−40 a +10 dB); paneo `−1 … +1`. **No hay comandos de transporte** (play/pausa/stop/saltos) ni de biblioteca.
+
+### 7.4. Integración con el frontend
+La UI de escritorio sondea `remote_exchange(epoch, snapshot, receipts)`: envía el estado actual (`Snapshot`: canción actual/siguiente, setlist, sección, salto en cola, vamp, reloj, pistas, niveles) y los acuses de comandos aplicados, y recibe los comandos pendientes y la lista de dispositivos. El frontend los aplica al motor y confirma con un `Outcome` (`applied`, `stale`, `superseded`, `unconfirmed`). Un comando solo se acepta si el servidor está `acceptingCommands` y su `revision` coincide con la del último estado publicado (`MixCommand::target`); si no, se descarta.
+
+Guía operativa (firewall, aislamiento Wi-Fi, expulsión, pruebas): [`desktop/README.md`](desktop/README.md).
+
+---
+
+## 8. Procedimientos de mantenimiento
+
+### 8.1. Añadir un comando IPC a Tauri (4 pasos obligatorios)
+1. Implementar `#[tauri::command] pub async fn mi_comando(...)` en `audio/mod.rs`, `library/mod.rs`, `updates.rs` o `main.rs`.
+2. Registrarlo en `tauri::generate_handler![...]` en [`desktop/src-tauri/src/main.rs`](desktop/src-tauri/src/main.rs).
+3. Añadirlo a la lista `.commands(&[...])` de [`desktop/src-tauri/build.rs`](desktop/src-tauri/build.rs) (genera el permiso `allow-mi-comando` en `permissions/autogenerated/`, carpeta ignorada por Git).
+4. Añadir `"allow-mi-comando"` a `permissions` en [`desktop/src-tauri/capabilities/desktop-remote.json`](desktop/src-tauri/capabilities/desktop-remote.json).
+
+Invocación desde el frontend:
+```ts
+const invoke = (window as any).__TAURI__?.core?.invoke;
+if (invoke) {
+  const result = await invoke('mi_comando', { parametroCamelCase: valor });
+}
+```
+(Tauri convierte los parámetros `snake_case` de Rust a `camelCase` en JS.)
+
+### 8.2. Inventario de comandos IPC (todos registrados en `main.rs`, `build.rs` y la capacidad)
+- **Servidor LAN:** `remote_status`, `remote_start`, `remote_stop`, `remote_kick`, `remote_exchange`.
+- **Actualizaciones:** `desktop_update_check`, `desktop_update_download`, `desktop_update_install`.
+- **Dispositivo/estado:** `audio_list_hosts`, `audio_list_devices`, `audio_get_config`, `audio_set_config`, `audio_get_stats`, `audio_reset_stats`, `audio_test_tone`, `audio_reopen_stream`.
+- **Importación y caché:** `audio_scan_folder`, `audio_scan_files`, `audio_import_tracks`, `audio_import_folder`, `audio_import_track_bytes`, `audio_import_track_bytes_raw`, `audio_cancel_import`, `audio_get_project_cache_status`, `audio_delete_project_cache`, `audio_get_cache_stats`, `audio_clean_orphan_caches`, `audio_check_files_exist`.
+- **Proyecto/transporte:** `audio_load_project`, `audio_preload_project`, `audio_switch_to_preloaded`, `audio_configure_song`, `audio_play`, `audio_pause`, `audio_stop`, `audio_seek`, `audio_get_playback_state`, `audio_queue_jump`, `audio_cancel_jump`, `audio_toggle_vamp`.
+- **Mezcla y ruteo:** `audio_set_track_controls`, `audio_set_master_gains`, `audio_set_pitch`, `audio_set_metronome`, `audio_set_split_mono`.
+- **Biblioteca:** `library_load`, `library_save`, `library_save_song`, `library_delete_song`, `library_update_song_folder`, `library_read_sidecar`, `library_write_sidecar`.
+- Además, `dialog:allow-open` (plugin de diálogos) para los selectores nativos.
+
+### 8.3. Reglas obligatorias para cambios de audio
+- Nada de reservas, E/S, logging ni bloqueos nuevos en el callback de CPAL (y reducir los existentes cuando sea posible).
+- Cambios de ratio/tono: reutilizar el `SincFixedIn` activo.
+- Todo salto, seek o vamp: crossfade de 8 ms.
+- El click y los saltos se miden en **muestras de canción**; mantener la alineación (±1 muestra) validada por los tests.
+
+### 8.4. Versionado y publicación
+Mantener **la misma versión** en `tauri.conf.json`, `Cargo.toml` y `desktop/package.json` (+ lockfiles). Release firmada: `desktop/build-release.ps1`, tag `desktop-v<versión>` en GitHub Releases (ver [`desktop/README.md`](desktop/README.md)). El actualizador solo se habilita si el build lleva la clave pública del canal (`updates_enabled`).
+
+### 8.5. Añadir una vista, modal o campo a la canción
+- **Vista:** ampliar `WorkspaceView` y `NAV_ITEMS` en `TopBar.tsx`, el render condicional en `App.tsx` y, si procede, el parser de hash.
+- **Campo nuevo en `SongProject`:** añadirlo en `src/types/project.ts` **y** en `LibrarySong` (o `LibraryTrack` / `LibrarySongSection`) de `library/mod.rs` con `#[serde(default)]`. El frontend envía el objeto completo (`invoke('library_save_song', { song })`, sin conversión) y serde ignora los campos desconocidos: **un campo que exista solo en TypeScript no se persiste en `library.json` ni en el sidecar** (se pierde al reiniciar). `#[serde(default)]` mantiene compatibles los archivos antiguos.
+
+---
+
+## 9. Verificación y pruebas
+
+1. `npm.cmd run lint` → `tsc --noEmit`.
+2. `npm.cmd test` → `tsx test/titleCleaning.test.ts && tsx test/trackFingerprint.test.ts`.
+3. `cargo test --locked --release --target x86_64-pc-windows-msvc --manifest-path desktop/src-tauri/Cargo.toml --no-default-features` → ≈48 tests: `playback.rs` (19: varispeed, click a la muestra, Split-Mono por bus, desconexión/reapertura, crossfade), `import.rs` (6), `cache.rs` (5), `output.rs` (4), `library/mod.rs` (4), `lan.rs` (2) y `tests/` de integración (`lan_protocol.rs` 4, `verify_manual_flow.rs` 2, `benchmark_import.rs` 2).
+4. Pruebas manuales de campo (hardware real, 20 pistas, teléfonos, firewall): [`desktop/README.md`](desktop/README.md) §«Pruebas reproducibles».
+
+---
+
+## 10. Limitaciones y pendientes conocidos
+- **Saltos cuantizados dentro del horizonte ya encolado (~600 ms):** pueden posponerse al siguiente compás; la solución prevista (*Jump Reserve Buffers*) está en [`docs/MOTOR_NATIVO_DISENO.md`](docs/MOTOR_NATIVO_DISENO.md) §10. El §1.3 de ese documento (descarte «Caso B», `stream_epoch`, `FlushAndSeek`) también es diseño no implementado y así lo indica una nota de estado.
+- **Callback de audio con reservas y `Mutex`** (§6.3).
+- **Sin prioridad de hilo explícita** (§6.3).
+- **Restos de la plantilla AI Studio** en `package.json` (`react-example`, `@google/genai`, `express`, `dotenv`, `motion`), `.env.example`, `metadata.json` y `.aistudio/`; `npm run clean` usa `rm -rf`.
+- La rama `motor-nativo` aún no se fusiona con `main`.
+
+---
+
+*Nota de verificación (revisión de documentación):* contrastado contra el código en la rama `motor-nativo`. `npm run lint` y `npm test` se ejecutaron y pasan; las pruebas Rust y los builds de Tauri no se re-ejecutaron en esa revisión.

@@ -191,11 +191,26 @@ async fn remote_exchange(
 }
 
 fn main() {
-    tracing_subscriber::fmt().with_target(false).init();
+    let filter = tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+        tracing_subscriber::EnvFilter::new("info,symphonia=warn,symphonia_bundle_mp3=warn,symphonia_codec_aac=warn,symphonia_core=warn,symphonia_default=warn")
+    });
+    tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_target(false)
+        .init();
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .manage(RemoteState::default())
         .setup(|app| {
             app.manage(updates::init(app.handle()));
+            let local_data = app
+                .path()
+                .app_local_data_dir()
+                .unwrap_or_else(|_| std::path::PathBuf::from("."));
+            let audio_settings_path = local_data.join("audio_settings.json");
+            app.manage(omnitracks_desktop::audio::output::AudioEngineState::new(
+                audio_settings_path,
+            ));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -206,7 +221,51 @@ fn main() {
             remote_exchange,
             desktop_update_check,
             desktop_update_download,
-            desktop_update_install
+            desktop_update_install,
+            omnitracks_desktop::audio::audio_list_hosts,
+            omnitracks_desktop::audio::audio_list_devices,
+            omnitracks_desktop::audio::audio_get_config,
+            omnitracks_desktop::audio::audio_set_config,
+            omnitracks_desktop::audio::audio_get_stats,
+            omnitracks_desktop::audio::audio_reset_stats,
+            omnitracks_desktop::audio::audio_test_tone,
+            omnitracks_desktop::audio::audio_import_tracks,
+            omnitracks_desktop::audio::audio_import_track_bytes,
+            omnitracks_desktop::audio::audio_import_folder,
+            omnitracks_desktop::audio::audio_cancel_import,
+            omnitracks_desktop::audio::audio_get_project_cache_status,
+            omnitracks_desktop::audio::audio_load_project,
+            omnitracks_desktop::audio::audio_play,
+            omnitracks_desktop::audio::audio_pause,
+            omnitracks_desktop::audio::audio_stop,
+            omnitracks_desktop::audio::audio_seek,
+            omnitracks_desktop::audio::audio_get_playback_state,
+            omnitracks_desktop::audio::audio_set_track_controls,
+            omnitracks_desktop::audio::audio_queue_jump,
+            omnitracks_desktop::audio::audio_cancel_jump,
+            omnitracks_desktop::audio::audio_toggle_vamp,
+            omnitracks_desktop::audio::audio_set_pitch,
+            omnitracks_desktop::audio::audio_set_metronome,
+            omnitracks_desktop::audio::audio_set_split_mono,
+            omnitracks_desktop::audio::audio_configure_song,
+            omnitracks_desktop::audio::audio_preload_project,
+            omnitracks_desktop::audio::audio_set_master_gains,
+            omnitracks_desktop::audio::audio_switch_to_preloaded,
+            omnitracks_desktop::audio::audio_reopen_stream,
+            omnitracks_desktop::audio::audio_scan_folder,
+            omnitracks_desktop::audio::audio_scan_files,
+            omnitracks_desktop::audio::audio_import_track_bytes_raw,
+            omnitracks_desktop::audio::audio_delete_project_cache,
+            omnitracks_desktop::audio::audio_get_cache_stats,
+            omnitracks_desktop::audio::audio_clean_orphan_caches,
+            omnitracks_desktop::audio::audio_check_files_exist,
+            omnitracks_desktop::library::library_load,
+            omnitracks_desktop::library::library_save,
+            omnitracks_desktop::library::library_save_song,
+            omnitracks_desktop::library::library_delete_song,
+            omnitracks_desktop::library::library_update_song_folder,
+            omnitracks_desktop::library::library_write_sidecar,
+            omnitracks_desktop::library::library_read_sidecar
         ])
         .run(tauri::generate_context!())
         .expect("OmniTracks");

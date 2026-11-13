@@ -2,7 +2,37 @@
 
 Windows x64, Tauri v2 y WebView2 Evergreen. El instalador único contiene OmniTracks y el redistribuible autónomo de WebView2. Si el equipo ya tiene el runtime, el instalador lo reutiliza.
 
-Si venías de LibreTracks Desktop, cierra esa versión antes de abrir OmniTracks. Windows registra OmniTracks como una instalación con nombre propio. Ambas versiones apuntan al mismo perfil de escritorio del usuario porque mantienen el identificador de Tauri y el origen `https://tauri.localhost`. Comprueba tu repertorio en OmniTracks antes de quitar la versión anterior. Si la desinstalas, deja desmarcada la opción de eliminar los datos de la aplicación.
+OmniTracks para Windows registra su instalación con identificador `org.omnitracks.desktop` y almacena sus datos locales en `%LOCALAPPDATA%\org.omnitracks.desktop`. Esta versión empieza con una biblioteca y configuración vacías: `library.json`, `library.backup.json`, `audio_settings.json` y la caché `pcm\` (ver `Manual.md` §5).
+
+## Estado del Motor Nativo de Audio
+
+La versión de escritorio integra un motor de reproducción de multitracks en Rust sobre WASAPI en modo compartido:
+
+| Fase | Funcionalidad | Estado |
+|---|---|:---:|
+| **Fases 0 a 4** | Arquitectura, reproducción en Rust, streaming continuo desde disco con `rtrb`, micro-fades de 8 ms, caché PCM nativa, decodificación con `symphonia` y `rubato`, metrónomo y guías sintéticas, y compensación sinc de retardo de grupo. | **Completadas** |
+| **Fase 5** | Ruteo multicanal discreto (> 2 salidas físicas independientes). Actualmente opera en estéreo o Split-Mono (Ch 1: Click/Guía, Ch 2: Música) en dispositivo de 2 canales. | **Diferida** |
+| **Fase 6** | Control remoto por LAN vía HTTP/WebSocket (puerto 8765) para roles de Músico y Sonidista (`lan.rs`). Streaming de audio LAN para monitoreo personal en auriculares pendiente. | **Parcial** |
+| **Fase 7** | Soporte de drivers ASIO (pospuesto por decisión del dueño debido a restricciones de licencia del SDK de Steinberg). | **Diferida** |
+
+## Flujo de Desarrollo
+
+- **Desarrollo rápido de la interfaz web:**
+  ~~~powershell
+  npm.cmd run dev
+  ~~~
+  Inicia Vite en modo desarrollo (`http://localhost:5173`) para iterar rápidamente la UI y componentes web con recarga en caliente.
+- **Compilar y probar el ejecutable de escritorio (`.exe`):**
+  ~~~powershell
+  npm.cmd --prefix desktop run build:portable
+  ~~~
+  Construye el frontend de escritorio (`desktop/dist/`) y compila el binario portátil de Windows:
+  `desktop\src-tauri\target\x86_64-pc-windows-msvc\release\omnitracks-desktop.exe`
+- **Verificación rápida y completa del proyecto:**
+  ~~~powershell
+  powershell -ExecutionPolicy Bypass -File .\verify.ps1            # Rápida (lint, tests web, cargo test --lib, build web)
+  powershell -ExecutionPolicy Bypass -File .\verify.ps1 -Completo  # Completa (+ cargo test completo y build:portable)
+  ~~~
 
 ## Compilar en Windows
 
@@ -89,8 +119,8 @@ npm.cmd run preview -- --host 127.0.0.1 --strictPort
 1. Registrar versión de Windows, Chrome y WebView2, RAM, CPU, interfaz de audio, sample rate, modo Buffer/Streaming y presupuesto de caché. En DevTools de escritorio, pegar desktop/test/probe-runtime.js para probar escritura y lectura de IndexedDB y OPFS en Worker. Registrar el resultado. Que un selector exista en JavaScript no confirma que abra o que sus permisos persistan.
 2. En cada perfil, abrir los selectores reales de **archivos** y **carpeta**, seleccionar el mismo material y reproducir. Si falla un selector con handles, comprobar si la importación clásica recupera el flujo. Cerrar y reabrir, volver a seleccionar la canción y confirmar biblioteca, permisos y caché. En streaming, ejecutar window.__streamStats() al inicio y al final y registrar el modo efectivo, los underruns y la actividad de lectura. Verificar el salto de sección cuantizado con reproducción activa.
 3. Usar el mismo material de 20 pistas, 15 min y seis canciones en Chrome, Tauri apagado y Tauri con 3–5 teléfonos. Mantener el modo y el ruteo iguales. Registrar CPU y RAM del árbol de procesos por intervalos de 5 s, RAM inicial y final, glitches audibles o grabados, y tiempo desde la transición hasta el primer sonido de la siguiente canción ya preparada. Para el tiempo al sonido, grabar la salida de la interfaz y anotar el disparo en la misma captura.
-4. Elegir en Windows la interfaz que usará el reproductor. En **Ajustes de reproducción**, activar **Split-Mono** y comprobar ambos canales con la interfaz real. El ruteo previsto es click/guía por L y música por R. El dispositivo se elige en Windows porque el reproductor actual usa la salida por defecto.
+4. Elegir la interfaz que usará el reproductor. En **Ajustes de reproducción**, activar **Split-Mono** y comprobar ambos canales con la interfaz real. El ruteo previsto es click/guía por L y música por R. El dispositivo y el host se eligen en **Ajustes de audio** de la app (se guardan en `audio_settings.json`; si no hay selección se usa la salida por defecto del host, `WASAPI` por defecto).
 5. Repetir el arranque con WAN desconectada y LAN activa. Abrir la app, recuperar el Setlist y reproducir con QR. Durante la canción desconectar WAN, Wi‑Fi y un teléfono en pruebas separadas, y luego reiniciar el router. Anotar si el audio continúa, qué ve cada cliente y si la sesión se recupera. Probar el acceso entrante con la red en perfil Público y Privado según la política del equipo. No desactivar el firewall. Si se necesita una regla temporal, usar solo el ejecutable, el puerto 8765, la subred local y el perfil Privado, con autorización del administrador. [Reglas de Firewall de Windows](https://learn.microsoft.com/en-us/windows/security/operating-system-security/network-security/windows-firewall/rules)
-6. Con un perfil Tauri nuevo, abrir Biblioteca y compararla con el navegador de Netlify. Probar la importación de un `.omnitracks.json` y un `.libretracks.json` anterior. El JSON contiene metadatos, pistas descritas, mezcla y secciones. Los blobs, handles y archivos PCM viven aparte y no viajan en ese JSON. Registrar cuánto trabajo hace falta para recuperar la canción y el Setlist.
+6. Con un perfil Tauri nuevo, abrir Biblioteca y compararla con el navegador de Netlify. Probar la importación de una carpeta con `omnitracks.project.json` (sidecar canónico; el nombre heredado `.omnitracks.json` solo se lee por compatibilidad). El JSON contiene metadatos, pistas descritas, mezcla y secciones. Los blobs, handles y archivos PCM viven aparte y no viajan en ese JSON. Registrar cuánto trabajo hace falta para recuperar la canción y el Setlist.
 
 Para el diagnóstico se conserva DevTools en el ejecutable de PoC. No hay un puerto de depuración activado por la aplicación. La decisión de plataforma se toma con la matriz de INFORME_POC.md y las mediciones del equipo real.

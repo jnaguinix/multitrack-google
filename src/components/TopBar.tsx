@@ -11,6 +11,7 @@ interface TopBarProps {
   ramBudgetMB: number;
   cachedRamMB: number;
   remoteTriggerRef?: React.Ref<HTMLSpanElement>;
+  audioTriggerRef?: React.Ref<HTMLSpanElement>;
   onChangeEngineMode: (mode: AudioEngineMode) => void;
   onChangeRamBudgetMB: (mb: number) => void;
   onSelectView: (view: WorkspaceView) => void;
@@ -34,6 +35,7 @@ export const TopBar: React.FC<TopBarProps> = ({
   ramBudgetMB,
   cachedRamMB,
   remoteTriggerRef,
+  audioTriggerRef,
   onChangeEngineMode,
   onChangeRamBudgetMB,
   onSelectView,
@@ -67,6 +69,7 @@ export const TopBar: React.FC<TopBarProps> = ({
 
       <div className="lt-header-actions">
         {remoteTriggerRef && <span ref={remoteTriggerRef} />}
+        {audioTriggerRef && <span ref={audioTriggerRef} />}
         <button type="button" popoverTarget="audio-settings" className="lt-control lt-icon-control" aria-label="Motor de audio" title="Motor de audio">
           <Settings2 size={17} />
         </button>

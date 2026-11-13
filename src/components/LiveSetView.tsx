@@ -13,6 +13,8 @@ import {
   TransportState,
 } from '../types/project';
 import { audioEngine } from '../audio/audioEngine';
+import { nativeAudioEngine } from '../audio/nativeAudioEngine';
+import { isDesktopApp } from '../utils/nativeDialog';
 import { getSongWaveformPeaks } from '../utils/songWaveform';
 
 /**
@@ -67,6 +69,11 @@ type SongStatus = 'ready' | 'preparing' | 'pending';
 
 function songStatus(song: SongProject, preparingIds: Set<string>): SongStatus {
   if (preparingIds.has(song.id)) return 'preparing';
+  // Escritorio: el estado sale de la caché PCM nativa, no del motor web (OPFS).
+  if (isDesktopApp()) {
+    if (nativeAudioEngine.isProjectImporting(song.id)) return 'preparing';
+    return nativeAudioEngine.isNativeCacheReady(song.id) === true ? 'ready' : 'pending';
+  }
   if (audioEngine.isProjectPcmReady(song)) return 'ready';
   if (audioEngine.getSongRamCacheInfo(song).isReady) return 'ready';
   return 'pending';

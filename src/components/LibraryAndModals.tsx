@@ -1,4 +1,4 @@
-import React, { useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   FolderOpen,
   Upload,
@@ -17,11 +17,15 @@ import {
   Play,
   Zap,
   HardDrive,
+  Edit3,
+  Check,
 } from 'lucide-react';
+import { FingerprintCandidate } from '../audio/fingerprint';
 import { OutputBus, SongProject, SongSection, TrackChannel } from '../types/project';
 import { audioEngine } from '../audio/audioEngine';
 import { PcmOptimizationProgress } from '../storage/pcmOptimizer';
 import { isFsAccessSupported, pickAudioSources } from '../storage/sourceFiles';
+import { isDesktopApp, pickNativeFiles, pickNativeFolder } from '../utils/nativeDialog';
 import { formatMmSs } from './TransportDeck';
 
 interface LibraryViewProps {
@@ -29,6 +33,7 @@ interface LibraryViewProps {
   currentProjectId: string | null;
   onSelectProject: (projectId: string) => void;
   onAddToSetlist: (projectId: string) => void;
+  onRemoveFromSetlist?: (projectId: string) => void;
   onCreateNewProject: (title: string, artist: string, bpm: number, keySig: string) => void;
   onDeleteProject: (projectId: string) => void;
   onExportJson: (project: SongProject) => void;
@@ -36,6 +41,7 @@ interface LibraryViewProps {
   onOpenStemImporter: () => void;
   onOptimizeProject: (project: SongProject) => void;
   onRelinkProject?: (project: SongProject) => void;
+  onUpdateSongMetadata?: (updated: SongProject) => void;
 }
 
 export const LibraryView: React.FC<LibraryViewProps> = ({
@@ -43,6 +49,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
   currentProjectId,
   onSelectProject,
   onAddToSetlist,
+  onRemoveFromSetlist,
   onCreateNewProject,
   onDeleteProject,
   onExportJson,
@@ -50,7 +57,9 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
   onOpenStemImporter,
   onOptimizeProject,
   onRelinkProject,
+  onUpdateSongMetadata,
 }) => {
+  const [editingMetadataSong, setEditingMetadataSong] = useState<SongProject | null>(null);
   const [newTitle, setNewTitle] = useState('');
   const [newArtist, setNewArtist] = useState('');
   const [newBpm, setNewBpm] = useState(120);
@@ -79,7 +88,9 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
               Biblioteca
             </h1>
             <p className="text-sm text-neutral-400 mt-1">
-              Canciones guardadas en este navegador.
+              {isDesktopApp()
+                ? 'Canciones indexadas en la biblioteca de OmniTracks (almacenadas en library.json).'
+                : 'Canciones guardadas en este navegador.'}
             </p>
           </div>
 
@@ -134,9 +145,23 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                   >
                     <div className="min-w-[10rem] flex-1">
                       <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-                        <h3 className="text-base font-bold text-neutral-100 truncate">
-                          {proj.title}
-                        </h3>
+                        <div className="flex items-center gap-1.5">
+                          <h3
+                            onDoubleClick={() => setEditingMetadataSong(proj)}
+                            title="Doble clic para editar título, artista, tono, BPM y compás"
+                            className="text-base font-bold text-neutral-100 truncate cursor-pointer hover:text-studio-ink transition-colors"
+                          >
+                            {proj.title}
+                          </h3>
+                          <button
+                            type="button"
+                            onClick={() => setEditingMetadataSong(proj)}
+                            title="Editar metadatos (título, artista, tono, BPM, compás)"
+                            className="p-1 rounded text-neutral-500 hover:text-studio-ink hover:bg-neutral-800 transition-colors cursor-pointer"
+                          >
+                            <Edit3 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
                         {isCurrent && (
                           <span className="text-xs font-medium text-studio-ink flex items-center gap-1">
                             <CheckCircle2 className="w-3.5 h-3.5" /> Activa
@@ -187,7 +212,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                       </button>
                       <div id={`library-song-${index}`} popover="auto" className="lt-popover lt-library-actions space-y-1">
                         {/* Relink original files (moved/renamed folder or permission lost) */}
-                        {!isPcmReady && onRelinkProject && isFsAccessSupported() && (
+                        {onRelinkProject && (isDesktopApp() || (!isPcmReady && isFsAccessSupported())) && (
                           <button
                             type="button"
                             onClick={(event) => {
@@ -198,7 +223,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                             className="px-3 py-2 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-neutral-200 border border-neutral-700 text-xs font-semibold flex items-center gap-1.5 cursor-pointer transition-colors"
                           >
                             <FolderPlus className="w-3.5 h-3.5 text-studio-ink" />
-                            <span>Reubicar archivos</span>
+                            <span>Ubicar carpeta</span>
                           </button>
                         )}
 
@@ -221,14 +246,42 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                         <button
                           type="button"
                           onClick={(event) => {
+                            event.currentTarget.closest<HTMLElement>('[popover]')?.hidePopover();
+                            setEditingMetadataSong(proj);
+                          }}
+                          title="Editar título, artista, BPM, compás y tono"
+                          className="px-3 py-2 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-neutral-200 border border-neutral-700 text-xs font-semibold flex items-center gap-1.5 cursor-pointer transition-colors"
+                        >
+                          <Edit3 className="w-3.5 h-3.5 text-studio-ink" />
+                          <span>Editar metadatos</span>
+                        </button>
+
+                        {proj.inSetlist && onRemoveFromSetlist ? (
+                          <button
+                            type="button"
+                            onClick={(event) => {
+                              event.currentTarget.closest<HTMLElement>('[popover]')?.hidePopover();
+                              onRemoveFromSetlist(proj.id);
+                            }}
+                            title="Quitar esta canción del Setlist (permanece en la biblioteca)"
+                            className="px-3 py-2 rounded-lg bg-rose-500/15 hover:bg-rose-500/25 text-rose-300 border border-rose-500/40 text-xs font-semibold flex items-center gap-1.5 cursor-pointer transition-colors"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                            <span>Quitar del Setlist</span>
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={(event) => {
                               event.currentTarget.closest<HTMLElement>('[popover]')?.hidePopover();
                               onAddToSetlist(proj.id);
                             }}
-                          className="px-3 py-2 rounded-lg bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 border border-amber-500/40 text-xs font-semibold flex items-center gap-1.5 cursor-pointer transition-colors"
-                        >
-                          <ListMusic className="w-3.5 h-3.5" />
-                          <span>Añadir al Setlist</span>
-                        </button>
+                            className="px-3 py-2 rounded-lg bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 border border-amber-500/40 text-xs font-semibold flex items-center gap-1.5 cursor-pointer transition-colors"
+                          >
+                            <ListMusic className="w-3.5 h-3.5" />
+                            <span>Añadir al Setlist</span>
+                          </button>
+                        )}
 
                         <button
                           type="button"
@@ -338,6 +391,184 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
           </form>
         </div>
       </div>
+
+      {/* Metadata Edit Modal */}
+      {editingMetadataSong && (
+        <SongMetadataEditModal
+          isOpen={Boolean(editingMetadataSong)}
+          song={editingMetadataSong}
+          onClose={() => setEditingMetadataSong(null)}
+          onSave={(updated) => {
+            onUpdateSongMetadata?.(updated);
+            setEditingMetadataSong(null);
+          }}
+        />
+      )}
+    </div>
+  );
+};
+
+/* ============================================================================
+ * SONG METADATA EDIT MODAL (TITLE, ARTIST, KEY, BPM, TIME SIGNATURE)
+ * ============================================================================ */
+
+interface SongMetadataEditModalProps {
+  song: SongProject | null;
+  isOpen: boolean;
+  onClose: () => void;
+  onSave: (updated: SongProject) => void;
+}
+
+export const SongMetadataEditModal: React.FC<SongMetadataEditModalProps> = ({
+  song,
+  isOpen,
+  onClose,
+  onSave,
+}) => {
+  const [title, setTitle] = useState(song?.title || '');
+  const [artist, setArtist] = useState(song?.artist || '');
+  const [bpm, setBpm] = useState(song?.bpm || 120);
+  const [keySignature, setKeySignature] = useState(song?.keySignature || 'C Major');
+  const [beatsPerBar, setBeatsPerBar] = useState(song?.beatsPerBar || 4);
+
+  useEffect(() => {
+    if (song) {
+      setTitle(song.title);
+      setArtist(song.artist);
+      setBpm(song.bpm);
+      setKeySignature(song.keySignature);
+      setBeatsPerBar(song.beatsPerBar || 4);
+    }
+  }, [song]);
+
+  if (!isOpen || !song) return null;
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!title.trim()) return;
+    onSave({
+      ...song,
+      title: title.trim(),
+      artist: artist.trim() || 'Artista Desconocido',
+      bpm: Number(bpm) || 120,
+      keySignature: keySignature.trim() || 'C Major',
+      beatsPerBar: Number(beatsPerBar) || 4,
+      isTitleCustom: true,
+      updatedAt: Date.now(),
+    });
+  };
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      className="fixed inset-0 z-50 bg-black/75 flex items-center justify-center p-4 select-none"
+    >
+      <div className="bg-neutral-900 border border-neutral-700 rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-4">
+        <div className="flex items-center justify-between border-b border-neutral-800 pb-3">
+          <h2 className="text-base font-bold text-neutral-100 flex items-center gap-2">
+            <Edit3 className="w-4 h-4 text-studio-ink" />
+            <span>Editar metadatos de la canción</span>
+          </h2>
+          <button
+            type="button"
+            onClick={onClose}
+            className="p-1 rounded-lg text-neutral-400 hover:text-white hover:bg-neutral-800 cursor-pointer"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <div>
+            <label className="block text-xs font-semibold text-neutral-300 mb-1">
+              Título
+            </label>
+            <input
+              type="text"
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              className="w-full px-3 py-2 rounded-xl bg-neutral-950 border border-neutral-700 text-sm text-neutral-100 focus:outline-none focus:border-studio-line"
+              required
+            />
+          </div>
+
+          <div>
+            <label className="block text-xs font-semibold text-neutral-300 mb-1">
+              Artista
+            </label>
+            <input
+              type="text"
+              value={artist}
+              onChange={(e) => setArtist(e.target.value)}
+              className="w-full px-3 py-2 rounded-xl bg-neutral-950 border border-neutral-700 text-sm text-neutral-100 focus:outline-none focus:border-studio-line"
+            />
+          </div>
+
+          <div className="grid grid-cols-3 gap-3">
+            <div>
+              <label className="block text-xs font-semibold text-neutral-300 mb-1">
+                Tono
+              </label>
+              <input
+                type="text"
+                value={keySignature}
+                onChange={(e) => setKeySignature(e.target.value)}
+                placeholder="G Major, Bb..."
+                className="w-full px-3 py-2 rounded-xl bg-neutral-950 border border-neutral-700 text-sm text-neutral-100 focus:outline-none focus:border-studio-line"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-neutral-300 mb-1">
+                BPM
+              </label>
+              <input
+                type="number"
+                min="40"
+                max="260"
+                value={bpm}
+                onChange={(e) => setBpm(Number(e.target.value))}
+                className="w-full px-3 py-2 rounded-xl bg-neutral-950 border border-neutral-700 text-sm text-neutral-100 focus:outline-none focus:border-studio-line"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-neutral-300 mb-1">
+                Compás
+              </label>
+              <input
+                type="number"
+                min="2"
+                max="12"
+                value={beatsPerBar}
+                onChange={(e) => setBeatsPerBar(Number(e.target.value))}
+                className="w-full px-3 py-2 rounded-xl bg-neutral-950 border border-neutral-700 text-sm text-neutral-100 focus:outline-none focus:border-studio-line"
+              />
+            </div>
+          </div>
+
+          <p className="text-[11px] text-neutral-400">
+            Los cambios se guardan en library.json y en el archivo omnitracks.project.json de la carpeta. No renombra archivos en disco.
+          </p>
+
+          <div className="flex items-center justify-end gap-2 pt-2 border-t border-neutral-800">
+            <button
+              type="button"
+              onClick={onClose}
+              className="px-4 py-2 rounded-xl bg-neutral-800 hover:bg-neutral-700 text-xs font-semibold text-neutral-300 cursor-pointer"
+            >
+              Cancelar
+            </button>
+            <button
+              type="submit"
+              className="px-4 py-2 rounded-xl bg-studio-strip hover:bg-neutral-700 border border-studio-line text-xs font-semibold text-studio-ink cursor-pointer"
+            >
+              Guardar metadatos
+            </button>
+          </div>
+        </form>
+      </div>
     </div>
   );
 };
@@ -353,6 +584,7 @@ interface ConfirmSongActionModalProps {
   onClose: () => void;
   onConfirmLoadInDaw: (songId: string) => void;
   onConfirmAddToSetlist: (songId: string) => void;
+  onConfirmRemoveFromSetlist?: (songId: string) => void;
 }
 
 export const ConfirmSongActionModal: React.FC<ConfirmSongActionModalProps> = ({
@@ -362,6 +594,7 @@ export const ConfirmSongActionModal: React.FC<ConfirmSongActionModalProps> = ({
   onClose,
   onConfirmLoadInDaw,
   onConfirmAddToSetlist,
+  onConfirmRemoveFromSetlist,
 }) => {
   if (!song) return null;
 
@@ -430,17 +663,31 @@ export const ConfirmSongActionModal: React.FC<ConfirmSongActionModalProps> = ({
             </span>
           </button>
 
-          <button
-            type="button"
-            onClick={() => {
-              onConfirmAddToSetlist(song.id);
-              onClose();
-            }}
-            className="py-2.5 px-4 rounded-xl bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/40 text-amber-300 font-semibold text-xs flex items-center justify-center gap-1.5 cursor-pointer transition-colors"
-          >
-            <ListMusic className="w-3.5 h-3.5" />
-            <span>{isInSetlist ? 'Ver en Setlist' : 'Añadir al Setlist'}</span>
-          </button>
+          {isInSetlist && onConfirmRemoveFromSetlist ? (
+            <button
+              type="button"
+              onClick={() => {
+                onConfirmRemoveFromSetlist(song.id);
+                onClose();
+              }}
+              className="py-2.5 px-4 rounded-xl bg-rose-500/15 hover:bg-rose-500/25 border border-rose-500/40 text-rose-300 font-semibold text-xs flex items-center justify-center gap-1.5 cursor-pointer transition-colors"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+              <span>Quitar de la sesión</span>
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={() => {
+                onConfirmAddToSetlist(song.id);
+                onClose();
+              }}
+              className="py-2.5 px-4 rounded-xl bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/40 text-amber-300 font-semibold text-xs flex items-center justify-center gap-1.5 cursor-pointer transition-colors"
+            >
+              <ListMusic className="w-3.5 h-3.5" />
+              <span>Añadir al Setlist</span>
+            </button>
+          )}
 
           <button
             type="button"
@@ -448,6 +695,166 @@ export const ConfirmSongActionModal: React.FC<ConfirmSongActionModalProps> = ({
             className="py-2.5 px-3.5 rounded-xl bg-neutral-800 hover:bg-neutral-700 text-neutral-300 text-xs font-medium cursor-pointer transition-colors"
           >
             Cancelar
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+/* ============================================================================
+ * SONG FINGERPRINT AMBIGUITY / CONFIRMATION MODAL
+ * ============================================================================ */
+
+export interface SongFingerprintPromptModalProps {
+  candidates: FingerprintCandidate[];
+  incomingTrackCount: number;
+  sourceLabel: string;
+  onConfirmMatch: (candidate: SongProject) => void;
+  onImportAsNew: () => void;
+  onCancel: () => void;
+}
+
+export const SongFingerprintPromptModal: React.FC<SongFingerprintPromptModalProps> = ({
+  candidates,
+  incomingTrackCount,
+  sourceLabel,
+  onConfirmMatch,
+  onImportAsNew,
+  onCancel,
+}) => {
+  const [selectedCandidateId, setSelectedCandidateId] = useState<string>(
+    candidates[0]?.song.id || ''
+  );
+
+  if (candidates.length === 0) return null;
+
+  const isSingle = candidates.length === 1;
+  const single = candidates[0];
+  const selectedCandidate =
+    candidates.find((c) => c.song.id === selectedCandidateId) || candidates[0];
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/75 flex items-center justify-center p-4">
+      <div className="bg-studio-panel border border-neutral-700 rounded-2xl max-w-lg w-full p-6 space-y-5 shadow-2xl">
+        <div className="flex items-start justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-center shrink-0">
+              <Music className="w-5 h-5 text-amber-400" />
+            </div>
+            <div>
+              <h2 className="text-base font-bold text-neutral-100">
+                {isSingle
+                  ? `¿Es la misma canción que «${single.song.title}»?`
+                  : '¿Es la misma canción que alguna de estas?'}
+              </h2>
+              <p className="text-xs text-neutral-400">
+                Coincidencia de huella de pistas (tamaño y duración dentro de ±1 pista)
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={onCancel}
+            className="text-neutral-400 hover:text-white p-1 cursor-pointer"
+          >
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        <div className="bg-studio-ground border border-neutral-800 rounded-xl p-3.5 space-y-2 text-xs">
+          <div className="text-neutral-400 flex items-center justify-between">
+            <span>Audio entrante:</span>
+            <span className="font-semibold text-neutral-200">
+              {sourceLabel} ({incomingTrackCount} pistas)
+            </span>
+          </div>
+
+          {isSingle ? (
+            <div className="pt-2 border-t border-neutral-800/80 space-y-1.5">
+              <div className="flex items-center justify-between">
+                <span className="text-neutral-400">Canción en biblioteca:</span>
+                <span className="font-bold text-studio-ink">
+                  {single.song.title} {single.song.artist ? `· ${single.song.artist}` : ''}
+                </span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-neutral-400">Coincidencia de pistas:</span>
+                <span className="font-bold text-amber-400">
+                  {Math.round(single.matchRatio * 100)}% ({single.matchedTrackCount} de {single.totalTracks} pistas)
+                </span>
+              </div>
+            </div>
+          ) : (
+            <div className="pt-2 border-t border-neutral-800/80 space-y-2">
+              <p className="text-neutral-400">Selecciona la canción que corresponde:</p>
+              <div className="space-y-1.5 max-h-48 overflow-y-auto pr-1">
+                {candidates.map((cand) => (
+                  <label
+                    key={cand.song.id}
+                    onClick={() => setSelectedCandidateId(cand.song.id)}
+                    className={`flex items-center justify-between p-2.5 rounded-lg border cursor-pointer transition-colors ${
+                      selectedCandidateId === cand.song.id
+                        ? 'border-amber-500/60 bg-amber-500/10 text-white'
+                        : 'border-neutral-800 bg-neutral-900/50 text-neutral-300 hover:border-neutral-700'
+                    }`}
+                  >
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="radio"
+                        name="fingerprintCandidate"
+                        checked={selectedCandidateId === cand.song.id}
+                        onChange={() => setSelectedCandidateId(cand.song.id)}
+                        className="text-amber-500 focus:ring-0"
+                      />
+                      <span className="font-semibold text-xs">{cand.song.title}</span>
+                      <span className="text-neutral-500 text-[11px]">{cand.song.artist}</span>
+                    </div>
+                    <span className="text-[11px] font-bold text-amber-400">
+                      {Math.round(cand.matchRatio * 100)}% ({cand.matchedTrackCount}/{cand.totalTracks})
+                    </span>
+                  </label>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+
+        <p className="text-xs text-neutral-400 leading-relaxed">
+          Si confirmas la actualización, se vincularán las pistas manteniendo tus ediciones de metadatos, secciones y mezcla. Si eliges importar como nueva, se creará una entrada separada en la biblioteca.
+        </p>
+
+        <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5 pt-1">
+          <button
+            type="button"
+            onClick={() => onConfirmMatch(selectedCandidate.song)}
+            className="flex-1 py-2.5 px-4 rounded-xl bg-amber-500 hover:bg-amber-400 text-neutral-950 font-bold text-xs flex items-center justify-center gap-2 cursor-pointer transition-colors shadow-lg shadow-amber-500/10"
+          >
+            <Check className="w-3.5 h-3.5" />
+            <span>
+              {isSingle
+                ? `Sí, actualizar «${single.song.title}»`
+                : `Actualizar «${selectedCandidate.song.title}»`}
+            </span>
+          </button>
+
+          <button
+            type="button"
+            onClick={onImportAsNew}
+            className="flex-1 py-2.5 px-4 rounded-xl border border-neutral-700 hover:bg-neutral-800 text-neutral-200 font-semibold text-xs flex items-center justify-center gap-2 cursor-pointer transition-colors"
+          >
+            <Plus className="w-3.5 h-3.5" />
+            <span>Importar como canción nueva</span>
+          </button>
+        </div>
+
+        <div className="flex justify-end pt-1">
+          <button
+            type="button"
+            onClick={onCancel}
+            className="text-xs text-neutral-500 hover:text-neutral-300 transition-colors cursor-pointer"
+          >
+            Cancelar importación
           </button>
         </div>
       </div>
@@ -467,12 +874,24 @@ interface StemImporterModalProps {
     defaultBus: OutputBus,
     importMode: 'new-song' | 'current-song'
   ) => void;
+  onImportNativeFolder?: (
+    folderPath: string,
+    defaultBus: OutputBus,
+    importMode: 'new-song' | 'current-song'
+  ) => void;
+  onImportNativeFiles?: (
+    filePaths: string[],
+    defaultBus: OutputBus,
+    importMode: 'new-song' | 'current-song'
+  ) => void;
 }
 
 export const StemImporterModal: React.FC<StemImporterModalProps> = ({
   isOpen,
   onClose,
   onImportFiles,
+  onImportNativeFolder,
+  onImportNativeFiles,
 }) => {
   const [defaultBus, setDefaultBus] = useState<OutputBus>('main');
   const [importMode, setImportMode] = useState<'new-song' | 'current-song'>('new-song');
@@ -551,6 +970,16 @@ export const StemImporterModal: React.FC<StemImporterModalProps> = ({
           {/* Multi-file Picker */}
           <label
             onClick={(e) => {
+              if (isDesktopApp()) {
+                e.preventDefault();
+                pickNativeFiles().then((paths) => {
+                  if (paths && paths.length > 0) {
+                    onClose();
+                    onImportNativeFiles?.(paths, defaultBus, importMode);
+                  }
+                });
+                return;
+              }
               if (!isFsAccessSupported()) return;
               e.preventDefault();
               pickAudioSources('files', null, (files) => {
@@ -586,12 +1015,21 @@ export const StemImporterModal: React.FC<StemImporterModalProps> = ({
           {/* Directory / Folder Picker */}
           <button
             type="button"
-            onClick={() =>
+            onClick={() => {
+              if (isDesktopApp()) {
+                pickNativeFolder().then((folderPath) => {
+                  if (folderPath) {
+                    onClose();
+                    onImportNativeFolder?.(folderPath, defaultBus, importMode);
+                  }
+                });
+                return;
+              }
               pickAudioSources('folder', folderInputRef.current, (files) => {
                 onClose();
                 onImportFiles(files, defaultBus, importMode);
-              })
-            }
+              });
+            }}
             className="border-2 border-dashed border-neutral-700 hover:border-studio-line rounded-xl p-6 flex flex-col items-center justify-center text-center cursor-pointer transition-colors bg-studio-ground/60"
           >
             <FolderPlus className="w-7 h-7 text-studio-ink mb-2" />

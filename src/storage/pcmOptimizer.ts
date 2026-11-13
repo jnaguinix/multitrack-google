@@ -6,7 +6,9 @@
 import { SongProject, TrackChannel, TrackPcmMetadata } from '../types/project';
 import { extractWaveformPeaks } from '../audio/demoSynthesizer';
 import {
+  calculateTrackPcmBytes,
   checkDiskQuotaForBytes,
+  getProjectPcmDir,
   ensureStoragePersist,
   estimateProjectPcmBytes,
   isOpfsSupported,
@@ -151,9 +153,25 @@ export async function optimizeProjectForStreaming(
 
   // 3. One decode per track, overlapped with the previous track's disk write
   const work: number[] = [];
+  const projDir = options.onlyMissing ? await getProjectPcmDir(project.id, false) : null;
   for (let i = 0; i < totalTracks; i++) {
     const t = updatedTracks[i];
-    if (options.onlyMissing && t.pcm && t.pcm.frames > 0) continue;
+    if (options.onlyMissing && t.pcm && t.pcm.frames > 0 && projDir) {
+      try {
+        const fh = await projDir.getFileHandle(`${t.id}.pcm`, { create: false });
+        const f = await fh.getFile();
+        const expectedBytes = calculateTrackPcmBytes(t.pcm.frames, t.pcm.channels);
+        if (f.size >= expectedBytes) {
+          continue;
+        }
+      } catch {
+        // Missing or incomplete in OPFS: must decode and write
+      }
+    } else if (options.onlyMissing && t.pcm && t.pcm.frames > 0 && !projDir) {
+      // OPFS directory does not exist yet: must decode and write
+    } else if (options.onlyMissing && t.pcm && t.pcm.frames > 0) {
+      continue;
+    }
     work.push(i);
   }
 

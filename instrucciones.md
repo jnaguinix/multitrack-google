@@ -1,158 +1,210 @@
-# OmniTracks · Guía de relevo
+# OmniTracks · Guía de Relevo (Handoff)
 
-OmniTracks reproduce multitracks en directo. La prioridad es que el audio siga estable en un portátil de 8 GB y 4 núcleos, también sin Internet y con teléfonos conectados. React, TypeScript y Vite son el frontend compartido. Tauri v2 empaqueta el escritorio de Windows y Rust sirve las páginas LAN.
+OmniTracks es un reproductor multipista para directores musicales y bandas en vivo (DAW en vivo ligero, estilo *Ableton Live / Playback / Reaper*). Prioridades: estabilidad del audio en tiempo real (cero *underruns*), baja latencia, bajo consumo en portátiles de 8 GB de RAM / 4 núcleos, funcionamiento 100 % offline y control remoto desde teléfonos por red local (LAN).
 
-## Empieza aquí
+> **Cómo usar estos documentos.** Este archivo es la **puerta de entrada**: contexto, mapa de archivos, comandos y reglas. [`Manual.md`](Manual.md) es la **referencia técnica** (arquitectura, contratos, algoritmos, protocolos). [`docs/MOTOR_NATIVO_DISENO.md`](docs/MOTOR_NATIVO_DISENO.md) es la especificación de diseño del motor Rust. [`desktop/README.md`](desktop/README.md) cubre empaquetado, firma, publicación de actualizaciones y pruebas manuales de campo.
+>
+> **Regla de oro:** si el código y un documento se contradicen, **gana el código**; corrige el documento en el mismo commit.
 
-1. Ejecuta `git status --short --branch`, `git log -3 --oneline` y `git remote -v`. Conserva los cambios locales. Trabaja sobre la tarea solicitada y evita repetir la auditoría del PoC.
-2. El repo es [jnaguinix/multitrack-google](https://github.com/jnaguinix/multitrack-google). Usa `main`. El commit `9b9b884` ya contiene web, escritorio y el nombre OmniTracks. `poc/tauri-desktop` es histórico. El primer instalador OmniTracks probado es 0.2.2.
-3. Salta a la sección de la tarea. Para empaquetar, usa [Generar el instalador Windows x64](#generar-el-instalador-windows-x64). Para el resto, empieza por [Mapa de trabajo](#mapa-de-trabajo), abre los archivos de esa fila y usa su [validación](#validación-según-el-cambio). Busca símbolos con `rg -n` en esos archivos antes de recorrer todo el repo.
-4. Esta guía describe el estado actual. [desktop/README.md](desktop/README.md) amplía firma, operación LAN y pruebas de campo. [desktop/INFORME_POC.md](desktop/INFORME_POC.md) registra la evidencia inicial. [Manual.md](Manual.md) conserva un diagnóstico de una versión anterior del motor. Sus problemas y propuestas son contexto histórico. Por ejemplo, el modo inicial actual es `stream` con respaldo en búfer y el PCM ya conserva las fuentes mono.
+---
 
-Si partes de cero, clona y entra a la raíz. Si la carpeta ya existe, empieza por revisar su estado.
+## 1. Empieza aquí
 
-```powershell
-git clone --branch main https://github.com/jnaguinix/multitrack-google.git
-Set-Location .\multitrack-google
-Test-Path .\desktop\src-tauri\tauri.conf.json
-```
+### 1.1. Estado del repositorio
+- Remoto: `https://github.com/jnaguinix/multitrack-google.git`.
+- Rama de trabajo activa: **`motor-nativo`** (sincronizada con `origin/motor-nativo`; al momento de esta revisión va 27 commits por delante de `main` y 1 por detrás, es decir, **aún no se ha fusionado a `main`**). Verifícalo con `git rev-list --left-right --count main...motor-nativo`.
+- Nombre de la app: **OmniTracks**. Identificador Tauri: `org.omnitracks.desktop`. Versión de escritorio: **0.2.2**, que debe mantenerse sincronizada en `desktop/src-tauri/tauri.conf.json`, `desktop/src-tauri/Cargo.toml` y `desktop/package.json` (más sus lockfiles).
+- El proyecto se renombró desde un nombre heredado: **no reintroducir nombres antiguos**. Los únicos restos aceptados son el prefijo de cookies LAN `lt_monitor` / `lt_mixer`, las clases CSS `lt-*` y el nombre de lectura-compatible `.omnitracks.json` (ver §4).
+- El `package.json` raíz aún se llama `react-example` y arrastra dependencias de la plantilla de Google AI Studio (`@google/genai`, `express`, `dotenv`, `motion`) que **no se importan desde `src/`**. También existen `.env.example`, `metadata.json` y `.aistudio/` (restos de AI Studio). No son necesarios para compilar ni ejecutar la app.
 
-## Generar el instalador Windows x64
+### 1.2. Dos plataformas, un frontend
+| | Escritorio (Windows x64) | Web (navegador) |
+|---|---|---|
+| Contenedor | Tauri v2 + WebView2 | Navegador (build estático `dist/`) |
+| Motor de audio | **Nativo en Rust** (`cpal` + `symphonia` + `rubato` + `rtrb`) | Web Audio API |
+| Fachada JS | `nativeAudioEngine` | `webAudioEngine` |
+| Persistencia | `library.json` + sidecar en disco (comandos `library_*`) | IndexedDB `OmniTracksWebDB` + OPFS |
+| Control remoto LAN | Sí (servidor Rust, puerto 8765) | No |
 
-### 1. Comprobar el entorno
+El frontend elige el motor en una sola línea: `export const audioEngine = isDesktopEnvironment ? nativeAudioEngine : webAudioEngine` al final de [`src/audio/audioEngine.ts`](src/audio/audioEngine.ts). Toda la UI habla con `audioEngine` y no sabe cuál motor hay debajo. **El producto principal es el de escritorio**; la versión web se conserva como respaldo y para pruebas.
 
-Usa PowerShell **nativo de Windows**, Node.js 24 x64, Git, Rust estable **MSVC** y Visual Studio Build Tools con **Desarrollo de escritorio con C++**, MSVC x64/x86 y Windows SDK. Compila con conexión para resolver paquetes y descargar NSIS y WebView2 si faltan en caché. El instalador resultante sí está preparado para instalarse sin Internet. [Requisitos oficiales de Tauri](https://v2.tauri.app/start/prerequisites/)
+### 1.3. Modelo de datos de dos niveles
+- **Biblioteca permanente** (`library.json`, en `%LOCALAPPDATA%\org.omnitracks.desktop\`): índice de todas las canciones (metadatos, pistas, secciones, mezcla, ruta de carpeta). **No contiene audio** y **nunca** modifica ni mueve los archivos originales del usuario. Cada carpeta de canción recibe además un sidecar visible `omnitracks.project.json`.
+- **Setlist** (sesión del día): subconjunto ordenado de la biblioteca. Se representa con `inSetlist: true` + `setlistOrder` en cada canción y con la lista `activeSetlist` (ids) en `library.json`. Las canciones importadas entran con `inSetlist: false`; pasan al setlist con el botón `+ Set`. Quitar una canción del setlist o «Limpiar sesión» **no la borra de la biblioteca**.
+- Otros archivos en `%LOCALAPPDATA%\org.omnitracks.desktop\`: `library.backup.json`, `audio_settings.json` (dispositivo/host/buffer de audio) y `pcm\` (caché de audio decodificado; ver [`Manual.md`](Manual.md) §5).
 
-```powershell
-node -p "process.platform + ' ' + process.arch"
-npm.cmd --version
-Get-Command rustup,cargo,rustc | Select-Object Name,Source
-rustc -vV
-```
+### 1.4. Flujo de una canción (resumen)
+1. **Importar** carpeta/archivos → `audio_scan_folder` / `audio_scan_files` detectan pistas, secciones y metadatos → se calcula la huella (¿ya existe?) → la canción se crea en biblioteca con `inSetlist: false` y se guarda (`library_save_song` + sidecar).
+2. En segundo plano se lanza `audio_import_tracks`: decodifica todos los stems a la caché PCM y devuelve picos de onda y duración; la canción se actualiza y, si no hay otra montada, se carga en el motor.
+3. **`+ Set`** la añade al setlist. Si la caché PCM no está completa se regenera (`audio_get_project_cache_status` → `audio_import_tracks`). Antes se comprueba que los archivos originales existan (`audio_check_files_exist`); si faltan, se ofrece reubicar la carpeta.
+4. **Quitar del setlist** detiene la reproducción si era la activa y **borra la caché PCM nativa** de esa canción (se regenera al volver a añadirla). La canción y su sidecar permanecen.
+5. **Eliminar de la biblioteca** (`library_delete_song`) la quita de `library.json`, de `activeSetlist` y borra su caché `pcm\<song_id>`. Los audios originales no se tocan.
 
-Lo esperado es `win32 x64` y `host: x86_64-pc-windows-msvc`. Si falta Rust, instálalo con [Rustup](https://rustup.rs/) y abre una terminal nueva. Si está instalado pero quedó fuera del PATH, revisa primero `%USERPROFILE%\.cargo\bin` o la ruta del entorno existente. Con una instalación no estándar, `RUSTUP_HOME` y `CARGO_HOME` deben apuntar a los directorios reales de ese entorno. Si falta C++, usa la instalación de Build Tools indicada en [desktop/README.md](desktop/README.md#compilar-en-windows).
+El diagrama secuencial completo está en [`Manual.md`](Manual.md) §4.
 
-Si tienes Rust pero falta el toolchain MSVC, instálalo y selecciónalo para esta sesión.
+---
 
-```powershell
-rustup toolchain install stable-x86_64-pc-windows-msvc --profile minimal
-$env:RUSTUP_TOOLCHAIN = 'stable-x86_64-pc-windows-msvc'
-rustc -vV
-```
+## 2. Mapa de archivos y responsabilidades
 
-### 2. Instalar dependencias y empaquetar
+### 2.1. Raíz y configuración
+| Archivo | Función |
+|---|---|
+| [`package.json`](package.json) | Scripts y dependencias del frontend compartido (React 19, TypeScript, Tailwind 4, Vite, Lucide, `tsx` para tests). |
+| [`vite.config.ts`](vite.config.ts) | Vite + React + Tailwind; alias `@`; HMR configurable con `DISABLE_HMR`. |
+| [`tsconfig.json`](tsconfig.json), [`index.html`](index.html) | Configuración TypeScript y HTML de entrada. |
+| [`instrucciones.md`](instrucciones.md) | Esta guía. |
+| [`Manual.md`](Manual.md) | Referencia técnica profunda. |
+| [`docs/MOTOR_NATIVO_DISENO.md`](docs/MOTOR_NATIVO_DISENO.md) | Diseño del motor nativo (saltos, vamp, búferes, caché por frecuencia, pruebas). Su §10 lista pendientes conocidos. |
+| `test/` | Pruebas unitarias del frontend (ver §3). |
+| `public/assets/aistudio/` | Imágenes y mock HTML de mezclador de referencia visual (diseño de AI Studio). |
+| `scratch/` | Scripts desechables; ignorado por Git. |
 
-Ejecuta este bloque desde la raíz del repositorio, donde conviven `package.json` y `desktop/`. Instala ambas dependencias en un clon limpio. La raíz no tiene lockfile npm y se prepara con `install --legacy-peer-deps --no-package-lock`. `desktop/` tiene su propio lockfile y usa `ci`. Puedes omitir ambas instalaciones en una copia ya preparada con las mismas dependencias. El instalador de prueba se construye sin `.env`, clave de Gemini ni clave de firma.
+### 2.2. Frontend compartido (`src/`)
+- [`src/main.tsx`](src/main.tsx): punto de entrada React.
+- [`src/App.tsx`](src/App.tsx): **orquestador global** (~3100 líneas). Estado de biblioteca (`projects`), canción montada (`currentProject`), `setlistQueue`, transporte y medidores; importación nativa y web; handlers `handleAddToSetlist`, `handleRemoveFromSetlist`, `handleClearSetlist`, `handleReorderSetlist`; resolución de ambigüedad por huella; atajos de teclado; vista inicial por hash (`#setlist`, `#live`, `#arranger`, `#mixer`, `#remote`, `#library`).
+- [`src/types/project.ts`](src/types/project.ts): tipos `SongProject`, `TrackChannel`, `SongSection`, `TransportState`, `OutputBus` (`main | cue-click | both`), `QuantizeMode` (`1-bar | 2-bars | section-end | immediate`), `SplitRoutingMode`, `AudioEngineMode` (`buffer | stream`), `RemoteSyncMessage`, etc.
+- [`src/index.css`](src/index.css): estilos globales (Tailwind + clases `lt-*`).
 
-```powershell
-npm.cmd install --legacy-peer-deps --no-package-lock
-if ($LASTEXITCODE -ne 0) { throw 'Falló npm en la raíz.' }
+**Componentes (`src/components/`)**
+| Archivo | Función |
+|---|---|
+| [`TopBar.tsx`](src/components/TopBar.tsx) | Barra superior; vistas `Setlist`, `En vivo`, `Arreglo`, `Mezcla`, `Control rápido`, `Biblioteca` (`WorkspaceView`). Presupuesto de memoria, ajustes de audio y conexión remota. |
+| [`TransportDeck.tsx`](src/components/TransportDeck.tsx) | Barra inferior: Play/Pausa, Stop, BPM, Pitch, Vamp, cuantización, reloj y medidores maestros. |
+| [`RepertoireTreeSidebar.tsx`](src/components/RepertoireTreeSidebar.tsx) | Panel lateral con la biblioteca, búsqueda, importación, badges `+ Set` / `✓`, «Limpiar sesión actual» y menú contextual. |
+| [`SetlistPageView.tsx`](src/components/SetlistPageView.tsx) | Vista Setlist: canción activa, onda maestra, saltos de sección, orden con arrastrar y soltar, mezclador flotante (se cierra con `Escape`), estado «Setlist vacío». |
+| [`LiveSetView.tsx`](src/components/LiveSetView.tsx) | Vista de escenario de alto contraste: botones de sección grandes, cuentas regresivas, siguiente canción. |
+| [`TimelineArranger.tsx`](src/components/TimelineArranger.tsx) | Vista Arreglo: pistas apiladas, zoom, edición de marcadores de sección. |
+| [`MultitrackMixer.tsx`](src/components/MultitrackMixer.tsx) | Mesa de mezcla: faders en dB (−40 a +10), pan, Mute/Solo, selector de bus, medidores. |
+| [`StageRemoteView.tsx`](src/components/StageRemoteView.tsx) | Vista «Control rápido» (`#remote`) para operar desde otro dispositivo/pantalla. |
+| [`LibraryAndModals.tsx`](src/components/LibraryAndModals.tsx) | `LibraryView`, `SongMetadataEditModal`, `ConfirmSongActionModal`, `SongFingerprintPromptModal`, `StemImporterModal`, `SectionEditorModal`, `OptimizationProgressModal` e `inferTrackRoleAndColor`. |
 
-npm.cmd ci --prefix desktop
-if ($LASTEXITCODE -ne 0) { throw 'Falló npm en desktop.' }
+**Motores y análisis de audio (`src/audio/`)**
+| Archivo | Función |
+|---|---|
+| [`audioEngine.ts`](src/audio/audioEngine.ts) | Motor Web Audio (modos `buffer`/`stream`, presupuesto de RAM 256–4096 MB, defecto 1200) **y fachada** `audioEngine` que elige motor nativo o web. |
+| [`nativeAudioEngine.ts`](src/audio/nativeAudioEngine.ts) | Cliente del motor Rust: implementa la misma API que el motor web invocando comandos `audio_*` y consultando el estado de reproducción. |
+| [`streamingTrack.ts`](src/audio/streamingTrack.ts), [`pcmReaderClient.ts`](src/audio/pcmReaderClient.ts), [`pcmReader.worker.ts`](src/audio/pcmReader.worker.ts) | Streaming OPFS con ring buffer y Web Worker (solo web). |
+| [`fingerprint.ts`](src/audio/fingerprint.ts) | `findSongFingerprintMatches`: detecta si una carpeta importada ya existe en la biblioteca. |
+| [`smartAnalyzer.ts`](src/audio/smartAnalyzer.ts) | `cleanSongTitleAndMetadata` (limpieza de título y extracción de artista/BPM/tono) e `inferSongMetadataFromFiles`. |
+| [`monoDetect.ts`](src/audio/monoDetect.ts), [`demoSynthesizer.ts`](src/audio/demoSynthesizer.ts) | Detección de pistas mono (web) y síntesis/picos de demostración. |
 
-$buildStartedUtc = [DateTime]::UtcNow
-npm.cmd --prefix desktop run build
-if ($LASTEXITCODE -ne 0) { throw 'Falló el build de escritorio. Revisa la primera causa del log.' }
+**Almacenamiento y utilidades**
+| Archivo | Función |
+|---|---|
+| [`src/storage/projectDb.ts`](src/storage/projectDb.ts) | Capa de persistencia unificada. `saveProjectToDb` bifurca: escritorio → `desktopLibrary.ts`; web → IndexedDB. |
+| [`src/storage/desktopLibrary.ts`](src/storage/desktopLibrary.ts) | Cliente de los comandos Rust `library_load`, `library_save`, `library_save_song`, `library_delete_song`, `library_update_song_folder`, `library_read_sidecar`. (El sidecar se escribe dentro de `library_save_song`; `library_write_sidecar` existe y está registrado pero el frontend no lo invoca.) |
+| [`src/storage/opfsStorage.ts`](src/storage/opfsStorage.ts), [`pcmOptimizer.ts`](src/storage/pcmOptimizer.ts), [`cachePolicy.ts`](src/storage/cachePolicy.ts) | OPFS, conversión a PCM y poda de caché (límite 6 GB para canciones fuera del setlist). Solo web. |
+| [`src/storage/sourceFiles.ts`](src/storage/sourceFiles.ts) | File System Access API: handles de archivos/carpetas, permisos y sidecar en navegador. |
+| [`src/utils/nativeDialog.ts`](src/utils/nativeDialog.ts) | `isDesktopApp()` (detecta `window.__TAURI__`), diálogos nativos, `scanNativeFolder/Files`, caché nativa (`deleteProjectNativeCache`, `getNativeCacheStats`, `cleanOrphanNativeCaches`), `checkFilesExist`. |
+| [`src/utils/fileImportHelper.ts`](src/utils/fileImportHelper.ts) | Parser rápido de cabecera WAV, lectura del sidecar en web (`PROJECT_SIDECAR_FILENAME`), filtrado de archivos de audio. |
+| [`src/utils/songWaveform.ts`](src/utils/songWaveform.ts) | Onda maestra agregada de una canción. |
 
-$cargoInfo = cargo metadata --format-version 1 --no-deps --manifest-path .\desktop\src-tauri\Cargo.toml | ConvertFrom-Json
-if ($LASTEXITCODE -ne 0) { throw 'Cargo no pudo localizar target.' }
+### 2.3. Escritorio Tauri v2 (`desktop/`)
+| Archivo | Función |
+|---|---|
+| [`desktop/README.md`](desktop/README.md) | Compilación, instalador NSIS, firma y publicación de actualizaciones, conexión de teléfonos, pruebas de campo. |
+| [`desktop/INFORME_POC.md`](desktop/INFORME_POC.md), [`desktop/test/probe-runtime.js`](desktop/test/probe-runtime.js) | Informe y sonda del PoC que justificó la plataforma (IndexedDB/OPFS en WebView2). Histórico. |
+| [`desktop/package.json`](desktop/package.json) | Scripts `build` (instalador NSIS) y `build:portable` (solo `.exe`). |
+| [`desktop/build-frontend.ps1`](desktop/build-frontend.ps1) | Hook `beforeBuildCommand`: compila el frontend a `desktop/dist/` con `VITE_OMNITRACKS_DESKTOP=1`. |
+| [`desktop/build-release.ps1`](desktop/build-release.ps1) | Genera instalador firmado + `latest.json` para el actualizador (requiere clave de firma). |
+| [`desktop/frontend/`](desktop/frontend/) | UI exclusiva de escritorio: `RemoteConnectionBridge.tsx` (servidor LAN, QR, IP, expulsión), `remoteState.ts`, `DesktopAudioSettings.tsx` (host/dispositivo/buffer/tono de prueba), `DesktopUpdates.tsx`, `connection.css`. |
+| [`desktop/web/`](desktop/web/) | `remote.html/.js/.css`: página que el servidor LAN sirve a los teléfonos. |
+| [`desktop/src-tauri/tauri.conf.json`](desktop/src-tauri/tauri.conf.json) | Ventana 1280×800, CSP estricta, capacidad `desktop-remote`, bundle NSIS (`currentUser`, WebView2 offline). |
+| [`desktop/src-tauri/build.rs`](desktop/src-tauri/build.rs) | **Lista de comandos IPC** que genera sus permisos `allow-*` (en `permissions/autogenerated/`, ignorado por Git). |
+| [`desktop/src-tauri/capabilities/desktop-remote.json`](desktop/src-tauri/capabilities/desktop-remote.json) | Permisos concedidos a la ventana `main`. |
+| [`desktop/src-tauri/Cargo.toml`](desktop/src-tauri/Cargo.toml) | Dependencias Rust; la feature `shell` (por defecto) activa Tauri, QR, actualizador y diálogos; sin ella solo compila la librería (para pruebas). |
 
-$config = Get-Content -LiteralPath .\desktop\src-tauri\tauri.conf.json -Raw | ConvertFrom-Json
-$bundleDir = Join-Path $cargoInfo.target_directory 'x86_64-pc-windows-msvc/release/bundle/nsis'
-$installerName = "$($config.productName)_$($config.version)_x64-setup.exe"
-$installer = Get-Item -LiteralPath (Join-Path $bundleDir $installerName) -ErrorAction Stop
-if ($installer.LastWriteTimeUtc -lt $buildStartedUtc) { throw 'El instalador hallado pertenece a una compilación anterior.' }
+**Rust (`desktop/src-tauri/src/`)**
+| Archivo | Función |
+|---|---|
+| `main.rs` | Arranque Tauri, `generate_handler!` con todos los comandos, estado `RemoteState` y `AudioEngineState`, comandos `remote_*`. |
+| `lib.rs` | Expone los módulos `audio`, `lan`, `library`, `protocol` (usados por `main.rs` y por los tests de integración). |
+| `lan.rs` | Servidor HTTP + WebSocket (**axum**) en el puerto TCP 8765: emparejamiento, sesiones, cola de comandos. |
+| `protocol.rs` | Tipos del protocolo (`Role`, `Snapshot`, `MixCommand`, mensajes de estado). |
+| `updates.rs` | Comandos `desktop_update_*` (actualizador firmado de Tauri vía GitHub Releases). |
+| `library/mod.rs` | `library.json` (carga con recuperación desde backup, guardado atómico), sidecar, comandos `library_*`, limpieza nativa de títulos (`clean_song_title_and_metadata`). |
+| `audio/mod.rs` | Comandos `audio_*`: importación (concurrencia 2–4 trabajadores), escaneo, control de transporte, caché. |
+| `audio/output.rs` | `AudioSettings`, `AudioEngineState`, enumeración de hosts/dispositivos, estadísticas del stream, tono de prueba. |
+| `audio/playback.rs` | `PlaybackEngine`: hilos feeder por pista, callback CPAL, saltos, vamp, crossfades, ruteo, guía hablada (`GuideCueEngine`), reapertura del stream. |
+| `audio/resampler.rs` | `TrackResampler`: envoltorio de `rubato::SincFixedIn` con ajuste dinámico de ratio (varispeed/pitch). |
+| `audio/metronome.rs` | Click sintetizado y alineado a muestra. |
+| `audio/cache.rs` | Caché PCM `i16`, metadatos JSON, picos de onda, detección mono, chequeo de espacio libre. |
+| `audio/import.rs` | Decodificación Symphonia y remuestreo a la frecuencia del dispositivo. |
+| `tests/` | `lan_protocol.rs`, `verify_manual_flow.rs`, `benchmark_import.rs` (integración). |
 
-$installer | Select-Object FullName,Length,LastWriteTime
-Get-FileHash -LiteralPath $installer.FullName -Algorithm SHA256
-```
+---
 
-El comando ejecuta Tauri v2 desde `desktop/`. Su hook genera `desktop/dist/`, incrusta el frontend y produce **un solo NSIS `*-setup.exe`** con WebView2 Evergreen offline. En una instalación estándar queda en `desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/`. Si el entorno define `CARGO_TARGET_DIR`, usa la ruta devuelta por Cargo. La versión de referencia se llama `OmniTracks_0.2.2_x64-setup.exe`. La primera compilación y la compresión del runtime pueden tardar varios minutos. Espera a que el comando termine y devuelva código 0. [Instalador Windows de Tauri](https://v2.tauri.app/distribute/windows-installer/)
+## 3. Compilación, ejecución y pruebas
 
-| Si te pidieron | Comando desde la raíz | Resultado |
-| --- | --- | --- |
-| Instalador de prueba con WebView2 | `npm.cmd --prefix desktop run build` | `release/bundle/nsis/*-setup.exe`. Puede generarse sin clave de firma. |
-| Ejecutable portátil para diagnóstico | `npm.cmd --prefix desktop run build:portable` | `release/omnitracks-desktop.exe`. Requiere WebView2 instalado. |
-| Web de Netlify | `npm.cmd run lint` y `npm.cmd run build` | `dist/` en la raíz. |
-| Instalador con canal de actualizaciones | `desktop/build-release.ps1` con las claves del proyecto | Instalador y `latest.json`. Sigue [Publicar la primera versión](desktop/README.md#publicar-la-primera-versión-con-actualizaciones). |
+### 3.1. Requisitos (Windows)
+- **Node.js 24 x64** + npm, **Git**, **Rust estable** con toolchain `stable-x86_64-pc-windows-msvc`, y **Visual Studio Build Tools** con la carga *Desarrollo para el escritorio con C++* (instrucciones de `winget` en [`desktop/README.md`](desktop/README.md)).
+- Si `cargo` no está en el `PATH` de la terminal, apunta a la instalación local, por ejemplo:
+  ```powershell
+  $env:CARGO_HOME  = '<ruta-a>\cargo'
+  $env:RUSTUP_HOME = '<ruta-a>\rustup'
+  $env:PATH        = "$env:CARGO_HOME\bin;$env:PATH"
+  ```
+  (En la máquina del autor original estas carpetas vivían bajo `C:\Users\jpuerta\.codex\...`; **no es una ruta estándar** y puede no existir en tu equipo. Lo normal es `rustup` en `%USERPROFILE%\.cargo`.)
+- Instalación de dependencias, desde la raíz: `npm.cmd install --legacy-peer-deps --no-package-lock` y `npm.cmd ci --prefix desktop`.
 
-### 3. Probar lo que se va a entregar
+### 3.2. Comandos frecuentes (desde la raíz)
+| Tarea | Comando | Notas |
+|---|---|---|
+| Servidor de desarrollo web | `npm.cmd run dev` | Vite en `http://localhost:3000` (`--host=0.0.0.0`). Solo motor web. |
+| Verificar tipos | `npm.cmd run lint` | `tsc --noEmit`. |
+| Pruebas frontend | `npm.cmd test` | Ejecuta `test/titleCleaning.test.ts` y `test/trackFingerprint.test.ts` con `tsx`. |
+| Pruebas Rust | `cargo test --locked --release --target x86_64-pc-windows-msvc --manifest-path desktop/src-tauri/Cargo.toml --no-default-features` | ≈48 tests (unitarios + integración); sin WebView ni tarjeta de sonido. `--no-default-features` omite la feature `shell`. |
+| Build web | `npm.cmd run build` | Genera `dist/`. |
+| Ejecutable portátil (diagnóstico) | `npm.cmd --prefix desktop run build:portable` | Produce `desktop/src-tauri/target/x86_64-pc-windows-msvc/release/omnitracks-desktop.exe`; requiere WebView2 instalado. |
+| **Instalador NSIS** | `npm.cmd --prefix desktop run build` | Produce `desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*-setup.exe` (incluye WebView2 offline). |
+| Release firmada con actualizador | `desktop/build-release.ps1 -PublicKeyFile <clave.pub>` | Ver [`desktop/README.md`](desktop/README.md). Tag `desktop-v<versión>`. |
 
-Instala **ese mismo archivo** en una sesión de prueba de Windows y abre **OmniTracks** desde Inicio. Comprueba que el acceso apunta a la versión recién construida, aparece la interfaz y la LAN comienza apagada. El destino predeterminado es `%LOCALAPPDATA%\OmniTracks\omnitracks-desktop.exe`. La variante sin clave omite el botón de actualizaciones. Si ya existe LibreTracks Desktop, cierra esa ventana antes de abrir OmniTracks. Windows puede mostrar las dos instalaciones y ambas comparten el perfil del mismo usuario. Conserva los datos de aplicación si se desinstala la antigua.
+El estado verificado al revisar esta documentación fue: `npm test` pasa (limpieza de títulos y huellas) y `npm run lint` pasa sin errores. Las pruebas Rust y los *builds* de escritorio no se re-ejecutaron en esa revisión: ejecútalos antes de entregar.
 
-Al entregar, indica **commit, versión, ruta absoluta del `*-setup.exe` y qué arranque probaste**. Si el entorno solo permite compilar, marca la instalación y el arranque como **no medidos**. Los binarios y sus logs son artefactos locales. GitHub y Netlify reciben código, y GitHub Releases recibe el instalador únicamente al publicar una versión de escritorio.
+### 3.3. Qué cubren los tests
+- **Frontend:** casos de limpieza de títulos (`«Multitrack _ERES BENDITO_ ORIGINAL Jaime Murrel-G major-108bpm-440hz»` → título «Eres Bendito», artista «Jaime Murrel», tono G major, 108 BPM) y escenarios de huella (100 %, ±1 pista, >1 pista de diferencia, canción distinta).
+- **Rust:** caché PCM, mono real, sincronización de varispeed, alineación del click, ruteo Split-Mono por bus, desconexión y reapertura del dispositivo conservando la posición, importación, escritura atómica de la biblioteca, sidecar canónico/heredado, limpieza de títulos, admisión y lotes del servidor LAN, protocolo LAN.
 
-### Diagnóstico por síntoma
+---
 
-| Síntoma | Qué comprobar primero |
-| --- | --- |
-| `desktop/` no existe | Comprueba raíz, remoto y commit. Actualiza a `main` con el árbol limpio. |
-| PowerShell bloquea `npm.ps1` | Llama `npm.cmd`. El hook de escritorio ya abre su propio `powershell.exe` para compilar. |
-| `cargo metadata` falla o falta `cargo` | Verifica el PATH y el toolchain de la terminal que lanzó npm. Confirma el manifiesto con `cargo metadata --format-version 1 --no-deps --manifest-path desktop/src-tauri/Cargo.toml`. |
-| `link.exe` o `kernel32.lib` no aparecen | Revisa MSVC y Windows SDK. Si ya están instalados, abre **Developer PowerShell for VS** x64 y repite con ese entorno. |
-| `ERESOLVE` en la raíz o `tauri` no se reconoce | Usa los dos comandos npm del bloque. Tauri CLI se instala en `desktop/node_modules`. |
-| El log acaba en `Built application at` y falta `*-setup.exe` | Comprueba que usaste `run build` y espera a `Finished 1 bundle at`. Si terminó con error, revisa el tramo de NSIS. `cargo build` y `build:portable` solo producen el ejecutable. |
-| Descarga de NSIS/WebView2 con error o Cargo en offline | Comprueba salida de red y proxy de la terminal. Si `CARGO_NET_OFFLINE` está activo sin una caché completa, desactívalo en esa sesión. Pide el acceso requerido si el entorno aísla la red. |
-| Hay instaladores en varias carpetas | Resuelve `target_directory` con Cargo y verifica fecha, versión y ruta. Ejecuta una sola compilación a la vez para evitar confundir artefactos. |
-| Windows instaló, pero no abre | Revisa el destino de Inicio y arranca el **ejecutable instalado** desde PowerShell para recoger stderr. Un paquete antiguo 0.2.0 falló por inicializar el actualizador sin configuración. En la versión actual, el actualizador solo se activa cuando su configuración carga correctamente. |
-| El instalador se genera, pero falta el botón de actualización | Es esperado en la compilación de prueba. La clave de firma y el canal solo se incorporan con el script de publicación. |
+## 4. Reglas críticas de desarrollo
 
-Si necesitas pasar el fallo a otro agente, comparte el comando, su código de salida y la primera causa del log con unas líneas de contexto. Guarda el registro completo en un archivo si hace falta consultarlo. Evita volcar `Cargo.lock`, `dist/` o toda la salida de compilación en el chat.
+1. **Intangibilidad del audio del usuario.** Jamás renombrar, mover, sobrescribir ni borrar los archivos de audio originales. La app solo escribe: la caché en `%LOCALAPPDATA%\org.omnitracks.desktop\` y el sidecar `omnitracks.project.json` en la carpeta de cada canción. Si existe el nombre heredado `.omnitracks.json`, se **lee** por compatibilidad, pero se escribe siempre el canónico.
+2. **Callback de audio en tiempo real (objetivo de diseño).** Dentro del callback de CPAL no debe haber: reservas de memoria, E/S de disco, `tracing`/`println!`, ni bloqueos que puedan esperar. El paso de datos entre hilos feeder y callback usa búferes circulares *lock-free* (`rtrb`).
+   > ⚠️ **Estado real:** el callback actual (`audio/playback.rs`, cierre pasado a `build_output_stream`) **todavía incumple parte de esta regla**: crea `vec![0.0; frames]` por bloque (búferes de bus y de click/guía) y toma `std::sync::Mutex` (`lock()`) sobre el *consumer* de cada pista, el metrónomo, la guía, las secciones y el fade. No hay logging en el callback. Es **deuda técnica conocida**: no empeorarla, y preferir buffers preasignados y `try_lock`/atómicos al tocar esa zona.
+3. **Varispeed continuo.** Los cambios de afinación/ratio reutilizan el `rubato::SincFixedIn` ya activo de cada pista (`set_resample_ratio_relative`); nunca instanciar un remuestreador nuevo mientras suena una pista.
+4. **Empalmes sin clic.** Todo salto, vamp o seek aplica un micro-crossfade de `FADE_MS = 8` ms; play/pausa/stop usan además un `FadeEnvelope`.
+5. **Persistencia única.** Toda modificación de canción debe pasar por `saveProjectToDb(song)`; en escritorio esto invoca `library_save_song`, que actualiza `library.json`, sincroniza `activeSetlist` (según `inSetlist`) y reescribe el sidecar. No escribir `library.json` por otras vías.
+6. **Setlist ≠ biblioteca.** Quitar del setlist solo pone `inSetlist = false` (y retira el id de `activeSetlist`); nunca elimina de la biblioteca.
+7. **Nuevo comando IPC.** Hay que tocar **cuatro** sitios (ver [`Manual.md`](Manual.md) §8.1): función `#[tauri::command]`, `generate_handler!` en `main.rs`, lista en `build.rs` y permiso `allow-…` en `capabilities/desktop-remote.json`. Si falta uno, el comando falla en tiempo de ejecución o la app no compila.
+8. **Seguridad LAN.** El control remoto solo puede enviar `setTrackGain/Mute/Pan/Solo` y únicamente desde el rol `mezclador`. No añadir comandos de transporte al protocolo remoto sin una revisión de seguridad.
+9. **Documentación.** Al cambiar un contrato (comandos, rutas, formatos, atajos, puertos) actualiza `instrucciones.md` y `Manual.md` en el mismo commit.
 
-Para capturar el fallo de arranque del destino predeterminado, cierra otras instancias y ejecuta este bloque.
+---
 
-```powershell
-$installed = Join-Path $env:LOCALAPPDATA 'OmniTracks\omnitracks-desktop.exe'
-(Get-Item -LiteralPath $installed).VersionInfo | Select-Object ProductName,FileVersion,FileName
-$startupLog = Join-Path $env:TEMP 'omnitracks-arranque.log'
-& $installed 2>&1 | Tee-Object -FilePath $startupLog
-```
+## 5. Atajos de teclado
+Definidos en `src/App.tsx` (se ignoran mientras el foco está en `input`, `textarea`, `select` o elementos editables, y solo si hay canción montada):
+- **Espacio**: Play / Pausa.
+- **V**: activar/desactivar Vamp.
+- **1 – 9**: saltar (cuantizado) a la sección n.º 1–9 de la canción.
+- **Esc**: cierra el mezclador flotante de la vista Setlist (`SetlistPageView.tsx`).
 
-## Mapa de trabajo
+---
 
-`src/main.tsx` monta `App`. `src/App.tsx` coordina biblioteca, canción activa, Setlist, navegación por hash y transporte. `src/types/project.ts` define el contrato de canción, pistas, secciones, modos de transición y buses. `updateCurrentProject` es la ruta común para sincronizar un cambio de mezcla o configuración con el motor, la lista de proyectos y el guardado.
+## 6. Limitaciones y pendientes conocidos
+1. **Saltos cuantizados cerca del límite.** Si el límite de compás cae dentro del horizonte ya encolado por el feeder (~600 ms), el salto puede posponerse al siguiente compás. [`docs/MOTOR_NATIVO_DISENO.md`](docs/MOTOR_NATIVO_DISENO.md) §1.3 (ruta de descarte «Caso B», `stream_epoch`, `FlushAndSeek`) y §10 (*Jump Reserve Buffers*) describen mecanismos que **aún no están implementados**; el documento ya lo indica en una nota de estado. Al implementarlos, actualiza esa nota.
+2. **Deuda del callback de audio** (§4, regla 2).
+3. **Sin hilo con prioridad de tiempo real explícita.** El código no llama a APIs de prioridad de Windows (p. ej. MMCSS); solo se activa la feature `realtime` de `cpal`.
+4. Limpieza pendiente de restos de AI Studio (ver §1.1) y de `npm run clean` (usa `rm -rf`, no funciona en PowerShell/Windows).
+5. La rama `motor-nativo` no se ha fusionado en `main`.
 
-| Área | Empieza en | Qué localizar |
-| --- | --- | --- |
-| Marca, navegación y estilos | `src/components/TopBar.tsx`, `src/index.css`, `index.html`, `metadata.json` | Pestañas, tema y título web. El nombre de ventana e instalador se define en `desktop/src-tauri/tauri.conf.json`. |
-| Setlist y repertorio | `src/components/SetlistPageView.tsx`, `src/components/RepertoireTreeSidebar.tsx`, `src/App.tsx` | `setlistQueue`, `handleAddToSetlist`, `handleReorderSetlist` y `handleNextSetlistSong`. La cola se deriva de `inSetlist` y `setlistOrder` en los proyectos. |
-| En vivo, transporte y atajos | `src/components/LiveSetView.tsx`, `src/components/TransportDeck.tsx`, `src/App.tsx` | Tiempo, sección activa, siguiente canción y ajustes de reproducción. Busca `handleKeyDown`, `handleJumpSection` y `handleSeekSeconds` para seguir una acción hasta el motor. |
-| Arreglo, secciones y onda | `src/components/TimelineArranger.tsx`, `src/components/LibraryAndModals.tsx`, `src/utils/songWaveform.ts` | `SectionEditorModal`, `handleSaveSections` y `handleAddMarkerAtPlayhead`. La onda de canción se construye con picos guardados por pista. Los proyectos antiguos se normalizan de compases a segundos en `projectDb.ts`. |
-| Mezcla local y Control rápido | `src/components/MultitrackMixer.tsx`, `src/components/StageRemoteView.tsx`, `src/App.tsx` | Ganancia, paneo, mute, solo, buses y medidores. Control rápido es la vista local `#remote`, con estado, saltos, click, guía y mezcla rápida. El `BroadcastChannel` existente funciona entre contextos del mismo origen. Para teléfonos en LAN, usa el servidor de escritorio. |
-| Biblioteca, importación y edición de pistas | `src/components/LibraryAndModals.tsx`, `src/App.tsx`, `src/utils/fileImportHelper.ts`, `src/storage/sourceFiles.ts` | `LibraryView`, `StemImporterModal`, `handleInstantImportFiles`, `handleDropOnDaw` y `handleRelinkProject`. `smartAnalyzer.ts` infiere metadatos de nombres y `inferTrackRoleAndColor` clasifica pistas. |
-| Datos, caché y proyectos JSON | `src/storage/projectDb.ts`, `src/storage/pcmOptimizer.ts`, `src/storage/opfsStorage.ts`, `src/storage/cachePolicy.ts` | Metadatos, blobs o permisos de origen, regeneración PCM y limpieza. `handleExportJson` y `handleImportJsonFile` están en `App.tsx`. |
-| Audio, saltos y transición de canciones | `src/audio/audioEngine.ts`, `src/audio/streamingTrack.ts`, `src/audio/pcmReaderClient.ts`, `src/audio/pcmReader.worker.ts` | `activateProject` llama a `loadProject`. Sigue `ensureSchedulerWorker`, `runLookaheadSchedulerTick`, `queueSectionJump` o `toggleVamp` según el síntoma. El Worker de lectura PCM y el Worker del scheduler son independientes. |
-| Panel **Conexión remota** | `desktop/frontend/RemoteConnectionBridge.tsx`, `desktop/frontend/remoteState.ts`, `desktop/frontend/connection.css` | Selector de IPv4, interruptor, QR, expulsión y puente IPC. El botón va en la barra de transporte o la cabecera según la vista. |
-| Monitor y mezclador de teléfono | `desktop/web/remote.html`, `desktop/web/remote.css`, `desktop/web/remote.js` | UI ligera servida por Rust. La cuenta regresiva interpola localmente. Volumen y paneo se envían al soltar el control. |
-| Servidor LAN y permisos | `desktop/src-tauri/src/main.rs`, `desktop/src-tauri/src/lan.rs`, `desktop/src-tauri/src/protocol.rs`, `desktop/src-tauri/tests/lan_protocol.rs` | `pair`, `enqueue` y `exchange`. El servidor valida sesión, rol, origen y comandos. El cliente recibe un snapshot inicial y deltas posteriores. |
-| Web, escritorio y distribución | `package.json`, `vite.config.ts`, `desktop/package.json`, `desktop/build-frontend.ps1`, `desktop/src-tauri/tauri.conf.json`, `desktop/build-release.ps1` | Web genera `dist/`. Tauri incrusta `desktop/dist/`. El actualizador se implementa en `desktop/src-tauri/src/updates.rs` y `desktop/frontend/DesktopUpdates.tsx`. |
+---
 
-### Cómo seguir un fallo
-
-- **La canción aparece, pero no suena.** Revisa si `activateProject` terminó, si las pistas tienen acceso al origen y si el modo efectivo es `stream` o `buffer`. IndexedDB `projects` guarda la ficha y el Setlist. `audioBuffers` guarda audio o referencias de origen. OPFS guarda PCM regenerable. Una ficha importada desde JSON puede existir sin audio. Para archivos movidos o permisos perdidos, empieza por **Biblioteca → Reubicar archivos**.
-- **El cambio a la siguiente canción tarda.** Sigue `setlistQueue` y la precarga en `App.tsx`, luego la preparación en `audioEngine.ts`. Distingue tiempo de montaje, estado listo en RAM o PCM preparado y tiempo hasta el primer sonido. El registro de activación por sí solo mide el montaje. En un perfil sin preferencias, el motor elige `stream`, usa OPFS cuando hay PCM utilizable y recurre a búfer cuando hace falta. El modo configurado y el efectivo pueden diferir.
-- **El fader y el medidor parecen discrepar.** El fader local expresa ganancia de −40 a +10 dB, con silencio al fondo. El medidor de pista local muestra picos de muestras en dBFS tras ganancia y paneo. El mezclador LAN muestra actividad a partir de RMS escalado. Para comparar niveles usa el mismo WAV y la misma etapa del recorrido. Un resultado en LUFS mide sonoridad con otro criterio.
-- **El click sale por el lado equivocado.** Revisa los buses `main`, `cue-click` y `both` en `project.ts`, la asignación por pista y `splitRoutingMode`. En Split‑Mono se espera click/guía a la izquierda y música a la derecha en una sola salida estéreo. La app usa la salida predeterminada de Windows. Verifica el ruteo en la interfaz física.
-- **El remoto muestra datos, pero no aplica un ajuste.** Confirma rol de sonidista, proyecto activo y revisión de pistas. Sigue `enqueue` en Rust, `exchange`, `targets` y `applyMix` en el puente. Un ajuste antiguo se descarta si ya cambió la canción o su revisión. El log de latencia mide recepción a confirmación de aplicación, sin incluir la salida acústica.
-- **La web y el escritorio difieren.** Usa `npm.cmd run dev` para la UI web local y `npm.cmd run build` para validar `dist/`. En escritorio prueba el build de Tauri, que usa WebView2 y otro origen. IndexedDB, OPFS y permisos de archivos pertenecen a su perfil y origen. Netlify y Tauri mantienen bibliotecas separadas.
-
-### Contratos a conservar
-
-- Mantén el motor en `src/audio/` y la persistencia en `src/storage/` salvo que el objetivo requiera tocarlos. Conserva `org.libretracks.desktop.poc`, el origen `https://tauri.localhost` e IndexedDB `LibreTracksWebDB` para que el cambio de nombre no cree un perfil vacío. Los JSON antiguos `.libretracks.json` siguen siendo importables. Los JSON transportan metadatos, secciones y mezcla. Las pistas locales viajan por separado.
-- El build web usa `dist/`. Solo el hook de escritorio activa `VITE_LIBRETRACKS_DESKTOP=1` y produce `desktop/dist/`. El panel LAN pertenece al shell Tauri. El despliegue web se comprueba en el sitio o en Netlify. Un push por sí solo confirma GitHub.
-- La LAN arranca apagada. El servidor escucha en la IPv4 privada elegida y puerto TCP `8765`. `/monitor` es de solo lectura. `/mezclador` admite exclusivamente `setTrackGain`, `setTrackPan`, `setTrackMute` y `setTrackSolo` por pista. Preserva sesiones por rol, validación del servidor, revisión de pistas, límites y colas acotadas. El puente aplica ajustes fuera del scheduler y sondea cada 100 ms como máximo cuando está activo. El control táctil envía al soltar la bolita. La ganancia remota es 0–3.1623 (−40 a +10 dB) y el paneo −1 a +1.
-- Si un celular falla, comprueba primero el QR vigente, la IPv4 del portátil y si otro equipo abre `http://<IPv4>:8765/monitor` en la misma LAN. En un Android se resolvió dando al navegador permiso de **Dispositivos cercanos** o **Red local**. Si el puerto está ocupado, comprueba si sigue abierto otro ejecutable de OmniTracks o LibreTracks. Evita cambiar firewall o antivirus como primera prueba.
-
-## Validación según el cambio
-
-- **Web o interfaz compartida.** `npm.cmd run lint`, `npm.cmd run build` y prueba visual de la vista afectada. En Setlist verifica agregar, quitar, reordenar y recargar. En En vivo y Arreglo prueba saltos de sección, búsqueda y edición según el cambio. Si tocaste transporte o atajos, revisa foco en campos, pausa y detención. El build web no necesita compilar Rust. Para Netlify, la entrada es el proyecto raíz y la salida web es `dist/`. Este repo carece de `netlify.toml`, así que verifica la configuración y la publicación en el sitio real si la tarea las incluye.
-- **Importación, biblioteca o caché.** Prueba archivos y carpeta, arrastre si aplica, reapertura y un proyecto anterior. Si cambia el almacenamiento, prueba con un perfil aislado y material prescindible. Comprueba si recuperas solo metadatos o también el audio. Para WebView2, `desktop/test/probe-runtime.js` prueba IndexedDB y OPFS desde DevTools.
-- **Audio o mezcla.** Prueba al menos un WAV reproducible en modo búfer y en streaming con PCM. Registra el modo efectivo, lecturas y underruns con `window.__streamStats()` antes y después. Incluye el caso afectado, como seek, salto cuantizado, mute/solo, transición, paneo o Split‑Mono. Un reloj que avanza demuestra transporte. Para verificar sonido o ruteo, observa o graba la salida.
-- **Servidor o UI LAN.** Ejecuta `cargo test --locked --release --target x86_64-pc-windows-msvc --manifest-path desktop/src-tauri/Cargo.toml --no-default-features`. Las seis pruebas cubren snapshots, deltas, reconexión, roles, revocación, colas y recuperación de un cupo al alcanzar 16 sesiones. Se ejecutan en loopback. Si cambias la UI remota, abre ambos roles con QR y prueba táctil en el mezclador. Si cambias el puente o el listener, reproduce y apaga la LAN para comprobar que continúa el transporte.
-- **Instalador.** El bloque de compilación produjo el NSIS 0.2.2 desde un clon limpio en Windows con las herramientas de compilación ya instaladas. En una prueba anterior de la misma versión se verificó el acceso en Inicio y se abrió su ejecutable instalado con un perfil aislado. Instalar en Windows limpio sin Internet y actualizar entre dos versiones publicadas siguen **no medidos**.
-- **Antes de publicar escritorio.** Falta el ensayo real de 20 pistas durante 15 minutos en Chrome, Desktop sin LAN y Desktop con 3–5 celulares. Registrar cortes, CPU/RAM, `window.__streamStats()` y Split‑Mono físico con click/guía a la izquierda y música a la derecha. El [protocolo de pruebas](desktop/README.md#pruebas-reproducibles) detalla persistencia, selectores y desconexiones. Reporta **no medido** cuando falte evidencia. La firma de prueba no equivale a publicar el canal definitivo.
-
-## Mensaje breve para otro agente
-
-> Lee `instrucciones.md` y ejecuta `git status --short --branch`. Mi tarea es [escribe el objetivo]. Usa la sección correspondiente. Si te pido el instalador, compila el NSIS de Windows x64 desde `main`, verifica el archivo recién generado y entrega su ruta absoluta. Prueba el arranque del ejecutable instalado si tienes un Windows de prueba. Si falla, dime el comando, la primera causa del log y qué requisito o acceso falta.
+## 7. Lista de comprobación para retomar el proyecto
+1. `git status`, `git log --oneline -n 10` y confirmar rama `motor-nativo`.
+2. `npm.cmd ci` (o `install --legacy-peer-deps`) y `npm.cmd ci --prefix desktop`.
+3. `npm.cmd run lint` y `npm.cmd test`.
+4. Pruebas Rust (comando de §3.2).
+5. Lee [`Manual.md`](Manual.md) §2–§5 para entender flujo de datos y motor.
+6. Arranca la app: `npm.cmd --prefix desktop run build:portable` y ejecuta el `.exe`; importa una carpeta de stems, pulsa `+ Set`, reproduce, prueba saltos de sección, Vamp y Split-Mono.
+7. Si vas a publicar: sigue [`desktop/README.md`](desktop/README.md) (versiones sincronizadas, firma, tag `desktop-v<versión>`).

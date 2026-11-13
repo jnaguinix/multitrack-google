@@ -41,6 +41,8 @@ export interface TrackChannel {
   peaks: number[]; // Normalized 0..1 envelope peaks for canvas waveform rendering
   isCustomAudio?: boolean;
   fileName?: string;
+  filePath?: string;
+  fileSize?: number;
   durationSec?: number;
   pcm?: TrackPcmMetadata;
 }
@@ -51,6 +53,7 @@ export interface SongProject {
   id: string;
   title: string;
   artist: string;
+  folderPath?: string;
   folder?: RepertoireFolder;
   inSetlist?: boolean;
   setlistOrder?: number;
@@ -73,6 +76,9 @@ export interface SongProject {
   masterGain: number;
   cueMasterGain?: number; // Master output gain for the Click / Cue bus ("Auriculares banda")
   pitchSemitones: number; // -6 to +6 semitones detune for stems
+  isTitleCustom?: boolean;
+  createdAt?: number;
+  lastUsedAt?: number;
   sections: SongSection[];
   tracks: TrackChannel[];
   updatedAt: number;
@@ -111,9 +117,21 @@ export interface TrackMeterReading {
   clipping: boolean;
 }
 
+/** Niveles reales por bus del motor nativo (pico lineal con caída, 1.0 = 0 dBFS). */
+export interface NativeBusLevels {
+  main: { l: number; r: number };
+  cue: { l: number; r: number };
+  out: { l: number; r: number };
+  click: { l: number; r: number };
+  guide: { l: number; r: number };
+  clipping: boolean;
+}
+
 export interface MetersSnapshot {
   tracks: Record<string, TrackMeterReading>;
   master: TrackMeterReading;
+  /** Solo en escritorio: niveles medidos por bus. Si falta, las vistas usan su estimación de siempre. */
+  nativeBuses?: NativeBusLevels | null;
 }
 
 export type RemoteSyncMessage =

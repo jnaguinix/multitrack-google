@@ -4,22 +4,21 @@
  */
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Upload, Music, FolderOpen } from 'lucide-react';
+import { Upload, Music, FolderOpen, AlertTriangle, Trash2 } from 'lucide-react';
 import { audioEngine } from './audio/audioEngine';
-import { inferSongMetadataFromFiles } from './audio/smartAnalyzer';
+import { nativeAudioEngine } from './audio/nativeAudioEngine';
+import { useOptimization } from './hooks/useOptimization';
+import { useProjectActions } from './hooks/useProjectActions';
+import { useSetlist } from './hooks/useSetlist';
+import { useImportFlow } from './hooks/useImportFlow';
+import { useMixerActions } from './hooks/useMixerActions';
+import { useDawDragDrop } from './hooks/useDawDragDrop';
 import {
-  createEmptyProjectTemplate,
   deleteProjectFromDb,
-  findSavedProjectPreset,
   loadAllProjectsFromDb,
-  loadProjectStemsFromDb,
-  mergeSavedProjectMetadata,
-  registerProjectDirHandle,
   relinkProjectSources,
-  requestProjectSourceAccess,
   normalizeProjectSectionsToTime,
   saveProjectToDb,
-  saveStemsBatchToDb,
   StoredAudioStem,
   syncProjectSidecarNow,
 } from './storage/projectDb';
@@ -44,38 +43,45 @@ import { TimelineArranger } from './components/TimelineArranger';
 import { MultitrackMixer } from './components/MultitrackMixer';
 import { StageRemoteView } from './components/StageRemoteView';
 import {
+  scanNativeFolder,
+  deleteProjectNativeCache,
+  pickNativeFolder,
+} from './utils/nativeDialog';
+import {
+  updateDesktopSongFolder,
+} from './storage/desktopLibrary';
+import {
   cleanOrphanPcmDirectories,
-  ensureStoragePersist,
   isOpfsSupported,
   isProjectPcmComplete,
 } from './storage/opfsStorage';
-import { pruneOpfsCache } from './storage/cachePolicy';
 import {
-  extractAudioFilesWithHandlesFromDataTransfer,
   getRegisteredHandle,
   isFsAccessSupported,
 } from './storage/sourceFiles';
 import {
-  optimizeProjectForStreaming,
   PcmOptimizationProgress,
 } from './storage/pcmOptimizer';
-import {
-  extractAudioFilesFromDataTransfer,
-  extractAudioFilesFromFileList,
-  extractSidecarFromFileList,
-  parseWavHeaderFast,
-} from './utils/fileImportHelper';
 import {
   ConfirmSongActionModal,
   inferTrackRoleAndColor,
   LibraryView,
   OptimizationProgressModal,
   SectionEditorModal,
+  SongFingerprintPromptModal,
+  SongMetadataEditModal,
   StemImporterModal,
 } from './components/LibraryAndModals';
+import {
+  FingerprintCandidate,
+} from './audio/fingerprint';
 
-const DesktopRemoteBridge = import.meta.env.VITE_LIBRETRACKS_DESKTOP === '1'
+const DesktopRemoteBridge = import.meta.env.VITE_OMNITRACKS_DESKTOP === '1'
   ? React.lazy(() => import('../desktop/frontend/RemoteConnectionBridge'))
+  : null;
+
+const DesktopAudioSettings = import.meta.env.VITE_OMNITRACKS_DESKTOP === '1'
+  ? React.lazy(() => import('../desktop/frontend/DesktopAudioSettings'))
   : null;
 
 const INITIAL_TRANSPORT: TransportState = {
@@ -141,6 +147,7 @@ export default function App() {
   const [projects, setProjects] = useState<SongProject[]>([]);
   const [currentProject, setCurrentProject] = useState<SongProject | null>(null);
   const [remoteTriggerHost, setRemoteTriggerHost] = useState<HTMLSpanElement | null>(null);
+  const [audioTriggerHost, setAudioTriggerHost] = useState<HTMLSpanElement | null>(null);
   const [transport, setTransport] = useState<TransportState>(INITIAL_TRANSPORT);
   const [ramCacheVersion, setRamCacheVersion] = useState<number>(0);
   const [engineMode, setEngineModeState] = useState<AudioEngineMode>(() =>
@@ -158,13 +165,11 @@ export default function App() {
   const [optimizingProject, setOptimizingProject] = useState<SongProject | null>(null);
   const [optimizationProgress, setOptimizationProgress] =
     useState<PcmOptimizationProgress | null>(null);
-  const optimizationAbortControllerRef = useRef<AbortController | null>(null);
   // Counts in-flight activateProject() calls so next-song preload waits for the active song to finish decoding
   const activationCountRef = useRef(0);
   const runAutoOptimizeRef = useRef<(projectId: string) => void>(() => {});
   const applyPruneRef = useRef<() => void>(() => {});
   const activateProjectRef = useRef<(p: SongProject) => void>(() => {});
-  const autoAbortRef = useRef<Map<string, AbortController>>(new Map());
   const modalProjectIdRef = useRef<string | null>(null);
   const queuedOptimizeIdsRef = useRef<Set<string>>(new Set());
   // Same set as state so the UI can show which songs are being prepared
@@ -177,8 +182,17 @@ export default function App() {
     master: { rms: 0, peak: 0, clipping: false },
   });
 
+  const [songToDeleteFromLibrary, setSongToDeleteFromLibrary] = useState<SongProject | null>(null);
+  const [missingFolderSong, setMissingFolderSong] = useState<SongProject | null>(null);
+  const [editingMetadataSong, setEditingMetadataSong] = useState<SongProject | null>(null);
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
   const [importStatusText, setImportStatusText] = useState<string | null>(null);
+  const [fingerprintPrompt, setFingerprintPrompt] = useState<{
+    candidates: FingerprintCandidate[];
+    incomingTrackCount: number;
+    sourceLabel: string;
+    resolve: (choice: SongProject | null | 'cancel') => void;
+  } | null>(null);
   const [dragOverlayMode, setDragOverlayMode] = useState<'files' | 'repertoire-song' | null>(
     null
   );
@@ -189,6 +203,10 @@ export default function App() {
   const lastBroadcastTransportMsRef = useRef<number>(0);
   const currentProjectRef = useRef<SongProject | null>(currentProject);
   currentProjectRef.current = currentProject;
+  const projectsRef = useRef<SongProject[]>([]);
+  useEffect(() => {
+    projectsRef.current = projects;
+  }, [projects]);
   const transportRef = useRef<TransportState>(transport);
   transportRef.current = transport;
 
@@ -198,6 +216,36 @@ export default function App() {
       setToastMessage((prev) => (prev === msg ? null : prev));
     }, 3400);
   }, []);
+
+  const isDesktopApp = typeof window !== 'undefined' && Boolean((window as any).__TAURI__);
+  const [isDeviceDisconnected, setIsDeviceDisconnected] = useState(false);
+  const [missingNativeCache, setMissingNativeCache] = useState(false);
+  const [isGeneratingNativeCache, setIsGeneratingNativeCache] = useState(false);
+  const [nativeCacheProgress, setNativeCacheProgress] = useState<{ percent: number; text: string }>({ percent: 0, text: '' });
+
+  useEffect(() => {
+    if (isDesktopApp) {
+      nativeAudioEngine.setOnDeviceDisconnected((disconnected) => {
+        setIsDeviceDisconnected(disconnected);
+      });
+    }
+  }, [isDesktopApp]);
+
+  useEffect(() => {
+    if (isDesktopApp && currentProject && currentProject.tracks.length > 0) {
+      if (nativeAudioEngine.isProjectImporting(currentProject.id)) {
+        setMissingNativeCache(false);
+        return;
+      }
+      nativeAudioEngine.checkProjectCacheStatus(currentProject).then((st) => {
+        if (!nativeAudioEngine.isProjectImporting(currentProject.id)) {
+          setMissingNativeCache(!st.isReady);
+        }
+      });
+    } else {
+      setMissingNativeCache(false);
+    }
+  }, [currentProject?.id, isDesktopApp]);
 
   // Derived ordered Setlist Queue
   const setlistQueue = useMemo(() => {
@@ -213,6 +261,26 @@ export default function App() {
     });
     return unsubscribeCache;
   }, []);
+
+  // Escritorio: la caché PCM nativa avisa por nativeAudioEngine (no por audioEngine). Sin esta
+  // suscripción las tarjetas del setlist y de En vivo no se redibujan al avanzar/terminar la generación.
+  useEffect(() => {
+    if (!isDesktopApp) return;
+    return nativeAudioEngine.subscribeCache(() => {
+      setRamCacheVersion((v) => v + 1);
+    });
+  }, [isDesktopApp]);
+
+  // Escritorio: consultar el estado real de la caché de cada canción del setlist al abrir la app
+  // y cada vez que cambia el conjunto de canciones/pistas.
+  const setlistCacheKey = setlistQueue.map((s) => `${s.id}:${s.tracks.length}`).join('|');
+  useEffect(() => {
+    if (!isDesktopApp || setlistQueue.length === 0) return;
+    nativeAudioEngine.refreshCacheStatuses(setlistQueue).catch((err) => {
+      console.error('[Cache] Error consultando el estado de la caché del setlist:', err);
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isDesktopApp, setlistCacheKey]);
 
   // 2. CACHÉ Y PRECARGA DE LA SIGUIENTE CANCIÓN:
   // Cuando una canción del setlist queda activa o el setlist cambia, recalcula cuál es la siguiente
@@ -271,216 +339,103 @@ export default function App() {
 
   // The manual "Optimizar" button and the automatic background cache are ONE job:
   // pressing the button while the song is already being prepared just shows its progress.
-  const handleStartOptimizeProject = useCallback((projectToOptimize: SongProject) => {
-    modalProjectIdRef.current = projectToOptimize.id;
-    setOptimizingProject(projectToOptimize);
-    setOptimizationProgress({
-      currentTrackIndex: 0,
-      totalTracks: projectToOptimize.tracks.length,
-      trackName: queuedOptimizeIdsRef.current.has(projectToOptimize.id)
-        ? 'Ya se está preparando en segundo plano…'
-        : 'En cola…',
-      percent: 0,
-      phase: 'checking',
-    });
-    runAutoOptimizeRef.current(projectToOptimize.id);
-  }, []);
+  const {
+    handleStartOptimizeProject,
+    handleCancelOptimization,
+    applyPrune,
+    runAutoOptimize,
+    ensureSourceAccess,
+  } = useOptimization({
+    isDesktopApp,
+    showToast,
+    projectsRef,
+    currentProjectRef,
+    activateProjectRef,
+    setProjects,
+    setCurrentProject,
+    setIsGeneratingNativeCache,
+    setNativeCacheProgress,
+    setMissingNativeCache,
+    setOptimizingProject,
+    setOptimizationProgress,
+    setPreparingIds,
+    setImportStatusText,
+    runAutoOptimizeRef,
+    applyPruneRef,
+    queuedOptimizeIdsRef,
+    modalProjectIdRef,
+  });
 
-  const handleCancelOptimization = useCallback(() => {
-    const id = modalProjectIdRef.current;
-    if (id) autoAbortRef.current.get(id)?.abort();
-    optimizationAbortControllerRef.current?.abort();
-  }, []);
-
-  // ---------------------------------------------------------------------------
-  // Reference-based library + automatic OPFS cache
-  // ---------------------------------------------------------------------------
-  const projectsRef = useRef<SongProject[]>([]);
-  useEffect(() => {
-    projectsRef.current = projects;
-  }, [projects]);
-
-  const autoOptimizeChainRef = useRef<Promise<void>>(Promise.resolve());
-  const accessPromisesRef = useRef<Map<string, Promise<void>>>(new Map());
-
-  const applyPrune = useCallback(async () => {
-    try {
-      const result = await pruneOpfsCache(
-        projectsRef.current,
-        currentProjectRef.current ? [currentProjectRef.current.id] : []
-      );
-      if (result.prunedIds.length === 0) return;
-      const pruned = new Set(result.prunedIds);
-      const strip = (p: SongProject): SongProject =>
-        pruned.has(p.id)
-          ? { ...p, tracks: p.tracks.map(({ pcm: _pcm, ...rest }) => rest) }
-          : p;
-      setProjects((prev) => prev.map(strip));
-      showToast(
-        `Caché liberada: ${result.prunedIds.length} canción(es) fuera del setlist (${(result.freedBytes / 1048576).toFixed(0)} MB). Siguen en la biblioteca.`
-      );
-    } catch (err) {
-      console.warn('[CachePolicy] Error limpiando caché OPFS:', err);
-    }
-  }, [showToast]);
   useEffect(() => {
     applyPruneRef.current = applyPrune;
   }, [applyPrune]);
 
-  // Copies a song's audio into OPFS once (sequential queue, silent, in the background)
-  const runAutoOptimize = useCallback(
-    (projectId: string) => {
-      if (!isOpfsSupported()) return;
-      if (queuedOptimizeIdsRef.current.has(projectId)) return;
-      queuedOptimizeIdsRef.current.add(projectId);
-      setPreparingIds(new Set(queuedOptimizeIdsRef.current));
-      const controller = new AbortController();
-      autoAbortRef.current.set(projectId, controller);
-
-      autoOptimizeChainRef.current = autoOptimizeChainRef.current.then(async () => {
-        try {
-          if (controller.signal.aborted) {
-            throw new DOMException('cancelado', 'AbortError');
-          }
-          const proj = projectsRef.current.find((p) => p.id === projectId);
-          if (!proj || proj.tracks.length === 0) return;
-          if (await isProjectPcmComplete(proj)) return;
-
-          const stems = await loadProjectStemsFromDb(projectId);
-          if (!stems.some((s) => !s.unavailable)) {
-            showToast(
-              `"${proj.title}": no se pudo leer el audio original. Usa "Reubicar archivos" en la Biblioteca.`
-            );
-            return;
-          }
-
-          const patchTrack = (
-            p: SongProject,
-            trackId: string,
-            info: { peaks: number[]; durationSec: number }
-          ): SongProject =>
-            p.id !== projectId
-              ? p
-              : {
-                  ...p,
-                  tracks: p.tracks.map((t) =>
-                    t.id === trackId ? { ...t, peaks: info.peaks, durationSec: info.durationSec } : t
-                  ),
-                };
-
-          const updated = await optimizeProjectForStreaming(
-            proj,
-            (progress) => {
-              setImportStatusText(
-                `Preparando "${proj.title}": ${progress.percent}% (pista ${progress.currentTrackIndex}/${progress.totalTracks})`
-              );
-              if (modalProjectIdRef.current === projectId) setOptimizationProgress(progress);
-            },
-            controller.signal,
-            {
-              onlyMissing: true,
-              onTrackDone: (trackId, info) => {
-                setProjects((prev) => prev.map((p) => patchTrack(p, trackId, info)));
-                setCurrentProject((prev) => (prev ? patchTrack(prev, trackId, info) : prev));
-              },
-            }
-          );
-
-          // Merge pcm + peaks + exact duration into the latest project state (keeps edits made meanwhile)
-          const latest = projectsRef.current.find((p) => p.id === projectId) || updated;
-          const byId = new Map(updated.tracks.map((t) => [t.id, t]));
-          const maxDur = Math.max(0, ...updated.tracks.map((t) => t.durationSec || 0));
-          const secPerBar = (60 / (latest.bpm || 120)) * (latest.beatsPerBar || 4);
-          const merged: SongProject = {
-            ...latest,
-            durationSec: maxDur > 1 ? maxDur : latest.durationSec,
-            totalBars: maxDur > 1 ? Math.max(4, Math.ceil(maxDur / secPerBar)) : latest.totalBars,
-            tracks: latest.tracks.map((t) => {
-              const u = byId.get(t.id);
-              return u?.pcm
-                ? { ...t, pcm: u.pcm, peaks: u.peaks, durationSec: u.durationSec }
-                : t;
-            }),
-          };
-          audioEngine.clearProjectFallback(projectId);
-          setProjects((prev) => prev.map((p) => (p.id === projectId ? merged : p)));
-          saveProjectToDb(merged).catch(() => {});
-
-          if (!(await isProjectPcmComplete(merged))) {
-            showToast(
-              `"${merged.title}": algunas pistas no se pudieron convertir. Revisa que los archivos originales existan (Biblioteca → Reubicar archivos).`
-            );
-          } else {
-            showToast(`"${merged.title}" lista para tocar`);
-          }
-
-          // The song is mounted in the console as an empty shell: load it from the new cache
-          if (currentProjectRef.current?.id === projectId) {
-            if (!audioEngine.hasPlayableAudio()) {
-              activateProjectRef.current(merged);
-            } else {
-              setCurrentProject(merged);
-            }
-          }
-          applyPruneRef.current();
-        } catch (err) {
-          if ((err as { name?: string })?.name === 'AbortError') {
-            showToast('Preparación cancelada. Puedes reanudarla con "Optimizar para streaming".');
-          } else {
-            console.error('[AutoOptimize] Falló la copia a OPFS:', err);
-            showToast(
-              `No se pudo preparar la canción: ${err instanceof Error ? err.message : String(err)}`
-            );
-          }
-        } finally {
-          queuedOptimizeIdsRef.current.delete(projectId);
-          setPreparingIds(new Set(queuedOptimizeIdsRef.current));
-          autoAbortRef.current.delete(projectId);
-          setImportStatusText(null);
-          if (modalProjectIdRef.current === projectId) {
-            modalProjectIdRef.current = null;
-            setOptimizingProject(null);
-            setOptimizationProgress(null);
-          }
-        }
-      });
-    },
-    [showToast]
-  );
   useEffect(() => {
     runAutoOptimizeRef.current = runAutoOptimize;
   }, [runAutoOptimize]);
 
-  // Makes the original files of a song readable (one permission prompt per folder); de-duplicated
-  const ensureSourceAccess = useCallback(
-    (projectId: string): Promise<void> => {
-      const existing = accessPromisesRef.current.get(projectId);
-      if (existing) return existing;
-      const task = (async () => {
-        try {
-          const res = await requestProjectSourceAccess(projectId);
-          if (res.total === 0) return;
-          if (res.missing.length > 0) {
-            showToast(
-              `No se encuentran ${res.missing.length} archivo(s) originales. Usa "Reubicar archivos" en la Biblioteca.`
-            );
-          } else if (res.denied.length > 0) {
-            showToast('Falta permiso para leer la carpeta original de esta canción.');
-          }
-        } catch (err) {
-          console.warn('[SourceAccess] Error solicitando acceso:', err);
-        } finally {
-          accessPromisesRef.current.delete(projectId);
-        }
-      })();
-      accessPromisesRef.current.set(projectId, task);
-      return task;
-    },
-    [showToast]
-  );
-
   const handleRelinkProject = useCallback(
     async (proj: SongProject) => {
+      if (isDesktopApp) {
+        try {
+          const folder = await pickNativeFolder();
+          if (!folder) return;
+          const scanned = await scanNativeFolder(folder);
+          if (scanned.files.length === 0) {
+            showToast(`No se encontraron pistas de audio compatibles en "${folder}".`);
+            return;
+          }
+          await updateDesktopSongFolder(proj.id, folder);
+          const updatedTracks = proj.tracks.map((t) => {
+            const match = scanned.files.find(
+              (f) =>
+                f.trackName.toLowerCase() === t.name.toLowerCase() ||
+                f.fileName.toLowerCase() === (t.fileName || '').toLowerCase()
+            );
+            if (match) {
+              return {
+                ...t,
+                filePath: match.filePath,
+                fileName: match.fileName,
+              };
+            }
+            return t;
+          });
+
+          const updatedProj: SongProject = {
+            ...proj,
+            folderPath: folder,
+            tracks: updatedTracks,
+            updatedAt: Date.now(),
+          };
+
+          setProjects((prev) =>
+            prev.map((p) => (p.id === proj.id ? updatedProj : p))
+          );
+          if (currentProjectRef.current?.id === proj.id) {
+            setCurrentProject(updatedProj);
+          }
+          await saveProjectToDb(updatedProj);
+          showToast(`Carpeta reubicada para "${proj.title}".`);
+
+          if (updatedProj.inSetlist) {
+            nativeAudioEngine
+              .generateNativeCacheForProject(updatedProj)
+              .then((ok) => {
+                if (!ok) showToast(`No se pudo regenerar la caché de "${updatedProj.title}".`);
+              })
+              .catch((err: any) => {
+                console.error('[Relink] Error regenerando caché:', err);
+                showToast(`Error al regenerar la caché de "${updatedProj.title}": ${err?.message || err}`);
+              });
+          }
+        } catch (err) {
+          console.error('[Relink] Error reubicando carpeta en escritorio:', err);
+          showToast(`Error al reubicar carpeta: ${err}`);
+        }
+        return;
+      }
+
       if (!isFsAccessSupported()) {
         showToast('Tu navegador no permite reubicar carpetas (usa Chrome o Edge).');
         return;
@@ -508,7 +463,7 @@ export default function App() {
         }
       }
     },
-    [runAutoOptimize, showToast]
+    [isDesktopApp, runAutoOptimize, showToast]
   );
 
   const handleChangeEngineMode = useCallback(
@@ -602,7 +557,7 @@ export default function App() {
 
         // Never start spontaneous playback after a slow disk load;
         // only play if explicitly requested AND the song was already 100% ready in RAM / staged streaming
-        if (explicitPlayIfAlreadyInRam && cameFromCache && audioEngine.hasPlayableAudio()) {
+        if (explicitPlayIfAlreadyInRam && (cameFromCache || isDesktopApp) && audioEngine.hasPlayableAudio()) {
           audioEngine.play();
         }
       } catch (err) {
@@ -749,7 +704,7 @@ export default function App() {
   // Setup BroadcastChannel for multi-tab / tablet Stage Remote control
   useEffect(() => {
     if (typeof BroadcastChannel === 'undefined') return;
-    const bc = new BroadcastChannel('libretracks_remote_sync');
+    const bc = new BroadcastChannel('omnitracks_remote_sync');
     channelRef.current = bc;
 
     bc.onmessage = (ev: MessageEvent<RemoteSyncMessage>) => {
@@ -853,350 +808,19 @@ export default function App() {
     window.history.replaceState(null, '', `#${view}`);
   };
 
-  /**
-   * INSTANT NON-BLOCKING STEM & FOLDER IMPORT PIPELINE
-   * Uses controlled parallel decoding (batches of 3), immediate SetlistRamCache storage,
-   * and a single atomic IndexedDB transaction storing native File Blobs.
-   */
-  const handleInstantImportFiles = useCallback(
-    async (
-      fileList: FileList | File[],
-      defaultBus: OutputBus = 'main',
-      importMode: 'new-song' | 'current-song' = 'new-song'
-    ) => {
-      const t0 = performance.now();
-      const validFiles = extractAudioFilesFromFileList(fileList);
+  const { handleInstantImportFiles, handleImportNative } = useImportFlow({
+    projects,
+    projectsRef,
+    currentProjectRef,
+    setProjects,
+    setCurrentProject,
+    showToast,
+    setImportStatusText,
+    setFingerprintPrompt,
+    setMissingNativeCache,
+    runAutoOptimizeRef,
+  });
 
-      if (validFiles.length === 0) {
-        showToast('No se encontraron archivos de audio compatibles (.wav, .mp3, .ogg, .flac, .m4a)');
-        return;
-      }
-
-      const effectiveMode =
-        importMode === 'current-song' && currentProjectRef.current
-          ? 'current-song'
-          : 'new-song';
-
-      const baseTimestamp = Date.now();
-      const targetProjectId =
-        effectiveMode === 'new-song'
-          ? `song-${baseTimestamp}`
-          : currentProjectRef.current!.id;
-
-      const { songTitle, detectedBpm, detectedKey, cleanTrackNames } =
-        inferSongMetadataFromFiles(validFiles);
-
-      // Check if the imported folder contains an omnitracks.project.json sidecar (or local preset memory)
-      const folderSidecar =
-        effectiveMode === 'new-song' ? await extractSidecarFromFileList(fileList) : null;
-      const savedMetadata =
-        effectiveMode === 'new-song'
-          ? folderSidecar ||
-            findSavedProjectPreset(
-              songTitle,
-              validFiles.map((f) => f.name)
-            )
-          : null;
-
-      const bpm =
-        effectiveMode === 'new-song'
-          ? savedMetadata?.bpm || detectedBpm || 120
-          : currentProjectRef.current!.bpm;
-      const beatsPerBar =
-        effectiveMode === 'new-song'
-          ? savedMetadata?.beatsPerBar || 4
-          : currentProjectRef.current!.beatsPerBar;
-      const secPerBar = (60 / bpm) * beatsPerBar;
-
-      // Request storage persistence in background without blocking
-      ensureStoragePersist().catch(() => {});
-
-      // =========================================================================
-      // PHASE 1: SUB-MILLISECOND WAV HEADER INSPECTION & INSTANT UI/ENGINE MOUNT
-      // =========================================================================
-      const wavHeaders = await Promise.all(validFiles.map((f) => parseWavHeaderFast(f)));
-
-      const initialTracks: TrackChannel[] = [];
-      const stemsToSaveBatch: StoredAudioStem[] = [];
-      let headerMaxDurationSec = 0;
-
-      for (let idx = 0; idx < validFiles.length; idx++) {
-        const file = validFiles[idx];
-        const trackId = `stem-${baseTimestamp}-${String(idx).padStart(2, '0')}`;
-        const trackLabel = cleanTrackNames[idx] || file.name.replace(/\.[^/.]+$/, '');
-        const inferred = inferTrackRoleAndColor(trackLabel, idx);
-        const wavInfo = wavHeaders[idx];
-        const estDuration = wavInfo?.durationSec || 0;
-
-        if (estDuration > headerMaxDurationSec) {
-          headerMaxDurationSec = estDuration;
-        }
-
-        const newTrack: TrackChannel = {
-          id: trackId,
-          name: trackLabel,
-          role: inferred.role,
-          color: inferred.color,
-          gain: 1.0,
-          pan: 0,
-          muted: false,
-          soloed: false,
-          bus: inferred.bus === 'cue-click' ? 'cue-click' : defaultBus,
-          peaks: [],
-          isCustomAudio: true,
-          fileName: file.name,
-          durationSec: estDuration > 0 ? estDuration : undefined,
-        };
-
-        initialTracks.push(newTrack);
-        // Reference-based library: keep a handle to the original file when the browser gives
-        // one (Chrome/Edge); otherwise fall back to copying the Blob into IndexedDB.
-        const sourceHandle = getRegisteredHandle(file);
-        if (sourceHandle?.dir) {
-          registerProjectDirHandle(targetProjectId, sourceHandle.dir);
-        }
-        stemsToSaveBatch.push(
-          sourceHandle
-            ? {
-                key: `${targetProjectId}:${trackId}`,
-                projectId: targetProjectId,
-                trackId,
-                fileHandle: sourceHandle.file,
-                dirHandle: sourceHandle.dir,
-                mimeType: file.type || 'audio/wav',
-                fileName: file.name,
-              }
-            : {
-                key: `${targetProjectId}:${trackId}`,
-                projectId: targetProjectId,
-                trackId,
-                blob: file,
-                mimeType: file.type || 'audio/wav',
-                fileName: file.name,
-              }
-        );
-      }
-
-      const initialDurationSec =
-        headerMaxDurationSec > 1
-          ? headerMaxDurationSec
-          : effectiveMode === 'current-song'
-          ? currentProjectRef.current?.durationSec || 180
-          : savedMetadata?.durationSec && savedMetadata.durationSec > 1
-          ? savedMetadata.durationSec
-          : 180;
-
-      const initialBars = Math.max(4, Math.ceil(initialDurationSec / secPerBar));
-      let effectiveSongTitle = songTitle;
-      let restoredSectionsCount = 0;
-
-      if (effectiveMode === 'new-song') {
-        const baseSongProject: SongProject = {
-          id: targetProjectId,
-          title: songTitle,
-          artist: 'Sesión Importada',
-          folder: 'imported',
-          inSetlist: true,
-          setlistOrder: projects.length,
-          bpm,
-          beatsPerBar: 4,
-          beatUnit: 4,
-          keySignature: detectedKey || 'C Major',
-          totalBars: initialBars,
-          durationSec: initialDurationSec,
-          quantizeMode: 'immediate',
-          splitRoutingMode: 'stereo',
-          clickEnabled: false,
-          clickGain: 1.0,
-          clickSubdivision: 1,
-          guideCuesEnabled: true,
-          guideVoiceReadout: true,
-          guideGain: 1.0,
-          masterGain: 1.0,
-          cueMasterGain: 1.0,
-          pitchSemitones: 0,
-          sections: [],
-          tracks: initialTracks,
-          updatedAt: Date.now(),
-        };
-
-        const newSongProject: SongProject = savedMetadata
-          ? mergeSavedProjectMetadata(baseSongProject, savedMetadata)
-          : baseSongProject;
-
-        effectiveSongTitle = newSongProject.title;
-        restoredSectionsCount = newSongProject.sections.length;
-
-        // Mount project shell and mixer nodes in < 1 ms
-        audioEngine.prepareProjectShell(newSongProject);
-        setCurrentProject(newSongProject);
-        setProjects((prev) => [newSongProject, ...prev]);
-        saveProjectToDb(newSongProject).catch(() => {});
-      } else {
-        const current = currentProjectRef.current!;
-        const combinedTracks = [...current.tracks, ...initialTracks];
-        const nextDurationSec = Math.max(current.durationSec || 0, initialDurationSec);
-        const nextTotalBars = Math.max(current.totalBars, initialBars);
-
-        const updatedProject: SongProject = {
-          ...current,
-          totalBars: nextTotalBars,
-          durationSec: nextDurationSec,
-          tracks: combinedTracks,
-          updatedAt: Date.now(),
-        };
-
-        audioEngine.updateProjectConfig(updatedProject);
-        setCurrentProject(updatedProject);
-        setProjects((prev) =>
-          prev.map((p) => (p.id === updatedProject.id ? updatedProject : p))
-        );
-        saveProjectToDb(updatedProject).catch(() => {});
-      }
-
-      // Save native File Blob pointers to IndexedDB in background (zero re-encoding)
-      const stemsSavePromise = saveStemsBatchToDb(stemsToSaveBatch).catch((err) =>
-        console.warn('Background IndexedDB batch stem save warning:', err)
-      );
-
-      const mountMs = performance.now() - t0;
-      console.info(
-        `[AudioEngine][InstantImport] "${effectiveSongTitle}" (${initialTracks.length} pistas, ${restoredSectionsCount} marcadores) montada en consola en ${mountMs.toFixed(1)} ms`
-      );
-
-      // Single-pass pipeline: decode each stem ONCE, straight into the OPFS cache (peaks and
-      // duration come from the same pass). No RAM decode of the whole song at import time.
-      if (effectiveMode === 'new-song' && isOpfsSupported()) {
-        showToast(
-          restoredSectionsCount > 0
-            ? `"${effectiveSongTitle}" importada (${initialTracks.length} pistas · ${restoredSectionsCount} marcadores restaurados). Preparando audio…`
-            : `"${effectiveSongTitle}" importada (${initialTracks.length} pistas). Preparando el audio en segundo plano…`
-        );
-        await stemsSavePromise;
-        runAutoOptimizeRef.current(targetProjectId);
-        return;
-      }
-
-      showToast(
-        effectiveMode === 'new-song'
-          ? restoredSectionsCount > 0
-            ? `Canción "${effectiveSongTitle}" montada (${initialTracks.length} pistas · ${restoredSectionsCount} marcadores restaurados)`
-            : `Canción "${effectiveSongTitle}" montada en ${Math.max(1, Math.round(mountMs))} ms (${initialTracks.length} pistas)`
-          : `${initialTracks.length} stem(s) montado(s) en ${Math.max(1, Math.round(mountMs))} ms`
-      );
-
-      // =========================================================================
-      // PHASE 2: PARALLEL NATIVE C++ AUDIO BUFFER HYDRATION (ZERO OPFS WRITES)
-      // =========================================================================
-      let completedCount = 0;
-      let maxDecodedDurationSec = headerMaxDurationSec;
-      let anyDecoded = false;
-
-      setImportStatusText(
-        `Preparando audio 0/${validFiles.length} en segundo plano...`
-      );
-
-      const BATCH_SIZE = 4;
-      for (let i = 0; i < validFiles.length; i += BATCH_SIZE) {
-        const batchFiles = validFiles.slice(i, i + BATCH_SIZE);
-        const batchTracks = initialTracks.slice(i, i + BATCH_SIZE);
-
-        await Promise.all(
-          batchFiles.map(async (file, batchIdx) => {
-            const trk = batchTracks[batchIdx];
-            try {
-              const rawBuf = await file.arrayBuffer();
-              const { audioBuffer, peaks, durationSec } =
-                await audioEngine.decodeStemBuffer(rawBuf, trk.name, false);
-
-              anyDecoded = true;
-              completedCount++;
-              if (durationSec > maxDecodedDurationSec) {
-                maxDecodedDurationSec = durationSec;
-              }
-
-              setImportStatusText(
-                completedCount < validFiles.length
-                  ? `Preparando audio ${completedCount}/${validFiles.length}: ${trk.name}`
-                  : null
-              );
-
-              const enrichedTrack: TrackChannel = {
-                ...trk,
-                peaks,
-                durationSec,
-              };
-
-              // If this project is still the active project in the console, mount buffer live
-              if (currentProjectRef.current?.id === targetProjectId) {
-                audioEngine.mountDecodedTrack(enrichedTrack, audioBuffer);
-              } else {
-                // Otherwise store in RAM cache for instant switching
-                const cachedMap =
-                  audioEngine.getCachedProjectBuffers(targetProjectId) ||
-                  new Map<string, AudioBuffer>();
-                cachedMap.set(trk.id, audioBuffer);
-                audioEngine.storeProjectBuffersInRamCache(targetProjectId, cachedMap);
-              }
-
-              // Update track peaks & duration progressively in React state
-              const updateProjectWithTrack = (proj: SongProject): SongProject => {
-                if (proj.id !== targetProjectId) return proj;
-                const nextDur = Math.max(
-                  headerMaxDurationSec > 0 ? proj.durationSec || 0 : 0,
-                  maxDecodedDurationSec
-                );
-                const finalDur = nextDur > 0 ? nextDur : proj.durationSec || 180;
-                const finalBars = Math.max(4, Math.ceil(finalDur / secPerBar));
-                return {
-                  ...proj,
-                  durationSec: finalDur,
-                  totalBars: finalBars,
-                  tracks: proj.tracks.map((t) =>
-                    t.id === enrichedTrack.id
-                      ? { ...t, peaks, durationSec }
-                      : t
-                  ),
-                };
-              };
-
-              setCurrentProject((prev) =>
-                prev && prev.id === targetProjectId ? updateProjectWithTrack(prev) : prev
-              );
-              setProjects((prev) =>
-                prev.map((p) =>
-                  p.id === targetProjectId ? updateProjectWithTrack(p) : p
-                )
-              );
-            } catch (err) {
-              completedCount++;
-              console.error(
-                `[AudioEngine][Import Decode Error] Falló "${trk.name}":`,
-                err
-              );
-            }
-          })
-        );
-      }
-
-      setImportStatusText(null);
-
-      if (!anyDecoded) {
-        showToast('No se pudo decodificar el audio seleccionado');
-        return;
-      }
-
-      // Persist final peaks and exact duration to IndexedDB
-      if (currentProjectRef.current?.id === targetProjectId) {
-        saveProjectToDb(currentProjectRef.current).catch(() => {});
-      }
-
-      // One-time background copy into the OPFS cache (the song is in the setlist from import)
-      await stemsSavePromise;
-      runAutoOptimizeRef.current(targetProjectId);
-    },
-    [projects.length, showToast]
-  );
 
   // Add a Section Marker directly at the current playhead time (mm:ss.d)
   const handleAddMarkerAtPlayhead = () => {
@@ -1251,328 +875,127 @@ export default function App() {
     showToast(`Marcador creado en ${formatTimecode(clampedStart)}`);
   };
 
-  // Transport & Mixer Handlers
-  const handlePlayPause = () => audioEngine.togglePlayPause();
-  const handleStop = () => audioEngine.stop();
-  const handleToggleVamp = () => audioEngine.toggleVamp();
-  const handleJumpSection = (sectionId: string) => audioEngine.queueSectionJump(sectionId);
-  const handleCancelQueuedJump = () => audioEngine.cancelQueuedJump();
-  const handleSeekSeconds = (sec: number) => audioEngine.seekToSeconds(sec);
+  const {
+    handlePlayPause,
+    handleStop,
+    handleToggleVamp,
+    handleJumpSection,
+    handleCancelQueuedJump,
+    handleSeekSeconds,
+    handleChangeBpm,
+    handleChangePitch,
+    handleChangeQuantize,
+    handleToggleClick,
+    handleToggleGuide,
+    handleToggleSplitRouting,
+    handleToggleTrackMute,
+    handleToggleTrackSolo,
+    handleChangeTrackGain,
+    handleChangeTrackPan,
+    handleChangeTrackBus,
+    handleDeleteTrack,
+    handleResetMixer,
+    handleSaveSections,
+  } = useMixerActions({
+    audioEngine,
+    updateCurrentProject,
+    showToast,
+    syncProjectSidecarNow,
+  });
 
-  const handleChangeBpm = (bpm: number) => {
-    updateCurrentProject((p) => ({ ...p, bpm }));
-  };
+  const {
+    handleLoadProjectImmediately,
+    handleCreateNewProject,
+    handleUpdateSongMetadata,
+    handleDeleteProject,
+    handleExportJson,
+    handleImportJsonFile,
+  } = useProjectActions({
+    projects,
+    projectsRef,
+    currentProject,
+    currentProjectRef,
+    setProjects,
+    setCurrentProject,
+    showToast,
+    isDesktopApp,
+    queuedOptimizeIdsRef,
+    ensureSourceAccess,
+    runAutoOptimize,
+    activateProject,
+    activeView,
+    handleSelectView,
+    setSongToDeleteFromLibrary,
+  });
 
-  const handleChangePitch = (pitchSemitones: number) => {
-    updateCurrentProject((p) => ({ ...p, pitchSemitones }));
-  };
+  const {
+    handleAddToSetlist,
+    handleRemoveFromSetlist,
+    handleClearSetlist,
+    handleReorderSetlist,
+    handleSetAsNextSong,
+    handleMoveInSetlist,
+  } = useSetlist({
+    projectsRef,
+    currentProject,
+    currentProjectRef,
+    setProjects,
+    setCurrentProject,
+    showToast,
+    isDesktopApp,
+    setMissingNativeCache,
+    ensureSourceAccess,
+    runAutoOptimize,
+    setMissingFolderSong,
+    transport,
+    setlistQueue,
+    handleLoadProjectImmediately,
+  });
 
-  const handleChangeQuantize = (quantizeMode: QuantizeMode) => {
-    updateCurrentProject((p) => ({ ...p, quantizeMode }));
-  };
+  const confirmDeleteFromLibrary = async () => {
+    if (!songToDeleteFromLibrary) return;
+    const song = songToDeleteFromLibrary;
+    setSongToDeleteFromLibrary(null);
 
-  const handleToggleClick = () => {
-    updateCurrentProject((p) => ({ ...p, clickEnabled: !p.clickEnabled }));
-  };
-
-  const handleToggleGuide = () => {
-    updateCurrentProject((p) => ({ ...p, guideCuesEnabled: !p.guideCuesEnabled }));
-  };
-
-  const handleToggleSplitRouting = () => {
-    updateCurrentProject((p) => ({
-      ...p,
-      splitRoutingMode: p.splitRoutingMode === 'stereo' ? 'split-mono' : 'stereo',
-    }));
-  };
-
-  const handleToggleTrackMute = (trackId: string) => {
-    updateCurrentProject((p) => ({
-      ...p,
-      tracks: p.tracks.map((t) => (t.id === trackId ? { ...t, muted: !t.muted } : t)),
-    }));
-  };
-
-  const handleToggleTrackSolo = (trackId: string) => {
-    updateCurrentProject((p) => ({
-      ...p,
-      tracks: p.tracks.map((t) => (t.id === trackId ? { ...t, soloed: !t.soloed } : t)),
-    }));
-  };
-
-  const handleChangeTrackGain = (trackId: string, gain: number) => {
-    updateCurrentProject((p) => ({
-      ...p,
-      tracks: p.tracks.map((t) => (t.id === trackId ? { ...t, gain } : t)),
-    }));
-  };
-
-  const handleChangeTrackPan = (trackId: string, pan: number) => {
-    updateCurrentProject((p) => ({
-      ...p,
-      tracks: p.tracks.map((t) => (t.id === trackId ? { ...t, pan } : t)),
-    }));
-  };
-
-  const handleChangeTrackBus = (trackId: string, bus: OutputBus) => {
-    updateCurrentProject((p) => ({
-      ...p,
-      tracks: p.tracks.map((t) => (t.id === trackId ? { ...t, bus } : t)),
-    }));
-  };
-
-  const handleDeleteTrack = (trackId: string) => {
-    audioEngine.removeTrack(trackId);
-    updateCurrentProject((p) => ({
-      ...p,
-      tracks: p.tracks.filter((t) => t.id !== trackId),
-    }));
-    showToast('Pista eliminada del proyecto');
-  };
-
-  const handleResetMixer = () => {
-    updateCurrentProject((p) => ({
-      ...p,
-      clickGain: 1.0,
-      clickPan: 0,
-      guideGain: 1.0,
-      guidePan: 0,
-      masterGain: 1.0,
-      cueMasterGain: 1.0,
-      tracks: p.tracks.map((t) => ({
-        ...t,
-        gain: 1.0,
-        pan: 0,
-        muted: false,
-        soloed: false,
-      })),
-    }));
-    showToast('Mezcla restablecida a 0.0 dB');
-  };
-
-  // Section Arrangement Save Handler (Time-based mm:ss)
-  const handleSaveSections = (sections: SongSection[]) => {
-    updateCurrentProject((prev) => {
-      const next: SongProject = {
-        ...prev,
-        sections,
-      };
-      syncProjectSidecarNow(next, true).catch(() => {});
-      return next;
-    });
-    showToast('Marcadores de sección (mm:ss) guardados en canción y carpeta');
-  };
-
-  // Load Song Immediately into DAW (Used when confirmed in modal, clicked Play on Setlist card, or dragged onto DAW)
-  const handleLoadProjectImmediately = async (projectId: string, autoPlay = false) => {
-    const found = projects.find((p) => p.id === projectId);
-    if (!found) return;
-    if (isOpfsSupported() && queuedOptimizeIdsRef.current.has(projectId)) {
-      showToast(`"${found.title}" se está preparando en segundo plano; espera a que termine.`);
-      return;
-    }
-    // Songs already cached in OPFS don't need the original files; others do
-    if (!audioEngine.isProjectPcmReady(found)) {
-      await ensureSourceAccess(projectId);
-    }
-    await activateProject(found, undefined, autoPlay);
-    if (activeView === 'library') {
-      handleSelectView('setlist');
-    }
-    showToast(`Canción montada en consola: ${found.title}`);
-  };
-
-  // Setlist Management Handlers
-  const handleAddToSetlist = (projectId: string) => {
-    // Adding to the setlist = copy the audio into the OPFS cache once (in the background)
-    const alreadyCached = (() => {
-      const p = projectsRef.current.find((x) => x.id === projectId);
-      return !p || (p.tracks.length > 0 && p.tracks.every((t) => t.pcm && t.pcm.frames > 0));
-    })();
-    if (!alreadyCached) {
-      ensureSourceAccess(projectId).then(() => runAutoOptimize(projectId));
-    }
-    setProjects((prev) => {
-      const maxOrder = prev.reduce(
-        (max, item) =>
-          item.inSetlist ? Math.max(max, item.setlistOrder ?? 0) : max,
-        -1
-      );
-      return prev.map((p) => {
-        if (p.id !== projectId) return p;
-        const updated: SongProject = {
-          ...p,
-          inSetlist: true,
-          setlistOrder: p.inSetlist ? p.setlistOrder : maxOrder + 1,
-        };
-        saveProjectToDb(updated).catch(() => {});
-        if (currentProject?.id === projectId) {
-          setCurrentProject(updated);
-        }
-        showToast(`"${p.title}" añadida al Setlist`);
-        return updated;
-      });
-    });
-  };
-
-  const handleRemoveFromSetlist = (projectId: string) => {
-    setProjects((prev) =>
-      prev.map((p) => {
-        if (p.id !== projectId) return p;
-        const updated: SongProject = { ...p, inSetlist: false };
-        saveProjectToDb(updated).catch(() => {});
-        if (currentProject?.id === projectId) {
-          setCurrentProject(updated);
-        }
-        return updated;
-      })
-    );
-    showToast('Canción quitada del Setlist');
-  };
-
-  const handleReorderSetlist = (fromIndex: number, toIndex: number) => {
-    const queue = [...setlistQueue];
-    const [moved] = queue.splice(fromIndex, 1);
-    if (!moved) return;
-    queue.splice(toIndex, 0, moved);
-
-    const orderMap = new Map<string, number>();
-    queue.forEach((item, idx) => orderMap.set(item.id, idx));
-
-    setProjects((prev) =>
-      prev.map((p) => {
-        if (!orderMap.has(p.id)) return p;
-        const updated = { ...p, setlistOrder: orderMap.get(p.id)! };
-        saveProjectToDb(updated).catch(() => {});
-        return updated;
-      })
-    );
-  };
-
-  // Live page: make a song the one that plays after the current one
-  const handleSetAsNextSong = (projectId: string) => {
-    const cur = setlistQueue.findIndex((s) => s.id === currentProjectRef.current?.id);
-    const from = setlistQueue.findIndex((s) => s.id === projectId);
-    if (from === -1 || from === cur) return;
-    const to = cur === -1 ? 0 : from > cur ? cur + 1 : cur;
-    if (from !== to) handleReorderSetlist(from, to);
-    showToast(`"${setlistQueue[from].title}" sonará a continuación`);
-  };
-
-  const handleMoveInSetlist = (projectId: string, direction: 'up' | 'down') => {
-    const idx = setlistQueue.findIndex((s) => s.id === projectId);
-    if (idx === -1) return;
-    const targetIdx = direction === 'up' ? idx - 1 : idx + 1;
-    if (targetIdx < 0 || targetIdx >= setlistQueue.length) return;
-    handleReorderSetlist(idx, targetIdx);
-  };
-
-  const handleCreateNewProject = async (
-    title: string,
-    artist: string,
-    bpm: number,
-    keySignature: string
-  ) => {
-    const newProj = createEmptyProjectTemplate(title, artist, bpm, keySignature);
-    newProj.inSetlist = true;
-    newProj.setlistOrder = projects.length;
-    await activateProject(newProj);
-    handleSelectView('setlist');
-    showToast(`Nueva canción creada: ${title}`);
-  };
-
-  const handleDeleteProject = async (projectId: string) => {
-    audioEngine.evictSongFromRamCache(projectId);
-    await deleteProjectFromDb(projectId);
-    const remaining = projects.filter((p) => p.id !== projectId);
-    setProjects(remaining);
-    if (currentProject?.id === projectId) {
+    if (currentProjectRef.current?.id === song.id && transport.isPlaying) {
       audioEngine.stop();
+    }
+
+    audioEngine.evictSongFromRamCache(song.id);
+    await deleteProjectFromDb(song.id);
+    if (isDesktopApp) {
+      deleteProjectNativeCache(song.id).catch((err: any) => {
+        console.error('[Cache] Error al eliminar carpeta de caché nativa:', err);
+      });
+    }
+
+    const remaining = projects.filter((p) => p.id !== song.id);
+    setProjects(remaining);
+    if (currentProject?.id === song.id) {
       setCurrentProject(null);
     }
-    showToast('Canción quitada de la biblioteca (tus archivos en disco no se modifican)');
+    showToast(`"${song.title}" eliminada de la biblioteca (archivos originales intactos)`);
   };
 
-  const handleExportJson = (proj: SongProject) => {
-    const blob = new Blob([JSON.stringify(proj, null, 2)], {
-      type: 'application/json',
-    });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `${proj.title.toLowerCase().replace(/\s+/g, '-')}.omnitracks.json`;
-    a.click();
-    URL.revokeObjectURL(url);
-    showToast('Archivo .omnitracks.json exportado');
-  };
-
-  const handleImportJsonFile = async (file: File) => {
-    try {
-      const text = await file.text();
-      const parsed = JSON.parse(text) as SongProject;
-      if (!parsed.title || !Array.isArray(parsed.tracks)) {
-        showToast('El archivo JSON no tiene un formato de OmniTracks válido');
-        return;
-      }
-      const importedProj: SongProject = normalizeProjectSectionsToTime({
-        ...parsed,
-        id: `imported-${Date.now()}`,
-        folder: 'imported',
-        updatedAt: Date.now(),
-      });
-      await activateProject(importedProj);
-      handleSelectView('setlist');
-      showToast(`Proyecto importado: ${importedProj.title}`);
-    } catch {
-      showToast('No se pudo leer el archivo JSON');
-    }
-  };
-
-  // Drag-and-Drop on DAW Workspace (Handles both Repertoire Song Drag & Audio File Drag)
-  const handleDragOverDaw = (e: React.DragEvent) => {
-    e.preventDefault();
-    if (
-      e.dataTransfer.types.includes('application/x-libretracks-song-id') &&
-      !e.dataTransfer.types.includes('application/x-libretracks-setlist-index')
-    ) {
-      setDragOverlayMode('repertoire-song');
-    } else if (e.dataTransfer.types.includes('Files')) {
-      setDragOverlayMode('files');
-    }
-  };
-
-  const handleDragLeaveDaw = (e: React.DragEvent) => {
-    if (e.currentTarget === e.target) {
-      setDragOverlayMode(null);
-    }
-  };
-
-  const handleDropOnDaw = async (e: React.DragEvent) => {
-    e.preventDefault();
-    setDragOverlayMode(null);
-
-    const songId = e.dataTransfer.getData('application/x-libretracks-song-id');
-    if (songId) {
-      handleAddToSetlist(songId);
-      handleLoadProjectImmediately(songId, false);
-      return;
-    }
-
-    // Start both extractors synchronously (DataTransfer is only valid during the event)
-    const withHandles = extractAudioFilesWithHandlesFromDataTransfer(e.dataTransfer);
-    const classic = extractAudioFilesFromDataTransfer(e.dataTransfer);
-    const handleFiles = await withHandles;
-    const audioFiles = handleFiles.length > 0 ? handleFiles : await classic;
-    if (audioFiles.length > 0) {
-      handleInstantImportFiles(audioFiles, 'main', 'new-song');
-    } else {
-      showToast('No se encontraron archivos de audio compatibles (.wav, .mp3, .ogg, .flac, .m4a)');
-    }
-  };
+  const {
+    handleDragOverDaw,
+    handleDragLeaveDaw,
+    handleDropOnDaw,
+  } = useDawDragDrop({
+    setDragOverlayMode,
+    handleAddToSetlist,
+    handleLoadProjectImmediately,
+    isDesktopApp,
+    handleImportNative,
+    handleInstantImportFiles,
+    showToast,
+  });
 
   const transportProject = activeView === 'live' ? null : currentProject;
   const remoteTriggerRef = DesktopRemoteBridge && window.location.origin === 'https://tauri.localhost'
     ? setRemoteTriggerHost : undefined;
+  const audioTriggerRef = DesktopAudioSettings && window.location.origin === 'https://tauri.localhost'
+    ? setAudioTriggerHost : undefined;
 
   return (
     <div className="min-h-screen h-dvh flex flex-col bg-studio-ground text-neutral-100 overflow-hidden relative">
@@ -1584,11 +1007,89 @@ export default function App() {
         ramBudgetMB={ramBudgetMB}
         cachedRamMB={audioEngine.getTotalCachedMB()}
         remoteTriggerRef={transportProject ? undefined : remoteTriggerRef}
+        audioTriggerRef={audioTriggerRef}
         onChangeEngineMode={handleChangeEngineMode}
         onChangeRamBudgetMB={handleChangeRamBudgetMB}
         onSelectView={handleSelectView}
         onOpenImportModal={() => setIsImportModalOpen(true)}
       />
+
+      {/* Banner de alerta: Desconexión de interfaz de audio en caliente */}
+      {isDeviceDisconnected && (
+        <div className="bg-rose-950/95 border-b border-rose-800 text-rose-200 px-4 py-2 flex items-center justify-between text-xs z-50 shadow-lg">
+          <div className="flex items-center gap-2">
+            <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0" />
+            <span>
+              <strong>Dispositivo de audio desconectado.</strong> La reproducción se ha pausado y la posición se conserva en{' '}
+              <strong className="font-mono text-white">
+                {Math.floor(transport.currentTimeSec / 60)}:{String(Math.floor(transport.currentTimeSec % 60)).padStart(2, '0')}.{Math.floor((transport.currentTimeSec % 1) * 10)}
+              </strong>. Conéctalo de nuevo y pulsa Reabrir.
+            </span>
+          </div>
+          <button
+            type="button"
+            onClick={() => void nativeAudioEngine.reopenDevice()}
+            className="px-3 py-1 bg-rose-600 hover:bg-rose-500 text-white rounded font-medium cursor-pointer transition-colors shrink-0"
+          >
+            Reabrir dispositivo
+          </button>
+        </div>
+      )}
+
+      {/* Banner de aviso: Canción sin caché nativa a la frecuencia del dispositivo */}
+      {missingNativeCache && (() => {
+        // Avance REAL por pista (evento audio://import-progress), no los saltos 5/15/100 %.
+        const liveProgress = currentProject ? nativeAudioEngine.formatImportProgress(currentProject.id) : null;
+        const isBusy = isGeneratingNativeCache || Boolean(liveProgress);
+        return (
+        <div className="bg-amber-950/90 border-b border-amber-800/80 text-amber-200 px-4 py-2 flex items-center justify-between text-xs z-50 shadow-md">
+          <div className="flex items-center gap-2">
+            <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0" />
+            <span>
+              La canción actual <strong>"{currentProject?.title}"</strong> no dispone de caché PCM nativa para este dispositivo.
+              {liveProgress
+                ? ` (${liveProgress})`
+                : isGeneratingNativeCache
+                ? ` (${nativeCacheProgress.percent}% - ${nativeCacheProgress.text})`
+                : ''}
+            </span>
+          </div>
+          <button
+            type="button"
+            disabled={isBusy}
+            onClick={async () => {
+              if (!currentProject) return;
+              if (nativeAudioEngine.isProjectImporting(currentProject.id)) {
+                showToast(`"${currentProject.title}": la caché ya se está generando.`);
+                return;
+              }
+              setIsGeneratingNativeCache(true);
+              setNativeCacheProgress({ percent: 5, text: 'Iniciando verificación...' });
+              try {
+                const ok = await nativeAudioEngine.generateNativeCacheForProject(currentProject, (percent, text) => {
+                  setNativeCacheProgress({ percent, text });
+                });
+                if (ok) {
+                  setMissingNativeCache(false);
+                  await nativeAudioEngine.loadProject(currentProject);
+                  showToast(`Caché nativa lista para "${currentProject.title}".`);
+                } else {
+                  showToast(`No se pudo generar la caché nativa para "${currentProject.title}".`);
+                }
+              } catch (err: any) {
+                console.error('[Banner] Error generando caché nativa:', err);
+                showToast(`Error al generar caché nativa: ${err?.message || err}`);
+              } finally {
+                setIsGeneratingNativeCache(false);
+              }
+            }}
+            className="px-3 py-1 bg-amber-500 hover:bg-amber-400 text-black font-semibold rounded cursor-pointer transition-colors disabled:opacity-50 shrink-0"
+          >
+            {isBusy ? 'Generando...' : 'Generar caché nativa'}
+          </button>
+        </div>
+        );
+      })()}
 
       {/* Studio Transport Deck (Shown when a song is loaded; the Live page has its own) */}
       {transportProject && (
@@ -1628,10 +1129,19 @@ export default function App() {
             onToggleCollapse={() => setIsSidebarCollapsed((prev) => !prev)}
             onRequestSongAction={(song) => setConfirmSongCandidate(song)}
             onAddToSetlist={handleAddToSetlist}
+            onRemoveFromSetlist={handleRemoveFromSetlist}
+            onClearSetlist={handleClearSetlist}
+            onEditMetadata={(song) => setEditingMetadataSong(song)}
             onDeleteProject={handleDeleteProject}
             onExportJson={handleExportJson}
             onQuickImportNewSongFiles={(files) =>
               handleInstantImportFiles(files, 'main', 'new-song')
+            }
+            onQuickImportNativeFolder={(folder) =>
+              handleImportNative({ folderPath: folder }, 'main', 'new-song')
+            }
+            onQuickImportNativeFiles={(paths) =>
+              handleImportNative({ filePaths: paths }, 'main', 'new-song')
             }
             onOpenNewSongModal={() => handleSelectView('library')}
           />
@@ -1692,6 +1202,7 @@ export default function App() {
               onRequestSongAction={(song) => setConfirmSongCandidate(song)}
               onAddToSetlist={handleAddToSetlist}
               onRemoveFromSetlist={handleRemoveFromSetlist}
+              onClearSetlist={handleClearSetlist}
               onMoveInSetlist={handleMoveInSetlist}
               onReorderSetlist={handleReorderSetlist}
               onOptimizeProject={handleStartOptimizeProject}
@@ -1709,6 +1220,12 @@ export default function App() {
               }
               onQuickImportNewSongFiles={(files) =>
                 handleInstantImportFiles(files, 'main', 'new-song')
+              }
+              onQuickImportNativeFolder={(folder) =>
+                handleImportNative({ folderPath: folder }, 'main', 'new-song')
+              }
+              onQuickImportNativeFiles={(paths) =>
+                handleImportNative({ filePaths: paths }, 'main', 'new-song')
               }
               onToggleTrackMute={handleToggleTrackMute}
               onToggleTrackSolo={handleToggleTrackSolo}
@@ -1783,6 +1300,9 @@ export default function App() {
                   onDeleteTrack={handleDeleteTrack}
                   onAddStemsToCurrentSong={(files) =>
                     handleInstantImportFiles(files, 'main', 'current-song')
+                  }
+                  onAddNativeStemsToCurrentSong={(paths) =>
+                    handleImportNative({ filePaths: paths }, 'main', 'current-song')
                   }
                   onAddMarkerAtPlayhead={handleAddMarkerAtPlayhead}
                   onOpenImportModal={() => setIsImportModalOpen(true)}
@@ -1986,6 +1506,7 @@ export default function App() {
                 if (found) setConfirmSongCandidate(found);
               }}
               onAddToSetlist={handleAddToSetlist}
+              onRemoveFromSetlist={handleRemoveFromSetlist}
               onCreateNewProject={handleCreateNewProject}
               onDeleteProject={handleDeleteProject}
               onExportJson={handleExportJson}
@@ -1993,6 +1514,7 @@ export default function App() {
               onOpenStemImporter={() => setIsImportModalOpen(true)}
               onOptimizeProject={handleStartOptimizeProject}
               onRelinkProject={handleRelinkProject}
+              onUpdateSongMetadata={handleUpdateSongMetadata}
             />
           )}
         </div>
@@ -2013,7 +1535,32 @@ export default function App() {
           handleLoadProjectImmediately(songId, false);
         }}
         onConfirmAddToSetlist={(songId) => handleAddToSetlist(songId)}
+        onConfirmRemoveFromSetlist={(songId) => handleRemoveFromSetlist(songId)}
       />
+
+      {/* Song Fingerprint Ambiguity / Confirmation Modal */}
+      {fingerprintPrompt && (
+        <SongFingerprintPromptModal
+          candidates={fingerprintPrompt.candidates}
+          incomingTrackCount={fingerprintPrompt.incomingTrackCount}
+          sourceLabel={fingerprintPrompt.sourceLabel}
+          onConfirmMatch={(chosenSong) => {
+            const cb = fingerprintPrompt.resolve;
+            setFingerprintPrompt(null);
+            cb(chosenSong);
+          }}
+          onImportAsNew={() => {
+            const cb = fingerprintPrompt.resolve;
+            setFingerprintPrompt(null);
+            cb(null);
+          }}
+          onCancel={() => {
+            const cb = fingerprintPrompt.resolve;
+            setFingerprintPrompt(null);
+            cb('cancel');
+          }}
+        />
+      )}
 
       {/* Stem Importer Modal */}
       <StemImporterModal
@@ -2021,6 +1568,12 @@ export default function App() {
         onClose={() => setIsImportModalOpen(false)}
         onImportFiles={(files, defaultBus, importMode) =>
           handleInstantImportFiles(files, defaultBus, importMode)
+        }
+        onImportNativeFolder={(folder, defaultBus, importMode) =>
+          handleImportNative({ folderPath: folder }, defaultBus, importMode)
+        }
+        onImportNativeFiles={(paths, defaultBus, importMode) =>
+          handleImportNative({ filePaths: paths }, defaultBus, importMode)
         }
       />
 
@@ -2049,6 +1602,99 @@ export default function App() {
         }}
       />
 
+      {/* Delete From Library Confirmation Modal */}
+      {songToDeleteFromLibrary && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4"
+        >
+          <div className="bg-neutral-900 border border-neutral-700 rounded-2xl max-w-md w-full p-6 space-y-4 shadow-2xl">
+            <div className="flex items-start gap-3">
+              <div className="w-10 h-10 rounded-full bg-red-500/20 text-red-400 flex items-center justify-center shrink-0">
+                <Trash2 className="w-5 h-5" />
+              </div>
+              <div className="space-y-1">
+                <h2 className="text-base font-bold text-neutral-100">
+                  ¿Eliminar de la biblioteca?
+                </h2>
+                <p className="text-sm text-neutral-300">
+                  Se eliminará <strong className="text-white">"{songToDeleteFromLibrary.title}"</strong> del índice permanente y se liberará su espacio de caché.
+                </p>
+                <p className="text-xs text-neutral-400">
+                  Tus archivos de audio originales en disco nunca se tocarán ni modificarán.
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center justify-end gap-3 pt-2">
+              <button
+                type="button"
+                onClick={() => setSongToDeleteFromLibrary(null)}
+                className="px-4 py-2 rounded-xl bg-neutral-800 hover:bg-neutral-700 text-sm font-semibold text-neutral-200 cursor-pointer"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={confirmDeleteFromLibrary}
+                className="px-4 py-2 rounded-xl bg-red-600 hover:bg-red-500 text-sm font-semibold text-white cursor-pointer"
+              >
+                Eliminar de la biblioteca
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Missing Folder Notice Modal */}
+      {missingFolderSong && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4"
+        >
+          <div className="bg-neutral-900 border border-neutral-700 rounded-2xl max-w-md w-full p-6 space-y-4 shadow-2xl">
+            <div className="flex items-start gap-3">
+              <div className="w-10 h-10 rounded-full bg-amber-500/20 text-amber-400 flex items-center justify-center shrink-0">
+                <AlertTriangle className="w-5 h-5" />
+              </div>
+              <div className="space-y-1">
+                <h2 className="text-base font-bold text-neutral-100">
+                  No se encuentran los archivos
+                </h2>
+                <p className="text-sm text-neutral-300">
+                  No se encontraron las pistas de audio para <strong className="text-white">"{missingFolderSong.title}"</strong> en la ruta guardada.
+                </p>
+                <p className="text-xs text-neutral-400">
+                  Es posible que la carpeta haya sido movida, renombrada o esté en una unidad desconectada.
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center justify-end gap-3 pt-2">
+              <button
+                type="button"
+                onClick={() => setMissingFolderSong(null)}
+                className="px-4 py-2 rounded-xl bg-neutral-800 hover:bg-neutral-700 text-sm font-semibold text-neutral-200 cursor-pointer"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const target = missingFolderSong;
+                  setMissingFolderSong(null);
+                  handleRelinkProject(target);
+                }}
+                className="px-4 py-2 rounded-xl bg-amber-600 hover:bg-amber-500 text-sm font-semibold text-white cursor-pointer flex items-center gap-1.5"
+              >
+                <FolderOpen className="w-4 h-4" />
+                <span>Ubicar carpeta</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {DesktopRemoteBridge && remoteTriggerRef && (
         <React.Suspense fallback={null}>
           <DesktopRemoteBridge
@@ -2060,6 +1706,23 @@ export default function App() {
           />
         </React.Suspense>
       )}
+
+      {DesktopAudioSettings && audioTriggerRef && (
+        <React.Suspense fallback={null}>
+          <DesktopAudioSettings triggerHost={audioTriggerHost} />
+        </React.Suspense>
+      )}
+
+      {/* Edit Song Metadata Modal */}
+      <SongMetadataEditModal
+        song={editingMetadataSong}
+        isOpen={Boolean(editingMetadataSong)}
+        onClose={() => setEditingMetadataSong(null)}
+        onSave={(updated) => {
+          handleUpdateSongMetadata(updated);
+          setEditingMetadataSong(null);
+        }}
+      />
 
       {/* Non-intrusive Action Feedback Toast */}
       {toastMessage && (

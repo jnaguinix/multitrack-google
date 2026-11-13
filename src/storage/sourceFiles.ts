@@ -63,7 +63,7 @@ function isAbortError(err: unknown): boolean {
 /**
  * Recursively collects audio files from a directory handle, registering each file's handle.
  * `rootDir` is kept as the "source folder" of every file found beneath it.
- * Also detects any OmniTracks / LibreTracks sidecar JSON inside the folder and associates it
+ * Also detects any OmniTracks sidecar JSON inside the folder and associates it
  * with the collected audio files so section markers, BPM, and mix settings are restored.
  */
 export async function collectAudioFromDirectory(
@@ -278,7 +278,7 @@ export async function requestWritePermission(handle: any): Promise<PermissionSta
 }
 
 /**
- * Reads `omnitracks.project.json` (or any `*.omnitracks.json` / `*.libretracks.json`)
+ * Reads `omnitracks.project.json` (or any `*.omnitracks.json`)
  * directly from a directory handle if present.
  */
 export async function readProjectSidecarFromDirectory(
@@ -291,7 +291,7 @@ export async function readProjectSidecarFromDirectory(
     const parsed = parseProjectSidecarText(await file.text());
     if (parsed) return parsed;
   } catch {
-    // Exact sidecar file not present; scan directory entries for *.omnitracks.json / *.libretracks.json
+    // Exact sidecar file not present; scan directory entries for *.omnitracks.json
   }
 
   if (typeof dirHandle.values === 'function') {

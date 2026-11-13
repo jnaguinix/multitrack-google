@@ -1,5 +1,7 @@
 import { SongProject, SongSection, TrackChannel } from '../types/project';
 import { deleteProjectPcm } from './opfsStorage';
+import { isDesktopApp } from '../utils/nativeDialog';
+import { deleteDesktopSong, loadDesktopLibrary, saveDesktopSong } from './desktopLibrary';
 import {
   collectAudioFromDirectory,
   getRegisteredHandle,
@@ -8,7 +10,7 @@ import {
   writeProjectSidecarToDirectory,
 } from './sourceFiles';
 
-const DB_NAME = 'LibreTracksWebDB';
+const DB_NAME = 'OmniTracksWebDB';
 const DB_VERSION = 1;
 const STORE_PROJECTS = 'projects';
 const STORE_AUDIO = 'audioBuffers';
@@ -476,6 +478,10 @@ function scheduleProjectSidecarSync(project: SongProject): void {
 
 export async function saveProjectToDb(project: SongProject): Promise<void> {
   const updatedProject = { ...project, updatedAt: Date.now() };
+  if (isDesktopApp()) {
+    await saveDesktopSong(updatedProject);
+    return;
+  }
   scheduleProjectSidecarSync(updatedProject);
   const db = await openDatabase();
   return new Promise((resolve, reject) => {
@@ -488,6 +494,20 @@ export async function saveProjectToDb(project: SongProject): Promise<void> {
 }
 
 export async function loadAllProjectsFromDb(): Promise<SongProject[]> {
+  if (isDesktopApp()) {
+    const lib = await loadDesktopLibrary();
+    if (!lib || !Array.isArray(lib.songs)) return [];
+    const activeSet = new Set(lib.activeSetlist || []);
+    const userProjects: SongProject[] = lib.songs.map((item: any) => {
+      const inSet = item.inSetlist !== undefined ? Boolean(item.inSetlist) : activeSet.has(item.id);
+      return normalizeProjectSectionsToTime({
+        ...item,
+        inSetlist: inSet,
+      });
+    });
+    userProjects.sort((a, b) => b.updatedAt - a.updatedAt);
+    return userProjects;
+  }
   const db = await openDatabase();
   return new Promise((resolve, reject) => {
     const tx = db.transaction(STORE_PROJECTS, 'readwrite');
@@ -513,6 +533,10 @@ export async function loadAllProjectsFromDb(): Promise<SongProject[]> {
 }
 
 export async function deleteProjectFromDb(projectId: string): Promise<void> {
+  if (isDesktopApp()) {
+    await deleteDesktopSong(projectId);
+    return;
+  }
   const pendingTimer = sidecarDebounceTimers.get(projectId);
   if (pendingTimer) {
     clearTimeout(pendingTimer);

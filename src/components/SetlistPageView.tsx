@@ -29,10 +29,12 @@ import {
   TransportState,
 } from '../types/project';
 import { audioEngine } from '../audio/audioEngine';
+import { nativeAudioEngine } from '../audio/nativeAudioEngine';
 import { extractAudioFilesFromDataTransfer } from '../utils/fileImportHelper';
 import { formatMmSs, formatTimecode } from './TransportDeck';
 import { getSongWaveformPeaks } from '../utils/songWaveform';
 import { MultitrackMixer, gainToDb } from './MultitrackMixer';
+import { isDesktopApp, pickNativeFiles, pickNativeFolder } from '../utils/nativeDialog';
 
 interface SetlistPageViewProps {
   project: SongProject | null;
@@ -49,6 +51,7 @@ interface SetlistPageViewProps {
   onRequestSongAction: (song: SongProject) => void;
   onAddToSetlist: (songId: string) => void;
   onRemoveFromSetlist: (songId: string) => void;
+  onClearSetlist?: () => void;
   onMoveInSetlist: (songId: string, direction: 'up' | 'down') => void;
   onReorderSetlist: (fromIndex: number, toIndex: number) => void;
   onChangeSetlistTransitionMode: (mode: SetlistTransitionMode) => void;
@@ -62,6 +65,8 @@ interface SetlistPageViewProps {
   onOpenSectionEditor: () => void;
   onAddStemsToCurrentSong: (files: FileList | File[]) => void;
   onQuickImportNewSongFiles: (files: FileList | File[]) => void;
+  onQuickImportNativeFolder?: (folderPath: string) => void;
+  onQuickImportNativeFiles?: (filePaths: string[]) => void;
   onToggleTrackMute: (trackId: string) => void;
   onToggleTrackSolo: (trackId: string) => void;
   onChangeTrackGain: (trackId: string, gain: number) => void;
@@ -101,6 +106,7 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
   onRequestSongAction,
   onAddToSetlist,
   onRemoveFromSetlist,
+  onClearSetlist,
   onMoveInSetlist,
   onReorderSetlist,
   onOptimizeProject,
@@ -110,6 +116,8 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
   onOpenSectionEditor,
   onAddStemsToCurrentSong,
   onQuickImportNewSongFiles,
+  onQuickImportNativeFolder,
+  onQuickImportNativeFiles,
   onToggleTrackMute,
   onToggleTrackSolo,
   onChangeTrackGain,
@@ -130,6 +138,7 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
   const [dragOverCardIdx, setDragOverCardIdx] = useState<number | null>(null);
   const [cursorNotice, setCursorNotice] = useState<string | null>(null);
   const [isFloatingMixerOpen, setIsFloatingMixerOpen] = useState(false);
+  const [showClearConfirm, setShowClearConfirm] = useState(false);
 
   const masterCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const addAudioInputRef = useRef<HTMLInputElement | null>(null);
@@ -246,9 +255,11 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
     };
   }, [project, trackFilterText]);
 
+  const isProjectInSetlist = Boolean(project && setlistQueue.some((s) => s.id === project.id));
+
   return (
     <section className="lt-setlist flex-1 flex flex-col overflow-y-auto min-w-0" aria-labelledby="setlist-title">
-      {project && (
+      {isProjectInSetlist && project && (
         <header className="lt-setlist-heading shrink-0">
           <div className="min-w-0">
             <h1 id="setlist-title" className="lt-setlist-song-title">{project.title}</h1>
@@ -267,7 +278,7 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
           </button>
         </header>
       )}
-      {project ? (
+      {isProjectInSetlist && project ? (
         <div className="lt-waveform relative shrink-0 overflow-hidden">
           <canvas
             ref={masterCanvasRef}
@@ -293,14 +304,14 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
       ) : (
         <div className="lt-empty shrink-0">
           <Music size={24} className="text-neutral-400" aria-hidden="true" />
-          <h1 id="setlist-title">{setlistQueue.length ? 'Elige una canción' : 'Prepara tu setlist'}</h1>
-          <p>Importa las pistas de una canción o añade una desde tu repertorio para empezar.</p>
+          <h1 id="setlist-title">{setlistQueue.length ? 'Elige una canción del setlist' : 'Setlist vacío'}</h1>
+          <p>{setlistQueue.length ? 'Selecciona una canción de la lista para montarla en consola.' : 'Añade canciones desde la biblioteca pulsando "+ Set" para preparar la sesión.'}</p>
           <button type="button" popoverTarget="setlist-add" className="lt-primary"><Plus size={16} /> Añadir canción</button>
         </div>
       )}
 
       <div className="space-y-4">
-        {project ? (
+        {isProjectInSetlist && project ? (
           <>
             <section aria-labelledby="setlist-sections-title" className="lt-setlist-sections">
               <div className="flex flex-wrap items-center justify-between gap-2 mb-2.5">
@@ -372,23 +383,39 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
         ) : null}
       </div>
 
-      <section className="lt-setlist-order shrink-0" aria-label="Orden de reproducción">
-        {(project || setlistQueue.length > 0) && (
+      {setlistQueue.length > 0 && (
+        <section className="lt-setlist-order shrink-0" aria-label="Orden de reproducción">
           <header className="lt-setlist-order-header">
             <div>
               <h2>Orden de reproducción</h2>
               <p>{setlistQueue.length === 1 ? '1 canción' : setlistQueue.length + ' canciones'}</p>
             </div>
-            <button type="button" popoverTarget="setlist-add" className="lt-control">
-              <Plus size={16} /> Añadir canción
-            </button>
+            <div className="flex items-center gap-2">
+              {onClearSetlist && (
+                <button
+                  type="button"
+                  onClick={() => setShowClearConfirm(true)}
+                  className="lt-control text-neutral-300 hover:text-amber-400"
+                  title="Vaciar la lista de reproducción sin borrar las canciones de la biblioteca"
+                >
+                  <RotateCcw size={15} /> Limpiar sesión
+                </button>
+              )}
+              <button type="button" popoverTarget="setlist-add" className="lt-control">
+                <Plus size={16} /> Añadir canción
+              </button>
+            </div>
           </header>
-        )}
       <div className="lt-setlist-queue" role="group" aria-label="Canciones del setlist">
           {setlistQueue.map((song, idx) => {
             const isCurrent = project?.id === song.id;
             const isPlayingThis = isCurrent && transport.isPlaying;
             const cacheInfo = audioEngine.getSongRamCacheInfo(song);
+            // Avance real de decodificación (pista N de M) emitido por el motor nativo.
+            const liveCacheText = isDesktopApp() ? nativeAudioEngine.formatImportProgress(song.id) : null;
+            // Escritorio: estado real de la caché PCM nativa (no el del motor web).
+            const nativeLiveText = liveCacheText;
+            const nativeReady = isDesktopApp() ? nativeAudioEngine.isNativeCacheReady(song.id) : null;
             const isPcmReady = audioEngine.isProjectPcmReady(song);
             const isStreamSong = audioEngine.getEffectiveEngineModeForProject(song) === 'stream';
             const pcmMB = audioEngine.getProjectPcmEstimatedMB(song);
@@ -402,11 +429,11 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
                   draggable
                   onDragStart={(e) => {
                     e.dataTransfer.setData(
-                      'application/x-libretracks-setlist-index',
+                      'application/x-omnitracks-setlist-index',
                       String(idx)
                     );
                     e.dataTransfer.setData(
-                      'application/x-libretracks-song-id',
+                      'application/x-omnitracks-song-id',
                       song.id
                     );
                   }}
@@ -417,13 +444,13 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
                   onDragLeave={() => setDragOverCardIdx(null)}
                   onDrop={(e) => {
                     e.preventDefault();
-                    if (e.dataTransfer.types.includes('application/x-libretracks-setlist-index')) e.stopPropagation();
+                    if (e.dataTransfer.types.includes('application/x-omnitracks-setlist-index')) e.stopPropagation();
                     setDragOverCardIdx(null);
                     const fromIdxStr = e.dataTransfer.getData(
-                      'application/x-libretracks-setlist-index'
+                      'application/x-omnitracks-setlist-index'
                     );
                     const droppedSongId = e.dataTransfer.getData(
-                      'application/x-libretracks-song-id'
+                      'application/x-omnitracks-song-id'
                     );
                     if (fromIdxStr !== '') {
                       const fromIdx = Number(fromIdxStr);
@@ -467,7 +494,7 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
                           if (isCurrent) {
                             onPlayPause();
                           } else {
-                            onLoadAndPlaySong(song.id, cacheInfo.isReady);
+                            onLoadAndPlaySong(song.id, cacheInfo.isReady || isDesktopApp());
                           }
                         }}
                         title={
@@ -509,7 +536,30 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
                     </span>
 
                     <div className="flex items-center gap-1 shrink-0">
-                      {cacheInfo.totalCount > 0 && (
+                      {isDesktopApp() && song.tracks.length > 0 && (
+                        <span
+                          title={
+                            nativeLiveText
+                              ? `Generando la caché de audio nativa: ${nativeLiveText}`
+                              : nativeReady
+                              ? 'Caché de audio nativa lista: suena sin esperas.'
+                              : nativeReady === null
+                              ? 'Comprobando la caché de audio nativa...'
+                              : 'Sin caché de audio nativa: se genera al añadir al setlist o al cargar en el DAW.'
+                          }
+                          className={`px-1.5 py-0.2 rounded text-[11px] font-bold tracking-tight ${
+                            nativeLiveText
+                              ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
+                              : nativeReady
+                              ? 'bg-studio-strip text-studio-ink border border-studio-line'
+                              : 'bg-neutral-800/80 text-neutral-400 border border-neutral-700'
+                          }`}
+                        >
+                          {nativeLiveText ?? (nativeReady ? 'Lista' : nativeReady === null ? 'Comprobando' : 'Sin preparar')}
+                        </span>
+                      )}
+
+                      {!isDesktopApp() && cacheInfo.totalCount > 0 && (
                         <span
                           title={
                             isStreamSong
@@ -533,16 +583,18 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
                           {isStreamSong
                             ? cacheInfo.isReady
                               ? 'Lista'
-                              : 'Disco'
+                              : liveCacheText ?? 'Disco'
                             : cacheInfo.isReady
                             ? `RAM`
                             : cacheInfo.skippedByRamBudget
                             ? 'Lím'
+                            : liveCacheText
+                            ? liveCacheText
                             : `${cacheInfo.cachedCount}/${cacheInfo.totalCount}`}
                         </span>
                       )}
 
-                      {isPcmReady ? (
+                      {isDesktopApp() ? null : isPcmReady ? (
                         <span
                           title={`Guardada en el disco del navegador (OPFS, ~${pcmMB} MB)`}
                           className="px-1.5 py-0.2 rounded text-[11px] font-bold bg-studio-strip text-studio-ink border border-studio-line"
@@ -585,7 +637,7 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
                       >
                         Montar en consola (00:00)
                       </button>
-                      {!isPcmReady && song.tracks.length > 0 && (
+                      {!isDesktopApp() && !isPcmReady && song.tracks.length > 0 && (
                         <button
                           type="button"
                           onClick={(event) => {
@@ -640,7 +692,7 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
             onDrop={async (e) => {
               e.preventDefault();
               const songId = e.dataTransfer.getData(
-                'application/x-libretracks-song-id'
+                'application/x-omnitracks-song-id'
               );
               if (songId) {
                 onAddToSetlist(songId);
@@ -707,6 +759,12 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
                     type="button"
                     onClick={(event) => {
                       closePopover(event);
+                      if (isDesktopApp()) {
+                        pickNativeFiles().then((paths) => {
+                          if (paths && paths.length > 0) onQuickImportNativeFiles?.(paths);
+                        });
+                        return;
+                      }
                       newSongFilesInputRef.current?.click();
                     }}
                     className="w-full px-2.5 py-1.5 rounded-lg bg-studio-strip hover:bg-neutral-700 text-studio-ink text-xs font-semibold flex items-center gap-2 cursor-pointer"
@@ -718,6 +776,12 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
                     type="button"
                     onClick={(event) => {
                       closePopover(event);
+                      if (isDesktopApp()) {
+                        pickNativeFolder().then((folder) => {
+                          if (folder) onQuickImportNativeFolder?.(folder);
+                        });
+                        return;
+                      }
                       newSongFolderInputRef.current?.click();
                     }}
                     className="w-full px-2.5 py-1.5 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-neutral-200 text-xs font-semibold flex items-center gap-2 cursor-pointer"
@@ -762,6 +826,7 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
       </div>
 
       </section>
+      )}
 
       {/* 4. FLOATING MIXER CARD MODAL / DRAWER (Opens on demand, closes with 1 click or Esc) */}
       {isFloatingMixerOpen && filteredProjectForMixer && (
@@ -848,6 +913,52 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
       {cursorNotice && (
         <div className="fixed bottom-4 right-4 z-40 bg-studio-panel border border-studio-line text-neutral-200 px-3 py-1.5 rounded-lg text-xs shadow-lg">
           {cursorNotice}
+        </div>
+      )}
+
+      {/* Modal de confirmación para limpiar la sesión (Setlist) */}
+      {showClearConfirm && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          className="fixed inset-0 z-50 bg-black/75 flex items-center justify-center p-4"
+        >
+          <div className="bg-studio-panel border border-neutral-800 rounded-2xl max-w-md w-full p-6 space-y-4 shadow-2xl">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-amber-500/15 border border-amber-500/40 flex items-center justify-center shrink-0">
+                <RotateCcw className="w-5 h-5 text-amber-400" />
+              </div>
+              <div>
+                <h3 className="text-base font-bold text-neutral-100">¿Limpiar la sesión actual?</h3>
+                <p className="text-xs text-neutral-400">
+                  Se quitarán las {setlistQueue.length} canciones del setlist activo.
+                </p>
+              </div>
+            </div>
+            <p className="text-xs text-neutral-300 bg-studio-ground border border-neutral-800 rounded-lg p-3">
+              Tus canciones, pistas y marcadores seguirán <strong>completamente intactos en tu biblioteca</strong>. Podrás volver a agregarlas en cualquier momento.
+            </p>
+            <div className="flex items-center justify-end gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setShowClearConfirm(false)}
+                className="px-3.5 py-2 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-xs text-neutral-300 font-medium cursor-pointer"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowClearConfirm(false);
+                  onClearSetlist?.();
+                }}
+                className="px-4 py-2 rounded-lg bg-amber-500 hover:bg-amber-400 text-neutral-950 font-bold text-xs flex items-center gap-1.5 cursor-pointer shadow-lg shadow-amber-500/20"
+              >
+                <RotateCcw className="w-3.5 h-3.5" />
+                <span>Limpiar sesión</span>
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </section>

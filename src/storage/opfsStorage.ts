@@ -13,6 +13,10 @@ const OPFS_ROOT_DIR = 'pcm';
  * Checks if Origin Private File System (OPFS) is supported in the current environment
  */
 export function isOpfsSupported(): boolean {
+  // Desktop OmniTracks relies exclusively on the native disk PCM cache via Rust
+  if (typeof window !== 'undefined' && Boolean((window as any).__TAURI__)) {
+    return false;
+  }
   return (
     typeof navigator !== 'undefined' &&
     Boolean(navigator.storage) &&
