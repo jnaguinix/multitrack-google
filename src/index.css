@@ -1446,6 +1446,137 @@
   .lt-plan-head { display: none; }
 }
 
+/* Fila de fichas del setlist con la flecha de transición entre canciones. */
+.lt-strip-row {
+  display: flex;
+  align-items: stretch;
+  gap: 0;
+  overflow-x: auto;
+  padding: 14px 12px 12px;
+  margin-inline: -10px;
+  scroll-snap-type: x proximity;
+}
+.lt-tile {
+  position: relative;
+  flex: 0 0 172px;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 10px 11px 9px;
+  background: var(--lt-panel);
+  border: 1px solid var(--lt-line);
+  border-radius: 12px;
+  cursor: pointer;
+  text-align: left;
+  scroll-snap-align: start;
+  transition: border-color .15s ease, background .15s ease;
+}
+.lt-tile:hover { background: var(--lt-strip); }
+.lt-tile[data-current] { border-color: var(--lt-accent); box-shadow: 0 0 0 1px var(--lt-accent); background: var(--lt-strip); }
+.lt-tile[data-dragging] { border-color: var(--lt-text); }
+.lt-tile-top { display: flex; align-items: center; justify-content: space-between; color: var(--lt-mut); font-size: 12px; }
+.lt-tile-num { display: inline-flex; align-items: center; gap: 4px; }
+.lt-tile-wave { display: flex; align-items: flex-end; gap: 2px; height: 34px; }
+.lt-tile-wave i { flex: 1; min-height: 3px; border-radius: 1px; background: var(--lt-line); }
+.lt-tile-wave[data-active] i { background: var(--lt-accent); }
+.lt-tile-title {
+  font-size: 14px;
+  font-weight: 650;
+  line-height: 1.25;
+  min-height: 2.5em;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.lt-tile-meta { display: flex; align-items: center; justify-content: space-between; gap: 6px; font-size: 12px; color: var(--lt-mut); }
+.lt-tile-meta em { color: var(--lt-solo); font-size: 11px; font-style: normal; margin-left: 3px; }
+.lt-tile-status { font-size: 11px; padding: 1px 7px; border-radius: 6px; border: 1px solid var(--lt-line); white-space: nowrap; max-width: 90px; overflow: hidden; text-overflow: ellipsis; }
+.lt-tile-status[data-tone="ready"] { color: #7ad8a3; border-color: color-mix(in srgb, #7ad8a3 40%, transparent); }
+.lt-tile-status[data-tone="busy"] { color: var(--lt-solo); border-color: color-mix(in srgb, var(--lt-solo) 45%, transparent); }
+.lt-tile-actions { display: flex; align-items: center; justify-content: space-between; gap: 6px; margin-top: auto; }
+.lt-tile-btn { width: 30px; min-height: 28px; padding: 0; }
+.lt-tile-remove {
+  position: absolute;
+  top: -9px;
+  left: -9px;
+  display: inline-flex;
+  color: #ef4444;
+  background: var(--lt-panel);
+  border: 0;
+  border-radius: 50%;
+  padding: 0;
+  cursor: pointer;
+  z-index: 2;
+}
+.lt-tile-add {
+  flex: 0 0 124px;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 150px;
+  border-style: dashed;
+  color: var(--lt-mut);
+  background: transparent;
+  font-size: 13px;
+}
+.lt-tile-add:hover { color: var(--lt-text); }
+.lt-link { flex: 0 0 38px; display: flex; align-items: center; justify-content: center; }
+.lt-link-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  border: 1px solid var(--lt-line);
+  background: var(--lt-track);
+  color: var(--lt-mut);
+  cursor: pointer;
+}
+.lt-link-btn:hover { color: var(--lt-text); border-color: var(--lt-text); }
+.lt-link-btn[data-own] { color: var(--lt-accent); border-color: var(--lt-accent); }
+
+/* Mapa de la canción montada: onda con las secciones como círculos de color. */
+.lt-map { display: grid; gap: 10px; }
+.lt-map-header { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 14px; }
+.lt-map-header strong { font-size: 15px; font-weight: 650; margin-right: 10px; }
+.lt-map-header span { color: var(--lt-mut); font-size: 12px; }
+.lt-map-wave { height: clamp(120px, 20dvh, 200px); }
+.lt-map-badge {
+  position: absolute;
+  top: 8px;
+  z-index: 3;
+  min-width: 24px;
+  height: 24px;
+  padding: 0 5px;
+  transform: translateX(3px);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  border: 1.5px solid var(--sec);
+  background: color-mix(in srgb, var(--sec) 22%, var(--lt-track));
+  color: var(--lt-text);
+  font-size: 11px;
+  font-weight: 650;
+  cursor: pointer;
+}
+.lt-map-badge:hover, .lt-map-badge[data-active] { background: var(--sec); color: #0b0b0b; }
+.lt-map-badge[data-queued] { box-shadow: 0 0 0 2px var(--lt-solo); }
+.lt-code {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 26px;
+  height: 26px;
+  padding: 0 4px;
+  border-radius: 999px;
+  border: 1.5px solid var(--sec);
+  font-size: 11px;
+  font-weight: 650;
+}
+
 /* (Obsoleto) Setlist en dos columnas */
 .lt-setlist.lt-setlist-split {
   display: grid;

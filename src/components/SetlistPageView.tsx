@@ -34,6 +34,8 @@ import { getSongWaveformPeaks } from '../utils/songWaveform';
 import { MultitrackMixer, gainToDb } from './MultitrackMixer';
 import { isDesktopApp } from '../utils/nativeDialog';
 import { SongPickerModal } from './SongPickerModal';
+import { SetlistStrip, SongTileStatus } from './SetlistStrip';
+import { SECTION_TEMPLATES } from '../utils/sectionTemplates';
 import { useSetlistMeta } from '../hooks/useSetlistMeta';
 
 interface SetlistPageViewProps {
@@ -86,17 +88,15 @@ interface SetlistPageViewProps {
   onUpdateSongNotes: (songId: string, notes: string) => void;
   /** Monta la primera canción del setlist y abre la página En vivo. */
   onStartLive: () => void;
+  /** Qué hacer al terminar una canción (la flecha entre fichas); undefined = ajuste general. */
+  onSetSongTransition: (songId: string, mode: SetlistTransitionMode | undefined) => void;
+  /** Añade una sección de plantilla (Intro, Verso 1, Coro…) en la posición del cursor. */
+  onAddSectionTemplate: (templateKey: string) => void;
 }
 
 function songDuration(song: SongProject): number {
   return song.durationSec || ((song.totalBars || 24) * 4 * 60) / (song.bpm || 120);
 }
-
-const TRANSITION_LABELS: Record<SetlistTransitionMode, string> = {
-  stop: 'Detener',
-  'cue-next': 'Preparar la siguiente',
-  'auto-play': 'Reproducir la siguiente',
-};
 
 function closePopover(event: React.MouseEvent<HTMLButtonElement>) {
   event.currentTarget.closest<HTMLElement>('[popover]')?.hidePopover();
@@ -149,6 +149,8 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
   onResetMixer,
   onUpdateSongNotes,
   onStartLive,
+  onSetSongTransition,
+  onAddSectionTemplate,
 }) => {
   const [trackFilterText, setTrackFilterText] = useState('');
   const [isFilterOpen, setIsFilterOpen] = useState(false);
@@ -157,6 +159,7 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
   const [isFloatingMixerOpen, setIsFloatingMixerOpen] = useState(false);
   const [showClearConfirm, setShowClearConfirm] = useState(false);
   const [isPickerOpen, setIsPickerOpen] = useState(false);
+  const [isEditingStrip, setIsEditingStrip] = useState(false);
   const openPicker = () => setIsPickerOpen(true);
   const setlistIds = useMemo(() => new Set(setlistQueue.map((s) => s.id)), [setlistQueue]);
 
@@ -278,11 +281,6 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
     acc.push(i === 0 ? 0 : acc[i - 1] + songDuration(setlistQueue[i - 1]));
     return acc;
   }, []);
-  const readyCount = setlistQueue.filter((song) =>
-    isDesktopApp()
-      ? nativeAudioEngine.isNativeCacheReady(song.id) === true
-      : audioEngine.getSongRamCacheInfo(song).isReady || audioEngine.isProjectPcmReady(song)
-  ).length;
   const { meta: setlistMeta, setName: setSetlistName, setDate: setSetlistDate } = useSetlistMeta();
   const [notesDraft, setNotesDraft] = useState('');
   useEffect(() => {
@@ -290,10 +288,71 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
   }, [project?.id, project?.notes]);
   const setlistTotalSec = setlistQueue.reduce((sum, song) => sum + songDuration(song), 0);
 
-  const detailPanel =
+  /** Estado de la caché de audio de una canción, tal como lo muestra su ficha. */
+  const statusOf = (song: SongProject): SongTileStatus => {
+    const liveText = isDesktopApp() ? nativeAudioEngine.formatImportProgress(song.id) : null;
+    if (isDesktopApp()) {
+      if (liveText) return { text: liveText, tone: 'busy', title: `Generando la caché de audio: ${liveText}` };
+      const ready = nativeAudioEngine.isNativeCacheReady(song.id);
+      if (ready) return { text: 'Lista', tone: 'ready', title: 'Caché de audio lista: suena sin esperas.' };
+      if (ready === null) return { text: 'Comprobando', tone: 'idle', title: 'Comprobando la caché de audio...' };
+      return { text: 'Sin preparar', tone: 'idle', title: 'Sin caché de audio: se genera al añadir al setlist o al cargar en el DAW.' };
+    }
+    const info = audioEngine.getSongRamCacheInfo(song);
+    if (info.isReady || audioEngine.isProjectPcmReady(song)) return { text: 'Lista', tone: 'ready', title: 'Lista para sonar.' };
+    const live = nativeAudioEngine.formatImportProgress(song.id);
+    if (live) return { text: live, tone: 'busy', title: live };
+    return { text: `${info.cachedCount}/${info.totalCount}`, tone: 'idle', title: `${info.cachedCount}/${info.totalCount} pistas en RAM` };
+  };
+  const readyCount = setlistQueue.filter((song) => statusOf(song).tone === 'ready').length;
+
+  const mapPanel =
     isProjectInSetlist && project ? (
-      <div className="lt-plan-detail">
-        <div className="lt-waveform relative shrink-0 overflow-hidden">
+      <section className="lt-map" aria-label="Mapa de la canción">
+        <header className="lt-map-header">
+          <div className="min-w-0">
+            <strong title={project.title}>{project.title}</strong>
+            <span>
+              mapa de la canción · {sections.length === 0 ? 'sin secciones' : sections.length === 1 ? '1 sección' : `${sections.length} secciones`}
+            </span>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <button type="button" popoverTarget="section-templates" className="lt-control">
+              <Plus size={15} /> Añadir sección
+            </button>
+            <button type="button" onClick={onAddMarkerAtPlayhead} className="lt-control" title="Marca una sección sin nombre en la posición del cursor">
+              <Flag className="w-3.5 h-3.5" />
+              <span>Marcar aquí</span>
+            </button>
+            <button type="button" onClick={onOpenSectionEditor} className="lt-control">
+              Editar secciones
+            </button>
+            <button type="button" onClick={() => setIsFloatingMixerOpen(true)} className="lt-control">
+              <Sliders size={16} /> Mezcla
+            </button>
+          </div>
+          <div id="section-templates" popover="auto" className="lt-popover space-y-0.5">
+            <div className="px-2.5 py-1 text-xs text-studio-muted font-semibold">
+              Añadir en {formatTimecode(playheadSec)}
+            </div>
+            {SECTION_TEMPLATES.map((tpl) => (
+              <button
+                key={tpl.key}
+                type="button"
+                onClick={(event) => {
+                  onAddSectionTemplate(tpl.key);
+                  closePopover(event);
+                }}
+                className="w-full px-2.5 py-1.5 text-left rounded-lg hover:bg-neutral-800 text-neutral-100 flex items-center gap-2.5 cursor-pointer"
+              >
+                <span className="lt-code" style={{ '--sec': tpl.color } as React.CSSProperties}>{tpl.code}</span>
+                {tpl.name}
+              </button>
+            ))}
+          </div>
+        </header>
+
+        <div className="lt-waveform lt-map-wave relative shrink-0 overflow-hidden">
           <canvas
             ref={masterCanvasRef}
             onClick={handleMasterWaveformClick}
@@ -306,72 +365,37 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
             style={{ left: 'min(' + playheadPct + '%, calc(100% - 2px))' }}
             aria-hidden="true"
           />
-          <span className="lt-setlist-waveform-label">Forma de onda</span>
-              {transport.isMountingSong && (
-                <div className="absolute inset-0 bg-neutral-950/75 flex flex-col items-center justify-center p-4 text-center z-20">
-                  <div className="px-4 py-2.5 rounded-xl bg-studio-panel border border-amber-500/50 text-amber-300 text-sm font-bold shadow-xl">
-                    {transport.mountingProgressText || 'Cargando pistas en RAM...'}
-                  </div>
-                </div>
-              )}
-        </div>
-
-
-        <section aria-label="Secciones" className="lt-setlist-sections">
-          <div className="flex flex-wrap items-center gap-2 mb-2">
-            <span className="lt-plan-muted text-xs">
-              {sections.length === 0 ? 'Sin secciones' : sections.length === 1 ? '1 sección' : `${sections.length} secciones`}
-            </span>
-            <div className="ml-auto flex flex-wrap items-center gap-2">
-              <button type="button" onClick={onAddMarkerAtPlayhead} className="lt-control">
-                <Flag className="w-3.5 h-3.5" />
-                <span>Marcar aquí</span>
-              </button>
-              <button type="button" onClick={onOpenSectionEditor} className="lt-control">
-                Editar secciones
-              </button>
-              <button type="button" onClick={() => setIsFloatingMixerOpen(true)} className="lt-control">
-                <Sliders size={16} /> Mezcla
-              </button>
+          {sections.map((sec) => (
+            <button
+              key={sec.id}
+              type="button"
+              className="lt-map-badge"
+              data-active={sec.id === transport.activeSectionId || undefined}
+              data-queued={sec.id === transport.queuedSectionId || undefined}
+              style={{
+                left: `${(sec.startTimeSec / totalDurationSec) * 100}%`,
+                '--sec': sec.color || 'var(--lt-accent)',
+              } as React.CSSProperties}
+              onClick={() => onJumpSection(sec.id)}
+              title={`${sec.name} · ${formatMmSs(sec.startTimeSec)}`}
+              aria-label={`${sec.name}, ${formatMmSs(sec.startTimeSec)}`}
+            >
+              {sec.code}
+            </button>
+          ))}
+          {transport.isMountingSong && (
+            <div className="absolute inset-0 bg-neutral-950/75 flex flex-col items-center justify-center p-4 text-center z-20">
+              <div className="px-4 py-2.5 rounded-xl bg-studio-panel border border-amber-500/50 text-amber-300 text-sm font-bold shadow-xl">
+                {transport.mountingProgressText || 'Cargando pistas en RAM...'}
+              </div>
             </div>
-          </div>
-              {sections.length === 0 ? (
-                <div className="py-3 px-4 rounded-lg bg-studio-ground border border-neutral-800/80 text-xs text-neutral-300 flex items-center justify-between">
-                  <span>
-                    Esta canción aún no tiene secciones marcadas. Pulsa <strong>+ Marcar aquí</strong> mientras reproduces para dividirla en Intro, Verso, Coro, Puente, etc.
-                  </span>
-                </div>
-              ) : (
-                <div className="flex flex-wrap items-center gap-2">
-                  {sections.map((sec) => {
-                    const isActive = sec.id === transport.activeSectionId;
-                    const isQueued = sec.id === transport.queuedSectionId;
-                    const isVampHere = isActive && transport.isVamping;
-
-                    return (
-                      <button
-                        key={sec.id}
-                        type="button"
-                        onClick={() => onJumpSection(sec.id)}
-                        className="lt-setlist-section"
-                        data-active={isActive || undefined}
-                        data-queued={isQueued || undefined}
-                        aria-pressed={isActive}
-                        style={{ '--sec': sec.color || 'var(--lt-accent)' } as React.CSSProperties}
-                      >
-                        <i aria-hidden="true" />
-                        <span>{sec.name}</span>
-                        <span className="lt-setlist-section-time">
-                          {formatMmSs(sec.startTimeSec)}
-                        </span>
-                        {isQueued && <span className="lt-setlist-section-queued">En cola</span>}
-                        {isVampHere && <Repeat className="w-3.5 h-3.5 shrink-0" aria-label="En bucle" />}
-                      </button>
-                    );
-                  })}
-                </div>
-              )}
-        </section>
+          )}
+        </div>
+        {sections.length === 0 && (
+          <p className="lt-plan-hint">
+            Esta canción aún no tiene secciones. Usa «Añadir sección» mientras reproduces para dividirla en Intro, Verso, Coro, Puente…
+          </p>
+        )}
 
         <label className="lt-plan-notes">
           <span>Notas de la canción</span>
@@ -385,7 +409,7 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
             }}
           />
         </label>
-      </div>
+      </section>
     ) : null;
 
   return (
@@ -422,6 +446,17 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
           </div>
         </div>
         <div className="lt-plan-header-actions">
+          {setlistQueue.length > 0 && (
+            <button
+              type="button"
+              onClick={() => setIsEditingStrip((v) => !v)}
+              aria-pressed={isEditingStrip}
+              className="lt-control"
+              title="Muestra los botones para quitar canciones del setlist"
+            >
+              {isEditingStrip ? 'Listo' : 'Editar'}
+            </button>
+          )}
           {onClearSetlist && setlistQueue.length > 0 && (
             <button
               type="button"
@@ -433,9 +468,6 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
               <RotateCcw size={15} />
             </button>
           )}
-          <button type="button" onClick={openPicker} className="lt-control" title="Buscar canciones en la biblioteca y añadirlas">
-            <Plus size={16} /> Añadir canción
-          </button>
           <button
             type="button"
             onClick={onStartLive}
@@ -448,327 +480,52 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
         </div>
       </header>
 
-      {setlistQueue.length === 0 ? (
-        <div className="lt-empty">
-          <Music size={24} className="text-neutral-400" aria-hidden="true" />
-          <h2>Setlist vacío</h2>
-          <p>Busca canciones en tu biblioteca y añádelas, o suelta aquí los archivos de audio.</p>
-          <button type="button" onClick={openPicker} className="lt-primary"><Plus size={16} /> Añadir canción</button>
-        </div>
-      ) : (
-        <div
-          className="lt-plan-table"
-          onDragOver={(e) => e.preventDefault()}
-          onDrop={async (e) => {
-            if ((e.target as HTMLElement).closest('.lt-queue-item')) return;
-            e.preventDefault();
-            const songId = e.dataTransfer.getData('application/x-omnitracks-song-id');
-            if (songId) {
-              onAddToSetlist(songId);
-              return;
-            }
-            const audioFiles = await extractAudioFilesFromDataTransfer(e.dataTransfer);
-            if (audioFiles.length > 0) onQuickImportNewSongFiles(audioFiles);
+      <div
+        onDragOver={(e) => e.preventDefault()}
+        onDrop={async (e) => {
+          if ((e.target as HTMLElement).closest('.lt-tile')) return;
+          e.preventDefault();
+          const songId = e.dataTransfer.getData('application/x-omnitracks-song-id');
+          if (songId) {
+            onAddToSetlist(songId);
+            return;
+          }
+          const audioFiles = await extractAudioFilesFromDataTransfer(e.dataTransfer);
+          if (audioFiles.length > 0) onQuickImportNewSongFiles(audioFiles);
+        }}
+      >
+        <SetlistStrip
+          songs={setlistQueue}
+          currentId={project?.id ?? null}
+          isPlaying={transport.isPlaying}
+          isMounting={Boolean(transport.isMountingSong)}
+          mountingText={transport.mountingProgressText ?? undefined}
+          globalMode={setlistTransitionMode}
+          isEditing={isEditingStrip}
+          startOffsets={startOffsets}
+          statusOf={statusOf}
+          canOptimize={(song) => !isDesktopApp() && !audioEngine.isProjectPcmReady(song) && song.tracks.length > 0}
+          onSelect={onRequestSongAction}
+          onPlay={(song) => {
+            if (project?.id === song.id) onPlayPause();
+            else onLoadAndPlaySong(song.id, audioEngine.getSongRamCacheInfo(song).isReady || isDesktopApp());
           }}
-        >
-          <div className="lt-plan-grid lt-plan-head" aria-hidden="true">
-            <span>#</span>
-            <span>Canción</span>
-            <span className="lt-plan-cell">Tono</span>
-            <span className="lt-plan-cell">BPM</span>
-            <span className="lt-plan-cell">Dura</span>
-            <span className="lt-plan-cell">Empieza</span>
-            <span className="lt-plan-cell lt-plan-after">Al terminar</span>
-            <span>Estado</span>
-            <span />
-          </div>
-          <div role="group" aria-label="Canciones del setlist" className="lt-plan-rows">
-          {setlistQueue.map((song, idx) => {
-            const isCurrent = project?.id === song.id;
-            const isPlayingThis = isCurrent && transport.isPlaying;
-            const cacheInfo = audioEngine.getSongRamCacheInfo(song);
-            // Avance real de decodificación (pista N de M) emitido por el motor nativo.
-            const liveCacheText = isDesktopApp() ? nativeAudioEngine.formatImportProgress(song.id) : null;
-            // Escritorio: estado real de la caché PCM nativa (no el del motor web).
-            const nativeLiveText = liveCacheText;
-            const nativeReady = isDesktopApp() ? nativeAudioEngine.isNativeCacheReady(song.id) : null;
-            const isPcmReady = audioEngine.isProjectPcmReady(song);
-            const isStreamSong = audioEngine.getEffectiveEngineModeForProject(song) === 'stream';
-            const pcmMB = audioEngine.getProjectPcmEstimatedMB(song);
-            const durSec = songDuration(song);
-            const startSec = startOffsets[idx] ?? 0;
-
-            return (
-              <React.Fragment key={song.id}>
-              <div
-                  draggable
-                  onDragStart={(e) => {
-                    e.dataTransfer.setData(
-                      'application/x-omnitracks-setlist-index',
-                      String(idx)
-                    );
-                    e.dataTransfer.setData(
-                      'application/x-omnitracks-song-id',
-                      song.id
-                    );
-                  }}
-                  onDragOver={(e) => {
-                    e.preventDefault();
-                    setDragOverCardIdx(idx);
-                  }}
-                  onDragLeave={() => setDragOverCardIdx(null)}
-                  onDrop={(e) => {
-                    e.preventDefault();
-                    if (e.dataTransfer.types.includes('application/x-omnitracks-setlist-index')) e.stopPropagation();
-                    setDragOverCardIdx(null);
-                    const fromIdxStr = e.dataTransfer.getData(
-                      'application/x-omnitracks-setlist-index'
-                    );
-                    const droppedSongId = e.dataTransfer.getData(
-                      'application/x-omnitracks-song-id'
-                    );
-                    if (fromIdxStr !== '') {
-                      const fromIdx = Number(fromIdxStr);
-                      if (!Number.isNaN(fromIdx) && fromIdx !== idx) {
-                        onReorderSetlist(fromIdx, idx);
-                      }
-                    } else if (droppedSongId) {
-                      onAddToSetlist(droppedSongId);
-                    }
-                  }}
-                  onClick={() => {
-                    if (!isCurrent) {
-                      onRequestSongAction(song);
-                    }
-                  }}
-                  className="lt-queue-item lt-plan-grid relative cursor-pointer"
-                  data-current={isCurrent || undefined}
-                  data-dragging={dragOverCardIdx === idx || undefined}
-                >
-                  <div className="lt-plan-num">
-                    <GripHorizontal className="w-3.5 h-3.5 text-studio-muted cursor-grab shrink-0" />
-                    <span>{idx + 1}</span>
-                  </div>
-                  <div className="lt-plan-title">
-                    <strong title={song.title}>{song.title}</strong>
-                    <small title={song.artist}>{song.artist || (song.tracks.length === 1 ? '1 pista' : song.tracks.length + ' pistas')}</small>
-                  </div>
-                  <span className="lt-plan-cell">
-                    {song.keySignature}
-                    {song.pitchSemitones !== 0 && (
-                      <em title="Transpuesta respecto al original">{song.pitchSemitones > 0 ? '+' : ''}{song.pitchSemitones}</em>
-                    )}
-                  </span>
-                  <span className="lt-plan-cell">{song.bpm}</span>
-                  <span className="lt-plan-cell">{formatMmSs(durSec)}</span>
-                  <span className="lt-plan-cell lt-plan-muted">{formatMmSs(startSec)}</span>
-                  <span className="lt-plan-cell lt-plan-muted lt-plan-after" title="Se cambia en Ajustes de reproducción (engranaje de la barra superior)">
-                    {idx === setlistQueue.length - 1 ? '—' : TRANSITION_LABELS[setlistTransitionMode]}
-                  </span>
-                  <div className="lt-plan-status">
-                    <div className="flex items-center gap-1 shrink-0">
-                      {isDesktopApp() && song.tracks.length > 0 && (
-                        <span
-                          title={
-                            nativeLiveText
-                              ? `Generando la caché de audio nativa: ${nativeLiveText}`
-                              : nativeReady
-                              ? 'Caché de audio nativa lista: suena sin esperas.'
-                              : nativeReady === null
-                              ? 'Comprobando la caché de audio nativa...'
-                              : 'Sin caché de audio nativa: se genera al añadir al setlist o al cargar en el DAW.'
-                          }
-                          className={`px-1.5 py-0.2 rounded text-[11px] font-bold tracking-tight ${
-                            nativeLiveText
-                              ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
-                              : nativeReady
-                              ? 'bg-studio-strip text-studio-ink border border-studio-line'
-                              : 'bg-neutral-800/80 text-neutral-400 border border-neutral-700'
-                          }`}
-                        >
-                          {nativeLiveText ?? (nativeReady ? 'Lista' : nativeReady === null ? 'Comprobando' : 'Sin preparar')}
-                        </span>
-                      )}
-
-                      {!isDesktopApp() && cacheInfo.totalCount > 0 && (
-                        <span
-                          title={
-                            isStreamSong
-                              ? cacheInfo.isReady
-                                ? `Lista: suena desde el disco (streaming). En RAM solo hay ${((cacheInfo.cachedBytes || 0) / (1024 * 1024)).toFixed(0)} MB (los primeros segundos de cada pista).`
-                                : 'Se reproduce desde el disco (streaming); se prepara al acercarse su turno.'
-                              : cacheInfo.isReady
-                              ? `100% en caché RAM (${cacheInfo.cachedCount}/${cacheInfo.totalCount} pistas · ${((cacheInfo.cachedBytes || 0) / (1024 * 1024)).toFixed(0)} MB)`
-                              : `${cacheInfo.cachedCount}/${cacheInfo.totalCount} pistas en RAM`
-                          }
-                          className={`px-1.5 py-0.2 rounded text-[11px] font-bold tracking-tight ${
-                            cacheInfo.isReady
-                              ? 'bg-studio-strip text-studio-ink border border-studio-line'
-                              : cacheInfo.skippedByRamBudget
-                              ? 'bg-rose-500/15 text-rose-300 border border-rose-500/40'
-                              : cacheInfo.isPreloading || cacheInfo.cachedCount > 0
-                              ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
-                              : 'bg-neutral-800/80 text-neutral-400 border border-neutral-700'
-                          }`}
-                        >
-                          {isStreamSong
-                            ? cacheInfo.isReady
-                              ? 'Lista'
-                              : liveCacheText ?? 'Disco'
-                            : cacheInfo.isReady
-                            ? `RAM`
-                            : cacheInfo.skippedByRamBudget
-                            ? 'Lím'
-                            : liveCacheText
-                            ? liveCacheText
-                            : `${cacheInfo.cachedCount}/${cacheInfo.totalCount}`}
-                        </span>
-                      )}
-
-                      {isDesktopApp() ? null : isPcmReady ? (
-                        <span
-                          title={`Guardada en el disco del navegador (OPFS, ~${pcmMB} MB)`}
-                          className="px-1.5 py-0.2 rounded text-[11px] font-bold bg-studio-strip text-studio-ink border border-studio-line"
-                        >
-                          PCM
-                        </span>
-                      ) : (
-                        song.tracks.length > 0 && (
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              onOptimizeProject(song);
-                            }}
-                            title="Optimizar canción para streaming OPFS"
-                            className="px-1.5 py-0.2 rounded text-[11px] font-bold bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 cursor-pointer flex items-center gap-0.5"
-                          >
-                            <Zap className="w-2.5 h-2.5 text-amber-400" />
-                            <span>Opt</span>
-                          </button>
-                        )
-                      )}
-                    </div>
-                  </div>
-                  <div className="lt-plan-actions">
-                    <div className="flex items-center gap-1 shrink-0">
-                      <button
-                        type="button"
-                        disabled={Boolean(isCurrent && transport.isMountingSong)}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          if (isCurrent) {
-                            onPlayPause();
-                          } else {
-                            onLoadAndPlaySong(song.id, cacheInfo.isReady || isDesktopApp());
-                          }
-                        }}
-                        title={
-                          isCurrent && transport.isMountingSong
-                            ? transport.mountingProgressText || 'Cargando pistas en RAM...'
-                            : isPlayingThis
-                            ? 'Pausar canción'
-                            : isCurrent
-                            ? 'Reproducir desde posición actual'
-                            : cacheInfo.isReady
-                            ? 'En RAM: Montar y reproducir al instante'
-                            : 'Montar en consola en 00:00'
-                        }
-                        className="lt-control lt-queue-action"
-                      >
-                        {isPlayingThis ? (
-                          <Pause className="w-3 h-3 fill-current" />
-                        ) : (
-                          <Play className="w-3 h-3 fill-current" />
-                        )}
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={(event) => event.stopPropagation()}
-                        popoverTarget={`song-actions-${idx}`}
-                        aria-label={`Acciones de ${song.title}`}
-                        className="lt-control lt-queue-action"
-                      >
-                        <MoreHorizontal className="w-3.5 h-3.5" />
-                      </button>
-                    </div>
-                  </div>
-
-                  {/* Card Context Menu Popover */}
-                  <div
-                      id={`song-actions-${idx}`}
-                      popover="auto"
-                      onClick={(event) => event.stopPropagation()}
-                      className="lt-popover space-y-1"
-                    >
-                      <button
-                        type="button"
-                        onClick={(event) => {
-                          onLoadAndPlaySong(song.id, false);
-                          closePopover(event);
-                        }}
-                        className="w-full px-2.5 py-1.5 text-left rounded-lg hover:bg-neutral-800 text-studio-ink font-semibold cursor-pointer"
-                      >
-                        Montar en consola (00:00)
-                      </button>
-                      {!isDesktopApp() && !isPcmReady && song.tracks.length > 0 && (
-                        <button
-                          type="button"
-                          onClick={(event) => {
-                            onOptimizeProject(song);
-                          closePopover(event);
-                          }}
-                          className="w-full px-2.5 py-1.5 text-left rounded-lg hover:bg-neutral-800 text-amber-300 flex items-center gap-1.5 cursor-pointer font-medium"
-                        >
-                          <Zap className="w-3.5 h-3.5 text-amber-400" /> Optimizar (OPFS)
-                        </button>
-                      )}
-                      <button
-                        type="button"
-                        disabled={idx === 0}
-                        onClick={(event) => {
-                          onMoveInSetlist(song.id, 'up');
-                          closePopover(event);
-                        }}
-                        className="w-full px-2.5 py-1.5 text-left rounded-lg hover:bg-neutral-800 text-neutral-200 flex items-center gap-1.5 disabled:opacity-30 cursor-pointer"
-                      >
-                        <ChevronLeft className="w-3.5 h-3.5" /> Mover antes
-                      </button>
-                      <button
-                        type="button"
-                        disabled={idx === setlistQueue.length - 1}
-                        onClick={(event) => {
-                          onMoveInSetlist(song.id, 'down');
-                          closePopover(event);
-                        }}
-                        className="w-full px-2.5 py-1.5 text-left rounded-lg hover:bg-neutral-800 text-neutral-200 flex items-center gap-1.5 disabled:opacity-30 cursor-pointer"
-                      >
-                        <ChevronRight className="w-3.5 h-3.5" /> Mover después
-                      </button>
-                      <button
-                        type="button"
-                        onClick={(event) => {
-                          onRemoveFromSetlist(song.id);
-                          closePopover(event);
-                        }}
-                        className="w-full px-2.5 py-1.5 text-left rounded-lg hover:bg-red-500/20 text-red-400 flex items-center gap-1.5 cursor-pointer"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" /> Quitar del Setlist
-                      </button>
-                    </div>
-                </div>
-                {isCurrent && detailPanel}
-              </React.Fragment>
-            );
-          })}
-          </div>
-        </div>
-      )}
+          onMount={(song) => onLoadAndPlaySong(song.id, false)}
+          onMove={onMoveInSetlist}
+          onRemove={onRemoveFromSetlist}
+          onOptimize={onOptimizeProject}
+          onReorder={onReorderSetlist}
+          onDropLibrarySong={onAddToSetlist}
+          onAddSong={openPicker}
+          onSetTransition={onSetSongTransition}
+        />
+      </div>
 
       {setlistQueue.length > 0 && !isProjectInSetlist && (
-        <p className="lt-plan-hint">Pulsa una canción para montarla en consola. Aquí verás su forma de onda, sus secciones y tus notas.</p>
+        <p className="lt-plan-hint">Pulsa una canción para montarla en consola. Aquí verás su mapa con las secciones y tus notas.</p>
       )}
+
+      {mapPanel}
 
       {isPickerOpen && (
         <SongPickerModal

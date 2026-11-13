@@ -120,6 +120,9 @@ pub struct LibrarySong {
     /// Notas de la canción para el servicio (por ejemplo «entrar con el coro»).
     #[serde(default)]
     pub notes: Option<String>,
+    /// Qué hacer al terminar esta canción: «stop», «cue-next» o «auto-play». Sin valor: el ajuste general.
+    #[serde(default)]
+    pub transition_to_next: Option<String>,
     #[serde(default)]
     pub created_at: Option<u64>,
     #[serde(default)]
@@ -792,6 +795,7 @@ mod tests {
             bpm: 120.0,
             key_signature: "C Major".to_string(),
             notes: Some("Entrar con el coro; subir medio tono en el puente".to_string()),
+            transition_to_next: Some("stop".to_string()),
             updated_at: current_timestamp_ms(),
             ..Default::default()
         });
@@ -802,11 +806,13 @@ mod tests {
             loaded.songs[0].notes.as_deref(),
             Some("Entrar con el coro; subir medio tono en el puente")
         );
+        assert_eq!(loaded.songs[0].transition_to_next.as_deref(), Some("stop"));
 
         // Una biblioteca guardada antes de existir el campo sigue cargando (notes = None).
         let json = r#"{"id":"vieja","title":"x","artist":"y","bpm":100.0,"keySignature":"C","updatedAt":1}"#;
         let old: LibrarySong = serde_json::from_str(json).unwrap();
         assert_eq!(old.notes, None);
+        assert_eq!(old.transition_to_next, None);
 
         let _ = fs::remove_dir_all(tmp_dir);
     }

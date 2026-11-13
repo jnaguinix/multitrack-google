@@ -79,6 +79,8 @@ export interface SongProject {
   isTitleCustom?: boolean;
   /** Notas de la canción para el servicio (por ejemplo «entrar con el coro»). */
   notes?: string;
+  /** Qué hacer al terminar esta canción (la flecha hacia la siguiente). Sin valor: el ajuste general. */
+  transitionToNext?: SetlistTransitionMode;
   createdAt?: number;
   lastUsedAt?: number;
   sections: SongSection[];

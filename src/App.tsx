@@ -36,6 +36,8 @@ import {
 } from './types/project';
 import { TopBar, WorkspaceView } from './components/TopBar';
 import { formatTimecode, TransportDeck } from './components/TransportDeck';
+import { resolveTransition } from './utils/setlistTransition';
+import { SECTION_TEMPLATES, insertTemplateSection } from './utils/sectionTemplates';
 import { RepertoireTreeSidebar } from './components/RepertoireTreeSidebar';
 import { SetlistPageView } from './components/SetlistPageView';
 import { LiveSetView } from './components/LiveSetView';
@@ -640,9 +642,11 @@ export default function App() {
   // Connect Setlist End-of-Song Transition Callback
   useEffect(() => {
     audioEngine.setOnSongEnded(() => {
-      if (setlistTransitionMode === 'cue-next') {
+      // La flecha de la propia canción manda; sin ella, el ajuste general.
+      const mode = resolveTransition(currentProjectRef.current, setlistTransitionMode);
+      if (mode === 'cue-next') {
         handleNextSetlistSong(false);
-      } else if (setlistTransitionMode === 'auto-play') {
+      } else if (mode === 'auto-play') {
         handleNextSetlistSong(true);
       }
     });
@@ -819,6 +823,41 @@ export default function App() {
       console.error(`[Setlist] No se pudieron guardar las notas de '${song.title}':`, err);
       showToast(`No se pudieron guardar las notas de "${song.title}"`);
     });
+  };
+
+  // Flecha entre fichas: qué hacer al terminar una canción (undefined = ajuste general).
+  const handleSetSongTransition = (songId: string, mode: SetlistTransitionMode | undefined) => {
+    const song = projectsRef.current.find((p) => p.id === songId);
+    if (!song) return;
+    const updated: SongProject = { ...song, transitionToNext: mode };
+    setProjects((prev) => prev.map((p) => (p.id === songId ? updated : p)));
+    if (currentProjectRef.current?.id === songId) setCurrentProject(updated);
+    saveProjectToDb(updated).catch((err) => {
+      console.error(`[Setlist] No se pudo guardar la transición de '${song.title}':`, err);
+      showToast(`No se pudo guardar la transición de "${song.title}"`);
+    });
+  };
+
+  // Añade una sección de plantilla (Intro, Verso 1, Coro…) en la posición del cursor.
+  const handleAddSectionTemplate = (templateKey: string) => {
+    const template = SECTION_TEMPLATES.find((t) => t.key === templateKey);
+    if (!template || !currentProject) return;
+    const totalSec = Math.max(
+      10,
+      Math.round((transport.totalDurationSec || currentProject.durationSec || 60) * 100) / 100
+    );
+    const startSec = Math.round(transport.currentTimeSec * 100) / 100;
+    updateCurrentProject((prev) => {
+      const next: SongProject = {
+        ...prev,
+        sections: insertTemplateSection(prev.sections, template, startSec, totalSec, `sec-${Date.now()}`),
+      };
+      syncProjectSidecarNow(next, true).catch((err) => {
+        console.error('[Setlist] No se pudo sincronizar el sidecar de la canción:', err);
+      });
+      return next;
+    });
+    showToast(`${template.name} añadido en ${formatTimecode(Math.max(0, startSec))}`);
   };
 
   // «Iniciar en vivo»: monta la primera canción del setlist (sin reproducirla) y abre En vivo.
@@ -1217,6 +1256,8 @@ export default function App() {
               setlistTransitionMode={setlistTransitionMode}
               metersRef={metersRef}
               onUpdateSongNotes={handleUpdateSongNotes}
+              onSetSongTransition={handleSetSongTransition}
+              onAddSectionTemplate={handleAddSectionTemplate}
               onStartLive={handleStartLive}
               onPlayPause={handlePlayPause}
               onStop={handleStop}
