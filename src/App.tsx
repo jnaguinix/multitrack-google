@@ -1060,7 +1060,7 @@ export default function App() {
     ? setAudioTriggerHost : undefined;
 
   return (
-    <div className="min-h-screen h-dvh flex flex-col bg-studio-ground text-neutral-100 overflow-hidden relative">
+    <div className="app-shell min-h-screen h-dvh flex flex-col bg-studio-ground text-neutral-100 overflow-hidden relative">
       {/* Top Navigation Bar */}
       <TopBar
         activeView={activeView}

@@ -1684,3 +1684,12 @@
 @supports not (position-area: bottom) {
   .lt-popover { inset: 52px 12px auto auto; }
 }
+
+/* Pantallas grandes: la interfaz se escala por escalones para que no quede pequeña en un mar de espacio vacío. */
+:root { --ui-zoom: 1; }
+@media (min-width: 1800px) { :root { --ui-zoom: 1.2; } }
+@media (min-width: 2300px) { :root { --ui-zoom: 1.45; } }
+@media (min-width: 3000px) { :root { --ui-zoom: 1.8; } }
+html { zoom: var(--ui-zoom); }
+/* Con zoom, las unidades de viewport no se escalan: se compensa para que la app siga llenando la ventana. */
+.app-shell { height: calc(100dvh / var(--ui-zoom)) !important; min-height: 0 !important; }
