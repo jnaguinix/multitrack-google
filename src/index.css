@@ -25,7 +25,7 @@
     --lt-meter-bg: #111111;
     --lt-accent: #8dd6cd;
     /* Versión viva del acento, para lo que debe llamar la atención (Iniciar en vivo, canción montada). */
-    --lt-vivid: #3D6BFF;
+    --lt-vivid: var(--lt-accent);
     --lt-solo: #e8ba68;
     --lt-mute: #d56a68;
   }
@@ -1390,13 +1390,13 @@
   border: 0;
   border-radius: 8px;
   background: var(--lt-vivid);
-  color: #fff;
+  color: #0b2b27;
   font-size: 14px;
   font-weight: 700;
   cursor: pointer;
   transition: background .15s ease, transform .1s ease;
 }
-.lt-live-btn:hover:not(:disabled) { background: #5B85FF; }
+.lt-live-btn:hover:not(:disabled) { background: #a6e3db; }
 .lt-live-btn:active:not(:disabled) { transform: scale(.98); }
 .lt-live-btn:disabled { background: var(--lt-raised); color: var(--lt-mut); cursor: default; }
 .lt-plan-table { display: grid; border: 1px solid var(--lt-line); border-radius: 12px; overflow: hidden; background: var(--lt-panel); }
@@ -1556,7 +1556,7 @@
   cursor: pointer;
 }
 .lt-link-btn:hover { color: var(--lt-text); border-color: var(--lt-text); }
-.lt-link-btn[data-own] { color: #fff; background: var(--lt-vivid); border-color: var(--lt-vivid); }
+.lt-link-btn[data-own] { color: #0b2b27; background: var(--lt-vivid); border-color: var(--lt-vivid); }
 
 /* Mapa de la canción montada: onda con las secciones como círculos de color. */
 .lt-map { display: grid; gap: 10px; }
