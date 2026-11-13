@@ -366,7 +366,7 @@ export const TimelineArranger: React.FC<TimelineArrangerProps> = ({
                         <span className="truncate font-bold">{sec.name}</span>
                         {isVampHere && <Repeat className="w-3 h-3 text-amber-400 shrink-0" />}
                       </span>
-                      <span className="tabular-nums text-[11px] opacity-80 shrink-0 ml-1">
+                      <span className="tabular-nums text-xs opacity-80 shrink-0 ml-1">
                         {formatMmSs(sec.startTimeSec)}
                       </span>
                     </button>
@@ -394,7 +394,7 @@ export const TimelineArranger: React.FC<TimelineArrangerProps> = ({
                   <div
                     key={secMark}
                     style={{ left: `${leftPct}%` }}
-                    className="absolute top-0 bottom-0 border-l border-neutral-700/80 pl-1.5 flex items-center text-[11px] tabular-nums text-neutral-300"
+                    className="absolute top-0 bottom-0 border-l border-neutral-700/80 pl-1.5 flex items-center text-xs tabular-nums text-neutral-300"
                   >
                     {formatMmSs(secMark)}
                   </div>
@@ -465,7 +465,7 @@ export const TimelineArranger: React.FC<TimelineArrangerProps> = ({
                           type="button"
                           onClick={() => onToggleTrackMute(track.id)}
                           title="Silenciar Pista (Mute)"
-                          className={`w-6 h-5.5 rounded text-[11px] font-bold transition-colors cursor-pointer ${
+                          className={`w-6 h-5.5 rounded text-xs font-bold transition-colors cursor-pointer ${
                             track.muted
                               ? 'bg-red-600 text-white'
                               : 'bg-neutral-800 text-neutral-300 hover:text-white'
@@ -477,7 +477,7 @@ export const TimelineArranger: React.FC<TimelineArrangerProps> = ({
                           type="button"
                           onClick={() => onToggleTrackSolo(track.id)}
                           title="Aislar Pista (Solo)"
-                          className={`w-6 h-5.5 rounded text-[11px] font-bold transition-colors cursor-pointer ${
+                          className={`w-6 h-5.5 rounded text-xs font-bold transition-colors cursor-pointer ${
                             track.soloed
                               ? 'bg-amber-400 text-neutral-950'
                               : 'bg-neutral-800 text-neutral-300 hover:text-white'
@@ -512,7 +512,7 @@ export const TimelineArranger: React.FC<TimelineArrangerProps> = ({
                         title="Arrastra para ajustar volumen · Doble clic = 0.0 dB"
                         className="w-20 min-w-0 flex-1 accent-studio-accent h-1.5 bg-neutral-800 rounded-lg cursor-pointer"
                       />
-                      <span className="tabular-nums text-[11px] font-semibold text-neutral-300 w-14 text-right shrink-0">
+                      <span className="tabular-nums text-xs font-semibold text-neutral-300 w-14 text-right shrink-0">
                         {gainToDbText(track.gain)}
                       </span>
 
@@ -522,7 +522,7 @@ export const TimelineArranger: React.FC<TimelineArrangerProps> = ({
                         onChange={(e) =>
                           onChangeTrackBus(track.id, e.target.value as OutputBus)
                         }
-                        className="bg-neutral-900 border border-neutral-700 rounded px-1.5 py-0.5 text-[11px] font-semibold text-neutral-200 focus:outline-none focus:border-studio-line cursor-pointer ml-auto"
+                        className="bg-neutral-900 border border-neutral-700 rounded px-1.5 py-0.5 text-xs font-semibold text-neutral-200 focus:outline-none focus:border-studio-line cursor-pointer ml-auto"
                       >
                         <option value="main">Main</option>
                         <option value="cue-click">Cue</option>

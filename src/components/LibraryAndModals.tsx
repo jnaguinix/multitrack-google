@@ -158,7 +158,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                         {isPcmReady ? (
                           <span
                             title={`Audio PCM Int16 optimizado en OPFS (~${pcmMB} MB en disco). Carga rápida y streaming por ventanas.`}
-                            className="px-2 py-0.5 rounded text-[11px] font-bold bg-studio-strip text-studio-ink border border-studio-line flex items-center gap-1"
+                            className="px-2 py-0.5 rounded text-xs font-bold bg-studio-strip text-studio-ink border border-studio-line flex items-center gap-1"
                           >
                             <HardDrive className="w-3 h-3" />
                             <span>PCM listo ({pcmMB} MB)</span>
@@ -166,7 +166,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                         ) : (
                           <span
                             title="Esta canción aún no tiene archivos PCM generados en OPFS. Pulsa 'Optimizar' para generar PCM en disco."
-                            className="px-2 py-0.5 rounded text-[11px] text-studio-muted flex items-center gap-1"
+                            className="px-2 py-0.5 rounded text-xs text-studio-muted flex items-center gap-1"
                           >
                             <span>Sin optimizar</span>
                           </span>
@@ -466,7 +466,7 @@ export const SongMetadataEditModal: React.FC<SongMetadataEditModalProps> = ({
             </div>
           </div>
 
-          <p className="text-[11px] text-neutral-400">
+          <p className="text-xs text-neutral-400">
             Los cambios se guardan en library.json y en el archivo omnitracks.project.json de la carpeta. No renombra archivos en disco.
           </p>
 
@@ -720,9 +720,9 @@ export const SongFingerprintPromptModal: React.FC<SongFingerprintPromptModalProp
                         className="text-amber-500 focus:ring-0"
                       />
                       <span className="font-semibold text-xs">{cand.song.title}</span>
-                      <span className="text-neutral-500 text-[11px]">{cand.song.artist}</span>
+                      <span className="text-neutral-500 text-xs">{cand.song.artist}</span>
                     </div>
-                    <span className="text-[11px] font-bold text-amber-400">
+                    <span className="text-xs font-bold text-amber-400">
                       {Math.round(cand.matchRatio * 100)}% ({cand.matchedTrackCount}/{cand.totalTracks})
                     </span>
                   </label>
@@ -905,7 +905,7 @@ export const StemImporterModal: React.FC<StemImporterModalProps> = ({
             <span className="text-xs font-bold text-neutral-200">
               Elegir Archivos de Audio
             </span>
-            <span className="text-[11px] text-neutral-400 mt-1">
+            <span className="text-xs text-neutral-400 mt-1">
               Selección múltiple (.wav, .mp3...)
             </span>
             <input
@@ -948,7 +948,7 @@ export const StemImporterModal: React.FC<StemImporterModalProps> = ({
             <span className="text-xs font-bold text-neutral-200">
               Importar Carpeta Completa
             </span>
-            <span className="text-[11px] text-neutral-400 mt-1">
+            <span className="text-xs text-neutral-400 mt-1">
               Detecta título y todos los stems
             </span>
           </button>
@@ -1299,7 +1299,7 @@ export const SectionEditorModal: React.FC<SectionEditorModalProps> = ({
                       )
                     }
                     title={`Fijar inicio en el cabezal actual (${formatSectionMmSs(currentTimeSec)})`}
-                    className="px-1.5 py-1 rounded bg-neutral-800 hover:bg-neutral-700 text-[11px] text-studio-ink flex items-center gap-1 cursor-pointer"
+                    className="px-1.5 py-1 rounded bg-neutral-800 hover:bg-neutral-700 text-xs text-studio-ink flex items-center gap-1 cursor-pointer"
                   >
                     <Clock className="w-3 h-3" />
                     <span>Cabezal</span>
@@ -1529,7 +1529,7 @@ export const OptimizationProgressModal: React.FC<OptimizationProgressModalProps>
           </div>
         </div>
 
-        <p className="text-[11px] text-neutral-400 leading-relaxed">
+        <p className="text-xs text-neutral-400 leading-relaxed">
           Guarda cada pista una sola vez en el disco del navegador (OPFS) para reproducirla en streaming sin ocupar RAM. Se procesan varias pistas en paralelo; puedes cerrar esta ventana y seguirá en segundo plano.</p>
 
         {/* Actions */}

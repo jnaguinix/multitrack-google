@@ -463,7 +463,7 @@ export const MultitrackMixer: React.FC<MultitrackMixerProps> = ({
                 {activeSection ? activeSection.name : 'Listo'}
               </small>
             </div>
-            <span className="text-[11px] text-studio-muted hidden sm:inline">
+            <span className="text-xs text-studio-muted hidden sm:inline">
               · Doble clic en fader = 0.0 dB · Doble clic en knob = Centrar (C)
             </span>
           </div>
