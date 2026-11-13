@@ -110,6 +110,40 @@ export function useImportFlow({
           ? 'current-song'
           : 'new-song';
 
+      // Misma regla que la importación nativa: no duplicar una canción que ya está en la biblioteca.
+      // Los archivos del selector o del arrastre solo traen el tamaño, así que se compara por tamaño.
+      if (effectiveMode === 'new-song') {
+        const incoming: TrackSummary[] = validFiles.map((f) => ({
+          fileSize: f.size,
+          name: f.name,
+          fileName: f.name,
+        }));
+        const matches = findSongFingerprintMatches(incoming, projectsRef.current);
+        if (matches.length > 0) {
+          const top = matches[0];
+          if (matches.length === 1 && top.matchRatio === 1.0) {
+            showToast(`"${top.song.title}" ya está en la biblioteca: no se importó de nuevo.`);
+            return;
+          }
+          const firstPath = (validFiles[0] as File & { webkitRelativePath?: string }).webkitRelativePath;
+          const sourceLabel = (firstPath && firstPath.split('/')[0]) || validFiles[0].name;
+          const userChoice = await new Promise<SongProject | null | 'cancel'>((resolve) => {
+            setFingerprintPrompt({
+              candidates: matches,
+              incomingTrackCount: validFiles.length,
+              sourceLabel,
+              resolve,
+            });
+          });
+          if (userChoice === 'cancel') return;
+          if (userChoice !== null) {
+            showToast(`Se conserva "${userChoice.title}" de la biblioteca: no se duplicó.`);
+            return;
+          }
+          // userChoice === null: el usuario pidió importarla como canción nueva.
+        }
+      }
+
       const baseTimestamp = Date.now();
       const targetProjectId =
         effectiveMode === 'new-song'
@@ -178,6 +212,8 @@ export function useImportFlow({
           peaks: [],
           isCustomAudio: true,
           fileName: file.name,
+          // El tamaño permite reconocer la misma canción si se vuelve a importar.
+          fileSize: file.size,
           durationSec: estDuration > 0 ? estDuration : undefined,
         };
 
@@ -525,7 +561,7 @@ export function useImportFlow({
       await stemsSavePromise;
       runAutoOptimizeRef.current(targetProjectId);
     },
-    [projects.length, showToast]
+    [projects.length, showToast, setFingerprintPrompt]
   );
 
   // Desktop Native Import: Passes folder/file paths directly to Rust native engine.

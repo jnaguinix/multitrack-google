@@ -136,4 +136,16 @@ const autoMergeTest8 = res8.length === 1 && res8[0].matchRatio === 1.0;
 assert(!autoMergeTest8, 'Coincidencia parcial (80–99%) DEBE preguntar al usuario, nunca auto-fusionar');
 console.log('✔ Test 8 (d) PASADO');
 
+// Test 9 (e): importación por selector del navegador: los archivos solo traen el tamaño (sin duración)
+// y la canción guardada sí tiene duración. Debe reconocerse la misma canción solo por tamaño.
+const browserFiles = baseSong.tracks.map((t) => ({ name: `${t.name}.mp3`, fileName: `${t.name}.mp3`, fileSize: t.fileSize }));
+const res9 = findSongFingerprintMatches(browserFiles, [baseSong]);
+console.log('Test 9 (e - archivos del navegador sin duración):', res9.length, res9[0]?.matchRatio);
+assert(res9.length === 1 && res9[0].matchRatio === 1.0, 'Archivos sin duración deben coincidir al 100% por tamaño');
+// Y tres copias idénticas en la biblioteca (el caso que se vio) dan tres candidatas: hay que preguntar.
+const triple = [baseSong, { ...baseSong, id: 'copia-2' }, { ...baseSong, id: 'copia-3' }];
+const res9b = findSongFingerprintMatches(browserFiles, triple);
+assert(res9b.length === 3, 'Con tres copias iguales en la biblioteca hay tres candidatas');
+console.log('✔ Test 9 (e) PASADO');
+
 console.log('=== TODAS LAS PRUEBAS DE HUELLA DE PISTAS PASARON EXITOSAMENTE ===');
