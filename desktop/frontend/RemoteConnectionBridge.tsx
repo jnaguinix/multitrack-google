@@ -1,7 +1,7 @@
 
 import { memo, useEffect, useLayoutEffect, useRef, useState, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
-import { Radio } from 'lucide-react';
+import { Wifi } from 'lucide-react';
 import type { SongProject } from '../../src/types/project';
 import { audioEngine } from '../../src/audio/audioEngine';
 import { applyMix, matches, snapshot, targets, trackIdentity } from './remoteState';
@@ -243,7 +243,7 @@ export default memo(function RemoteConnectionBridge({ project, setlist, activati
             if (!connection && !busy) void refresh();
           }}
         >
-          <Radio size={16} aria-hidden="true" />
+          <Wifi size={16} aria-hidden="true" />
           <span>Conexión remota</span>
         </button>,
         triggerHost,
