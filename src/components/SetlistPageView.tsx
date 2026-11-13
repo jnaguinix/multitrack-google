@@ -148,7 +148,6 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
   onChangeMasterGain,
   onChangeCueMasterGain,
   onResetMixer,
-  onUpdateSongNotes,
   onStartLive,
   onSetSongTransition,
   onAddSectionTemplate,
@@ -291,10 +290,6 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
     return acc;
   }, []);
   const { meta: setlistMeta, setName: setSetlistName, setDate: setSetlistDate } = useSetlistMeta();
-  const [notesDraft, setNotesDraft] = useState('');
-  useEffect(() => {
-    setNotesDraft(project?.notes ?? '');
-  }, [project?.id, project?.notes]);
   const setlistTotalSec = setlistQueue.reduce((sum, song) => sum + songDuration(song), 0);
 
   /** Estado de la caché de audio de una canción, tal como lo muestra su ficha. */
@@ -405,19 +400,6 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
             Esta canción aún no tiene secciones. Usa «Añadir sección» mientras reproduces para dividirla en Intro, Verso, Coro, Puente…
           </p>
         )}
-
-        <label className="lt-plan-notes">
-          <span>Notas de la canción</span>
-          <textarea
-            value={notesDraft}
-            rows={2}
-            placeholder="Por ejemplo: entrar con el coro, subir medio tono en el puente"
-            onChange={(e) => setNotesDraft(e.target.value)}
-            onBlur={() => {
-              if (project && notesDraft !== (project.notes ?? '')) onUpdateSongNotes(project.id, notesDraft);
-            }}
-          />
-        </label>
       </section>
     ) : null;
 
