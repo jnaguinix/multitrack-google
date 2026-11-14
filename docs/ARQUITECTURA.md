@@ -150,12 +150,7 @@ Puentes con el escritorio en `desktop/frontend/`: `RemoteConnectionBridge.tsx` m
 
 ## 7. Deuda Técnica Registrada
 
-1. **`MARKER_PALETTE` duplicada**:
-   - Definida actualmente de manera idéntica en `src/App.tsx` (línea 119) y en `src/hooks/useImportFlow.ts` (línea 39).
-   - *Acción recomendada*: Centralizar en un módulo compartido de constantes de UI (`src/constants/ui.ts` o `src/types/project.ts`).
-2. **`handleRelinkProject` en `src/App.tsx`**:
+1. **`handleRelinkProject` en `src/App.tsx`**:
    - Se mantuvo directamente en `App.tsx` para respetar el orden de declaración y evitar errores de hoisting temporal (`TS2448`) con `activateProject` y `handleSelectView`.
    - *Acción recomendada*: Pasar las dependencias como callbacks a un submódulo específico durante una próxima fase de refactorización de vistas.
-3. **Errores silenciados**: `.catch(() => {})` en `App.tsx`, `useSetlist.ts:97`, `audioEngine.ts` y `nativeAudioEngine.ts` (lista exacta en `CLAUDE.md` §6). Incumplen la regla «nunca tragar errores».
-4. **Código sin interfaz**: `handleCreateNewProject` y `handleImportJsonFile` en `useProjectActions.ts`.
-5. **Archivos grandes**: `audioEngine.ts` (~2600 líneas), `App.tsx` (~1700), `LibraryAndModals.tsx` (~1550).
+2. **Archivos grandes**: `audioEngine.ts` (~2600 líneas), `App.tsx` (~1700), `LibraryAndModals.tsx` (~1550).

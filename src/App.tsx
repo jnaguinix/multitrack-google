@@ -3,6 +3,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import { logAsyncError } from './utils/asyncErrors';
+import { MARKER_PALETTE } from './utils/markerPalette';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Upload, Music, FolderOpen, AlertTriangle, Trash2 } from 'lucide-react';
 import { audioEngine } from './audio/audioEngine';
@@ -26,7 +28,6 @@ import {
   AudioEngineMode,
   OutputBus,
   QuantizeMode,
-  RemoteSyncMessage,
   SetlistTransitionMode,
   SongProject,
   SongSection,
@@ -113,16 +114,6 @@ function getInitialViewFromHash(): WorkspaceView {
   return 'setlist';
 }
 
-const MARKER_PALETTE = [
-  '#06B6D4',
-  '#3B82F6',
-  '#10B981',
-  '#F59E0B',
-  '#8B5CF6',
-  '#EC4899',
-  '#EF4444',
-];
-
 export default function App() {
   useEffect(() => {
     document.documentElement.classList.add('dark');
@@ -185,8 +176,6 @@ export default function App() {
   const [isSectionEditorOpen, setIsSectionEditorOpen] = useState(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
-  const channelRef = useRef<BroadcastChannel | null>(null);
-  const lastBroadcastTransportMsRef = useRef<number>(0);
   const currentProjectRef = useRef<SongProject | null>(currentProject);
   currentProjectRef.current = currentProject;
   const projectsRef = useRef<SongProject[]>([]);
@@ -439,7 +428,7 @@ export default function App() {
           showToast(`No se encontró ningún stem de "${proj.title}" en esa carpeta.`);
           return;
         }
-        syncProjectSidecarNow(proj, true).catch(() => {});
+        syncProjectSidecarNow(proj, true).catch(logAsyncError('sincronizar el archivo de la canción'));
         showToast(`Reubicados ${relinked}/${total} stems de "${proj.title}"`);
         runAutoOptimize(proj.id);
       } catch (err) {
@@ -534,7 +523,7 @@ export default function App() {
 
         setCurrentProject(updatedProject);
         audioEngine.updateProjectConfig(updatedProject);
-        saveProjectToDb(updatedProject).catch(() => {});
+        saveProjectToDb(updatedProject).catch(logAsyncError('guardar la canción'));
         setProjects((prev) => {
           const exists = prev.some((p) => p.id === updatedProject.id);
           if (!exists) return [updatedProject, ...prev];
@@ -572,7 +561,7 @@ export default function App() {
         setProjects(saved);
         // Clean up orphan OPFS directories from projects that were previously deleted
         const validIds = new Set(saved.map((p) => p.id));
-        cleanOrphanPcmDirectories(validIds).catch(() => {});
+        cleanOrphanPcmDirectories(validIds).catch(logAsyncError('limpiar cachés PCM huérfanas'));
         projectsRef.current = saved;
         applyPruneRef.current();
       } catch {
@@ -637,37 +626,10 @@ export default function App() {
     return () => audioEngine.setOnSongEnded(null);
   }, [handleNextSetlistSong, setlistTransitionMode]);
 
-  // 5. BroadcastChannel: send full project ONLY when currentProject changes
-  useEffect(() => {
-    if (!channelRef.current || !currentProject) return;
-    const msg: RemoteSyncMessage = {
-      type: 'STATE_SYNC',
-      project: {
-        ...currentProject,
-        tracks: currentProject.tracks.map(({ peaks: _peaks, ...rest }) => rest),
-      },
-      transport: transportRef.current,
-    };
-    channelRef.current.postMessage(msg);
-  }, [currentProject]);
-
-  // 5. Subscribe to transport updates (already throttled to ~20fps by audioEngine)
-  // and send transport-only BroadcastChannel updates throttled to ~10fps (100ms)
+  // Estado de transporte del motor (ya limitado a ~20 fps por audioEngine)
   useEffect(() => {
     const unsubscribe = audioEngine.subscribe((newTransport) => {
       setTransport(newTransport);
-
-      if (channelRef.current && currentProjectRef.current) {
-        const nowMs = performance.now();
-        if (nowMs - lastBroadcastTransportMsRef.current >= 100) {
-          lastBroadcastTransportMsRef.current = nowMs;
-          const msg: RemoteSyncMessage = {
-            type: 'TRANSPORT_SYNC',
-            transport: newTransport,
-          };
-          channelRef.current.postMessage(msg);
-        }
-      }
     });
 
     return unsubscribe;
@@ -681,79 +643,13 @@ export default function App() {
         const next = updater(prev);
         if (next === prev) return prev;
         audioEngine.updateProjectConfig(next);
-        saveProjectToDb(next).catch(() => {});
+        saveProjectToDb(next).catch(logAsyncError('guardar la canción'));
         setProjects((list) => list.map((item) => (item.id === next.id ? next : item)));
         return next;
       });
     },
     []
   );
-
-  // Setup BroadcastChannel for multi-tab / tablet Stage Remote control
-  useEffect(() => {
-    if (typeof BroadcastChannel === 'undefined') return;
-    const bc = new BroadcastChannel('omnitracks_remote_sync');
-    channelRef.current = bc;
-
-    bc.onmessage = (ev: MessageEvent<RemoteSyncMessage>) => {
-      const data = ev.data;
-      if (!data) return;
-
-      switch (data.type) {
-        case 'CMD_PLAY_PAUSE':
-          audioEngine.togglePlayPause();
-          break;
-        case 'CMD_STOP':
-          audioEngine.stop();
-          break;
-        case 'CMD_JUMP_SECTION':
-          audioEngine.queueSectionJump(data.sectionId);
-          break;
-        case 'CMD_TOGGLE_VAMP':
-          audioEngine.toggleVamp();
-          break;
-        case 'CMD_TOGGLE_CLICK':
-          updateCurrentProject((p) => ({ ...p, clickEnabled: !p.clickEnabled }));
-          break;
-        case 'CMD_TOGGLE_GUIDE':
-          updateCurrentProject((p) => ({ ...p, guideCuesEnabled: !p.guideCuesEnabled }));
-          break;
-        case 'CMD_SET_QUANTIZE':
-          updateCurrentProject((p) => ({ ...p, quantizeMode: data.mode }));
-          break;
-        case 'CMD_SET_TRACK_MUTE':
-          updateCurrentProject((p) => ({
-            ...p,
-            tracks: p.tracks.map((t) =>
-              t.id === data.trackId ? { ...t, muted: data.muted } : t
-            ),
-          }));
-          break;
-        case 'CMD_SET_CLICK_GAIN':
-          updateCurrentProject((p) => ({ ...p, clickGain: data.gain }));
-          break;
-        case 'CMD_SET_GUIDE_GAIN':
-          updateCurrentProject((p) => ({ ...p, guideGain: data.gain }));
-          break;
-        case 'CMD_SET_MASTER_GAIN':
-          updateCurrentProject((p) => ({ ...p, masterGain: data.gain }));
-          break;
-        case 'CMD_NEXT_SONG':
-          handleNextSetlistSong(false);
-          break;
-        case 'CMD_PREV_SONG':
-          handlePrevSetlistSong();
-          break;
-        default:
-          break;
-      }
-    };
-
-    return () => {
-      bc.close();
-      channelRef.current = null;
-    };
-  }, [handleNextSetlistSong, handlePrevSetlistSong, updateCurrentProject]);
 
   // Global Studio Keyboard Shortcuts (Space = Play/Pause, V = Vamp, 1-9 = Section Jumps)
   useEffect(() => {
@@ -916,7 +812,7 @@ export default function App() {
         ...prev,
         sections: recalculated,
       };
-      syncProjectSidecarNow(next, true).catch(() => {});
+      syncProjectSidecarNow(next, true).catch(logAsyncError('sincronizar el archivo de la canción'));
       return next;
     });
 

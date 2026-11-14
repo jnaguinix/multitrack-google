@@ -1,12 +1,9 @@
+import { logAsyncError } from '../utils/asyncErrors';
 import { SongProject } from '../types/project';
 import { WorkspaceView } from '../components/TopBar';
 import { audioEngine } from '../audio/audioEngine';
 import { isOpfsSupported, isProjectPcmComplete } from '../storage/opfsStorage';
-import {
-  createEmptyProjectTemplate,
-  saveProjectToDb,
-  normalizeProjectSectionsToTime,
-} from '../storage/projectDb';
+import { saveProjectToDb } from '../storage/projectDb';
 
 interface UseProjectActionsDeps {
   projects: SongProject[];
@@ -71,20 +68,6 @@ export function useProjectActions({
     showToast(`Canción montada en consola: ${found.title}`);
   };
 
-  const handleCreateNewProject = async (
-    title: string,
-    artist: string,
-    bpm: number,
-    keySignature: string
-  ) => {
-    const newProj = createEmptyProjectTemplate(title, artist, bpm, keySignature);
-    newProj.inSetlist = false;
-    newProj.setlistOrder = undefined;
-    await activateProject(newProj);
-    handleSelectView('library');
-    showToast(`Nueva canción creada en biblioteca: ${title}`);
-  };
-
   const handleUpdateSongMetadata = (updated: SongProject) => {
     const next: SongProject = {
       ...updated,
@@ -96,7 +79,7 @@ export function useProjectActions({
       setCurrentProject(next);
       audioEngine.updateProjectConfig(next);
     }
-    saveProjectToDb(next).catch(() => {});
+    saveProjectToDb(next).catch(logAsyncError('guardar la canción'));
     showToast(`Metadatos actualizados: "${next.title}"`);
   };
 
@@ -119,34 +102,10 @@ export function useProjectActions({
     showToast('Archivo omnitracks.project.json exportado');
   };
 
-  const handleImportJsonFile = async (file: File) => {
-    try {
-      const text = await file.text();
-      const parsed = JSON.parse(text) as SongProject;
-      if (!parsed.title || !Array.isArray(parsed.tracks)) {
-        showToast('El archivo JSON no tiene un formato de OmniTracks válido');
-        return;
-      }
-      const importedProj: SongProject = normalizeProjectSectionsToTime({
-        ...parsed,
-        id: `imported-${Date.now()}`,
-        folder: 'imported',
-        updatedAt: Date.now(),
-      });
-      await activateProject(importedProj);
-      handleSelectView('setlist');
-      showToast(`Proyecto importado: ${importedProj.title}`);
-    } catch {
-      showToast('No se pudo leer el archivo JSON');
-    }
-  };
-
   return {
     handleLoadProjectImmediately,
-    handleCreateNewProject,
     handleUpdateSongMetadata,
     handleDeleteProject,
     handleExportJson,
-    handleImportJsonFile,
   };
 }

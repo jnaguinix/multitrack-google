@@ -1,3 +1,5 @@
+import { logAsyncError } from '../utils/asyncErrors';
+import { MARKER_PALETTE } from '../utils/markerPalette';
 import { useCallback } from 'react';
 import {
   OutputBus,
@@ -35,16 +37,6 @@ import {
 import { getRegisteredHandle } from '../storage/sourceFiles';
 import { audioEngine } from '../audio/audioEngine';
 import { nativeAudioEngine } from '../audio/nativeAudioEngine';
-
-const MARKER_PALETTE = [
-  '#06B6D4',
-  '#3B82F6',
-  '#10B981',
-  '#F59E0B',
-  '#8B5CF6',
-  '#EC4899',
-  '#EF4444',
-];
 
 interface UseImportFlowDeps {
   projects: SongProject[];
@@ -176,7 +168,7 @@ export function useImportFlow({
       const secPerBar = (60 / bpm) * beatsPerBar;
 
       // Request storage persistence in background without blocking
-      ensureStoragePersist().catch(() => {});
+      ensureStoragePersist().catch(logAsyncError('solicitar almacenamiento persistente'));
 
       // =========================================================================
       // PHASE 1: SUB-MILLISECOND WAV HEADER INSPECTION & INSTANT UI/ENGINE MOUNT
@@ -372,7 +364,7 @@ export function useImportFlow({
         audioEngine.prepareProjectShell(newSongProject);
         setCurrentProject(newSongProject);
         setProjects((prev) => [newSongProject, ...prev]);
-        saveProjectToDb(newSongProject).catch(() => {});
+        saveProjectToDb(newSongProject).catch(logAsyncError('guardar la canción'));
       } else {
         const current = currentProjectRef.current!;
         const combinedTracks = [...current.tracks, ...initialTracks];
@@ -392,7 +384,7 @@ export function useImportFlow({
         setProjects((prev) =>
           prev.map((p) => (p.id === updatedProject.id ? updatedProject : p))
         );
-        saveProjectToDb(updatedProject).catch(() => {});
+        saveProjectToDb(updatedProject).catch(logAsyncError('guardar la canción'));
       }
 
       // Save native File Blob pointers to IndexedDB in background (zero re-encoding)
@@ -554,7 +546,7 @@ export function useImportFlow({
 
       // Persist final peaks and exact duration to IndexedDB
       if (currentProjectRef.current?.id === targetProjectId) {
-        saveProjectToDb(currentProjectRef.current).catch(() => {});
+        saveProjectToDb(currentProjectRef.current).catch(logAsyncError('guardar la canción'));
       }
 
       // One-time background copy into the OPFS cache (the song is in the setlist from import)
@@ -769,7 +761,7 @@ export function useImportFlow({
             setProjects((prev) =>
               prev.map((p) => (p.id === newSongProject.id ? newSongProject : p))
             );
-            saveProjectToDb(newSongProject).catch(() => {});
+            saveProjectToDb(newSongProject).catch(logAsyncError('guardar la canción'));
           } else {
             newSongProject = {
               id: targetProjectId,
@@ -807,7 +799,7 @@ export function useImportFlow({
               setCurrentProject(newSongProject);
             }
             setProjects((prev) => [newSongProject, ...prev]);
-            saveProjectToDb(newSongProject).catch(() => {});
+            saveProjectToDb(newSongProject).catch(logAsyncError('guardar la canción'));
           }
         } else {
           const current = currentProjectRef.current!;
@@ -829,7 +821,7 @@ export function useImportFlow({
           setProjects((prev) =>
             prev.map((p) => (p.id === newSongProject.id ? newSongProject : p))
           );
-          saveProjectToDb(newSongProject).catch(() => {});
+          saveProjectToDb(newSongProject).catch(logAsyncError('guardar la canción'));
         }
 
         const mountMs = performance.now() - t0;
@@ -909,7 +901,7 @@ export function useImportFlow({
               setProjects((prev) =>
                 prev.map((p) => (p.id === targetProjectId ? completedProject : p))
               );
-              saveProjectToDb(completedProject).catch(() => {});
+              saveProjectToDb(completedProject).catch(logAsyncError('guardar la canción'));
 
               const isStillCurrent =
                 !currentProjectRef.current || currentProjectRef.current.id === targetProjectId;

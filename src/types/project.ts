@@ -137,32 +137,3 @@ export interface MetersSnapshot {
   /** Solo en escritorio: niveles medidos por bus. Si falta, las vistas usan su estimación de siempre. */
   nativeBuses?: NativeBusLevels | null;
 }
-
-export type RemoteSyncMessage =
-  | {
-      type: 'STATE_SYNC';
-      project?: Omit<SongProject, 'tracks'> & {
-        tracks: Omit<TrackChannel, 'peaks'>[];
-      };
-      transport: TransportState;
-    }
-  | {
-      type: 'TRANSPORT_SYNC';
-      transport: TransportState;
-    }
-  | { type: 'CMD_PLAY_PAUSE' }
-  | { type: 'CMD_STOP' }
-  | { type: 'CMD_JUMP_SECTION'; sectionId: string }
-  | { type: 'CMD_TOGGLE_VAMP' }
-  | { type: 'CMD_TOGGLE_CLICK' }
-  | { type: 'CMD_TOGGLE_GUIDE' }
-  | { type: 'CMD_SET_QUANTIZE'; mode: QuantizeMode }
-  | { type: 'CMD_SET_TRACK_MUTE'; trackId: string; muted: boolean }
-  | { type: 'CMD_SET_TRACK_SOLO'; trackId: string; soloed: boolean }
-  | { type: 'CMD_SET_TRACK_GAIN'; trackId: string; gain: number }
-  | { type: 'CMD_SET_MASTER_GAIN'; gain: number }
-  | { type: 'CMD_SET_CLICK_GAIN'; gain: number }
-  | { type: 'CMD_SET_GUIDE_GAIN'; gain: number }
-  | { type: 'CMD_NEXT_SONG' }
-  | { type: 'CMD_PREV_SONG' }
-  | { type: 'CMD_REQUEST_SYNC' };

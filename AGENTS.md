@@ -19,6 +19,7 @@ Reproductor de multitracks optimizado para cultos y música en vivo. Dispone de 
 - `src/utils/songSearch.ts` y `src/hooks/useProgressiveList.ts`: Búsqueda sin acentos ni mayúsculas (título, artista, tono, BPM) y render de listas largas por tandas, compartidos por la Biblioteca y el explorador del Setlist.
 - `desktop/frontend/*`: Puentes de la UI con Tauri: `RemoteConnectionBridge.tsx` (diálogo «Conexión remota», botón fijo en la barra superior), `DesktopAudioSettings.tsx`, `DesktopUpdates.tsx` y `previewInvoke.ts` (simulación del servidor LAN solo en `npm run dev`, excluida de producción).
 - `src/audio/nativeAudioEngine.ts`: Adaptador puente TypeScript para invocar los comandos Tauri del motor nativo en Rust (`audio_*`).
+- `src/utils/asyncErrors.ts`: `logAsyncError(contexto)`, el manejador de las promesas lanzadas sin esperar (guardar, sincronizar, controles al motor). Sustituye a `.catch(() => {})`: registra el fallo con su contexto, como mucho un aviso cada 5 s por contexto. `src/utils/markerPalette.ts`: paleta de colores de secciones.
 - `src/audio/statePoller.ts`: Sondeo del estado nativo con una sola petición pendiente, respuestas obsoletas descartadas por generación y errores sin silenciar (lo usa `nativeAudioEngine.ts`).
 - `src/audio/meterFeed.ts` y `src/audio/liveMeters.ts`: Ciclo único de lectura de medidores (20 fps, solo mientras haya medidores suscritos) y el hook `useLiveMeters`; `src/utils/mixerLevels.ts` calcula los niveles de pista y de bus. Los medidores son componentes hoja: no re-renderizan la consola.
 - `src/audio/meterBallistics.ts`: Balística (caída ~20 dB/s, retención de recorte) de los picos reales que mide el motor nativo para los medidores de Arreglo y Mezcla.
@@ -83,14 +84,10 @@ Reproductor de multitracks optimizado para cultos y música en vivo. Dispone de 
 - **Pistas más cortas que la canción tras un salto de sección**: un feeder que ya llegó al final de su archivo no evalúa saltos ni vamp; si la canción salta hacia atrás, esa pista (p. ej. una guía corta) queda en silencio hasta el siguiente seek. No medido en el motor real.
 - **Crossfade de empalme con tono**: el cruce de 8 ms de un salto o vuelta de vamp se lee del archivo sin pasar por el remuestreador; con tono distinto de cero esos 8 ms suenan sin transponer.
 - **Saltos cuantizados tardíos**: Si el compás objetivo ya cayó dentro del audio ya encolado en el ring buffer `rtrb`, el salto se pospone al siguiente compás. Cifras reales (`playback/mod.rs`): el ring buffer tiene 500 ms de *capacidad*, el feeder lo mantiene en ~350 ms y el callback sale de buffering a partir de 150 ms disponibles por pista; no son equivalentes.
-- **Errores silenciados (incumplen la regla de §5)**: `.catch(() => {})` en `src/App.tsx` (442, 537, 575, 684, 917), `src/hooks/useSetlist.ts:97`, `src/audio/audioEngine.ts` (1563, 1577, 1961, 2049, 2210, 2274) y `src/audio/nativeAudioEngine.ts` (523–586, controles de pista y ganancias).
-- **Código sin interfaz**: `handleCreateNewProject` y `handleImportJsonFile` (`src/hooks/useProjectActions.ts`) ya no tienen botón desde que se retiró «Crear canción» e «Importar proyecto JSON» de la Biblioteca.
-- **`BroadcastChannel` heredado**: `src/App.tsx` (~640–720) sincroniza pestañas, herencia del antiguo «Control rápido»; no está verificado que algo lo siga usando.
 - **Archivos grandes**: `src/audio/audioEngine.ts` (~2600 líneas), `src/App.tsx` (~1700), `src/components/LibraryAndModals.tsx` (~1550).
 - **Ramas sin fusionar**: `diag/medidores-reales` y `diag/tiempo-cache` (trabajo ya incorporado por otra vía; sin revisar si conservan algo propio).
 - **Fase 5 diferida**: Ruteo libre multicanal a más de 2 salidas físicas independientes de la tarjeta.
 - **Fase 7 diferida**: Soporte de drivers de audio ASIO (diferido, sin decidir: depende de la licencia del SDK de Steinberg y de la decisión del dueño).
 - **Retiro del motor web**: Desacoplar definitivamente `audioEngine.ts` de la aplicación de escritorio.
-- **`MARKER_PALETTE` duplicada**: Definida de forma duplicada en `src/App.tsx` y `src/hooks/useImportFlow.ts`.
 - **`handleRelinkProject` en `App.tsx`**: Retenido en el componente raíz para evitar referencias circulares / hoisting temporal (`TS2448`).
 - **Riesgo de contención en `try_lock`**: En callbacks bajo alta carga, si `try_lock()` sobre los consumidores falla, se emite silencio en ese bloque.

@@ -1,3 +1,4 @@
+import { logAsyncError } from '../utils/asyncErrors';
 import { SongProject, SongSection, TrackChannel } from '../types/project';
 import { deleteProjectPcm } from './opfsStorage';
 import { isDesktopApp } from '../utils/nativeDialog';
@@ -470,7 +471,7 @@ function scheduleProjectSidecarSync(project: SongProject): void {
         }
         return false;
       })
-      .catch(() => {});
+      .catch(logAsyncError('escribir el sidecar del proyecto'));
   }, 250);
 
   sidecarDebounceTimers.set(project.id, timer);
@@ -752,40 +753,4 @@ export async function extractStemArrayBuffer(stem: StoredAudioStem): Promise<Arr
     return stem.arrayBuffer.slice(0);
   }
   return null;
-}
-
-export function createEmptyProjectTemplate(
-  title = 'Nueva Canción',
-  artist = 'Sesión en Vivo',
-  bpm = 120,
-  keySignature = 'C Major'
-): SongProject {
-  return {
-    id: `song-${Date.now()}`,
-    title,
-    artist,
-    folder: 'imported',
-    inSetlist: false,
-    setlistOrder: 0,
-    bpm,
-    beatsPerBar: 4,
-    beatUnit: 4,
-    keySignature,
-    totalBars: 24,
-    durationSec: 48,
-    quantizeMode: 'section-end',
-    splitRoutingMode: 'stereo',
-    clickEnabled: false,
-    clickGain: 1.0,
-    clickSubdivision: 1,
-    guideCuesEnabled: true,
-    guideVoiceReadout: true,
-    guideGain: 1.0,
-    masterGain: 1.0,
-    cueMasterGain: 1.0,
-    pitchSemitones: 0,
-    sections: [],
-    tracks: [],
-    updatedAt: Date.now(),
-  };
 }
