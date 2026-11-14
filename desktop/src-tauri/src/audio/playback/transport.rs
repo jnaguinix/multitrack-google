@@ -19,6 +19,12 @@ impl PlaybackEngine {
         Ok(())
     }
 
+    /// Reposiciona el metrónomo en `song_frame` y descarta los clics en curso.
+    pub(super) fn reposition_metronome(&self, song_frame: u64) {
+        let sr = self.sample_rate.load(Ordering::SeqCst).max(1);
+        self.metronome.lock().unwrap().seek_to_frame(song_frame, sr);
+    }
+
     pub async fn play(&self, state: &AudioEngineState) -> Result<(), String> {
         {
             let loaded = self.loaded_project_id.lock().await;
@@ -67,6 +73,9 @@ impl PlaybackEngine {
         self.is_buffering.store(false, Ordering::SeqCst);
         *self.buffering_start_time.lock().unwrap() = None;
         self.current_frame.store(0, Ordering::SeqCst);
+        // El metrónomo vuelve al inicio junto con el transporte; si no, no sonaría ningún clic hasta
+        // alcanzar de nuevo la posición anterior.
+        self.reposition_metronome(0);
         *self.queued_jump.lock().unwrap() = None;
         let tracks = self.tracks.lock().await;
         for trk in tracks.iter() {
@@ -94,6 +103,7 @@ impl PlaybackEngine {
         *self.buffering_start_time.lock().unwrap() = Some(Instant::now());
 
         self.current_frame.store(target_frame as u64, Ordering::SeqCst);
+        self.reposition_metronome(target_frame as u64);
         *self.queued_jump.lock().unwrap() = None;
 
         let tracks = self.tracks.lock().await;

@@ -512,6 +512,7 @@ impl PlaybackEngine {
 
         self.sample_rate.store(device_sample_rate, Ordering::SeqCst);
         self.current_frame.store(0, Ordering::SeqCst);
+        self.reposition_metronome(0);
         self.total_frames.store(max_frames, Ordering::SeqCst);
         self.is_vamping.store(false, Ordering::SeqCst);
         *self.fade.lock().unwrap() = FadeEnvelope::new(FADE_MS, device_sample_rate);
@@ -654,6 +655,7 @@ impl PlaybackEngine {
             self.is_playing.store(false, Ordering::SeqCst);
             self.is_buffering.store(false, Ordering::SeqCst);
             self.current_frame.store(0, Ordering::SeqCst);
+            self.reposition_metronome(0);
             self.total_frames.store(0, Ordering::SeqCst);
             let mut tracks = self.tracks.lock().await;
             for old in tracks.iter() {

@@ -1383,3 +1383,32 @@
         met.render_block(lejos, lejos + 480, 480, 48000, &mut buf);
         assert!(buf[..40].iter().any(|s| s.abs() > 1e-6));
     }
+
+    #[tokio::test]
+    async fn test_a06_stop_reposiciona_el_metronomo_y_suena_el_primer_pulso() {
+        let engine = PlaybackEngine::new(Arc::new(AudioStreamStats::default()));
+        // Reproduce 5 s: el metrónomo avanza hasta el pulso 10.
+        assert_eq!(contar_clics(&mut engine.metronome.lock().unwrap(), 0, 240_000, 480), 10);
+        engine.stop().await;
+        let mut buf = vec![0.0f32; 480];
+        engine
+            .metronome
+            .lock()
+            .unwrap()
+            .render_block(0, 480, 480, 48000, &mut buf);
+        assert!(buf[..40].iter().any(|s| s.abs() > 1e-6), "tras Stop, el primer bloque debe llevar el pulso 0");
+    }
+
+    #[tokio::test]
+    async fn test_a06_seek_atras_reposiciona_el_metronomo() {
+        let engine = PlaybackEngine::new(Arc::new(AudioStreamStats::default()));
+        assert_eq!(contar_clics(&mut engine.metronome.lock().unwrap(), 0, 240_000, 480), 10);
+        engine.seek(1.0).await; // frame 48 000, justo un pulso
+        let mut buf = vec![0.0f32; 480];
+        engine
+            .metronome
+            .lock()
+            .unwrap()
+            .render_block(48_000, 48_480, 480, 48000, &mut buf);
+        assert!(buf[..40].iter().any(|s| s.abs() > 1e-6), "tras un seek atrás debe sonar el pulso de la nueva posición");
+    }
