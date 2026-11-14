@@ -48,7 +48,7 @@ Reproductor de multitracks optimizado para cultos y música en vivo. Dispone de 
 ## 4. Decisiones cerradas
 - **WASAPI en modo compartido**: Salida estándar por defecto en Windows.
 - **ASIO diferido, sin decidir**: Depende de la licencia del SDK de Steinberg y de la decisión del dueño.
-- **Caché PCM al sample rate del dispositivo**: Al decodificar pistas con `import.rs`, el audio se remuestrea a la frecuencia nativa del hardware (`target_sample_rate`) para garantizar cero remuestreo pesado durante la reproducción.
+- **Caché PCM al sample rate del dispositivo**: Al decodificar pistas con `import.rs`, el audio se remuestrea a la frecuencia nativa del hardware (`target_sample_rate`) para evitar convertir de frecuencia durante la reproducción. Matiz: cada feeder pasa siempre por `TrackResampler` (rubato) aunque la frecuencia origen y destino coincidan y el pitch sea cero, con coste no medido.
 - **Biblioteca como índice ligero**: `library.json` contiene únicamente metadatos. Las carpetas de caché PCM (`pcm/<id>/`) solo existen para canciones que forman parte del setlist o están activas en consola.
 - **Páginas de la app**: Setlist, En vivo, Arreglo, Mezcla y Biblioteca. La página «Control rápido» y el panel lateral de la Biblioteca se eliminaron el 2026-11-13.
 - **Fuente incluida en la app**: Inter variable (`@fontsource-variable/inter`, importada en `src/main.tsx`). El CSP de `tauri.conf.json` solo permite fuentes propias (`font-src 'self'`): no se cargan recursos remotos. Tamaño mínimo de texto: 12 px.
@@ -74,7 +74,7 @@ Reproductor de multitracks optimizado para cultos y música en vivo. Dispone de 
 - **Medidores sin medir en el callback**: Los medidores de nivel (`PeakMeter`) añaden operaciones al callback de audio. No se midieron underruns ni tiempo de callback antes y después; el dueño ensayó y no notó problemas.
 - **Verificación completa sin cerrar**: `verify.ps1 -Completo` no se completó sobre `main` tras la migración (faltaron `verify_manual_flow` y `build:portable`). Las pruebas rápidas sí pasaron.
 - **Importación HTML/arrastre vs nativa**: La importación por selector HTML o arrastre de archivos sigue decodificando al importar (`src/hooks/useImportFlow.ts:250, 440`); solo la ruta nativa de carpeta importa sin decodificar.
-- **Saltos cuantizados tardíos**: Si el compás objetivo ya cayó dentro de los ~500 ms prellenados en el ring buffer `rtrb`, el salto se pospone al siguiente compás.
+- **Saltos cuantizados tardíos**: Si el compás objetivo ya cayó dentro del audio ya encolado en el ring buffer `rtrb`, el salto se pospone al siguiente compás. Cifras reales (`playback/mod.rs`): el ring buffer tiene 500 ms de *capacidad*, el feeder lo mantiene en ~350 ms y el callback sale de buffering a partir de 150 ms disponibles por pista; no son equivalentes.
 - **Errores silenciados (incumplen la regla de §5)**: `.catch(() => {})` en `src/App.tsx` (442, 537, 575, 684, 917), `src/hooks/useSetlist.ts:97`, `src/audio/audioEngine.ts` (1563, 1577, 1961, 2049, 2210, 2274) y `src/audio/nativeAudioEngine.ts` (523–586, controles de pista y ganancias).
 - **Código sin interfaz**: `handleCreateNewProject` y `handleImportJsonFile` (`src/hooks/useProjectActions.ts`) ya no tienen botón desde que se retiró «Crear canción» e «Importar proyecto JSON» de la Biblioteca.
 - **`BroadcastChannel` heredado**: `src/App.tsx` (~640–720) sincroniza pestañas, herencia del antiguo «Control rápido»; no está verificado que algo lo siga usando.

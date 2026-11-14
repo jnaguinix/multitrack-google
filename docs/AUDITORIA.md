@@ -36,7 +36,7 @@ Pila: escritorio Windows con Tauri v2; motor de audio en Rust (CPAL/WASAPI, Symp
 - `BroadcastChannel` en `App.tsx` (~640–720) es una herencia del antiguo «Control rápido»; no se sabe si algo lo usa.
 - El motor web `src/audio/audioEngine.ts` (~2600 líneas) sigue en el repositorio porque el escritorio depende de partes de él.
 - `MARKER_PALETTE` está duplicada en `App.tsx` y `useImportFlow.ts`.
-- Saltos cuantizados: si el compás destino cae dentro de los ~500 ms ya prellenados del buffer, el salto se pospone al siguiente compás.
+- Saltos cuantizados: si el compás destino cae dentro del audio ya encolado en el buffer, el salto se pospone al siguiente compás. El ring buffer tiene 500 ms de capacidad, el feeder apunta a ~350 ms y la salida de buffering exige 150 ms por pista.
 - Riesgo de contención: si `try_lock()` falla en el callback, se emite silencio en ese bloque.
 - Fase 5 (ruteo a más de 2 salidas) y Fase 7 (ASIO) están diferidas a propósito.
 - La importación por selector HTML o arrastre sigue decodificando al importar; solo la ruta nativa de carpeta no decodifica.

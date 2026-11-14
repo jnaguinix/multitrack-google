@@ -120,7 +120,7 @@ Puentes con el escritorio en `desktop/frontend/`: `RemoteConnectionBridge.tsx` m
 [Carga en Consola / Playback]
    handleLoadProjectImmediately -> audio_load_project (audio/mod.rs)
    -> PlaybackEngine::load_project (playback/mod.rs)
-   -> Inicializa feeders y prellena ring buffers rtrb (>= 500 ms)
+   -> Inicializa feeders y prellena ring buffers rtrb (capacidad 500 ms; objetivo ~350 ms; salida de buffering con >= 150 ms por pista)
           │
           ▼ Play
    audio_play -> PlaybackEngine::play (fade-in 8 ms en fade.rs)
