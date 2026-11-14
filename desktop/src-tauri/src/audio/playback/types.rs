@@ -60,6 +60,11 @@ pub struct ActiveTrack {
     pub flush_done: Arc<AtomicU64>,
     /// `false` cuando el hilo feeder terminó (error al abrir el archivo, parada o fallo interno).
     pub feeder_alive: Arc<AtomicBool>,
+    /// Fotogramas que esta pista dejó de sonar por quedarse sin datos (underrun). El audio que llega
+    /// después sigue la línea temporal de antes del hueco: se descarta esa cantidad para que la pista
+    /// vuelva a coincidir con el reloj y con el resto. Lo escribe el callback; el transporte lo pone a 0
+    /// al vaciar el anillo.
+    pub skip_frames: Arc<AtomicU64>,
 }
 
 pub struct StreamTrackHandle {
@@ -72,6 +77,7 @@ pub struct StreamTrackHandle {
     pub meter: Arc<PeakMeter>,
     pub eof: Arc<AtomicBool>,
     pub flush_done: Arc<AtomicU64>,
+    pub skip_frames: Arc<AtomicU64>,
 }
 
 /// Pico (valor absoluto máximo) desde la última lectura, por canal, guardado como bits de f32.

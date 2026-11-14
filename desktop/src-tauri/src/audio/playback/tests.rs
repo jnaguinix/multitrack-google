@@ -1205,6 +1205,7 @@
                 flush_done: Arc::new(AtomicU64::new(0)),
                 // Sin hilo feeder: un seek no debe esperar su confirmación.
                 feeder_alive: Arc::new(AtomicBool::new(false)),
+                skip_frames: Arc::new(AtomicU64::new(0)),
             };
             handles.push(StreamTrackHandle {
                 consumer: Arc::clone(&t.consumer),
@@ -1216,6 +1217,7 @@
                 meter: Arc::clone(&t.meter),
                 eof: Arc::clone(&t.eof),
                 flush_done: Arc::clone(&t.flush_done),
+                skip_frames: Arc::clone(&t.skip_frames),
             });
             active.push(t);
         }
@@ -1527,6 +1529,12 @@
         matches!(pos, Some(p) if (p - reloj as i64).abs() > 1000)
     }
 
+    /// Versión estricta, para detectar retrasos de menos de un bloque: solo admite la cuantización de la
+    /// rampa (`PASO_RAMPA` fotogramas) y el desfase de un fotograma de la lectura.
+    fn fuera_de_sitio(pos: Option<i64>, reloj: u64) -> bool {
+        matches!(pos, Some(p) if (p - reloj as i64).abs() > 100)
+    }
+
     #[test]
     fn test_a15_el_vaciado_parcial_no_añade_relleno_de_silencio() {
         // Tramo de 320 fotogramas de señal (menos que un bloque de 1024). Antes de la corrección, rubato
@@ -1807,5 +1815,168 @@
             );
             assert!(!desajustado(Some(pos), reloj), "seek {i}: el reloj no coincide con el audio");
         }
+    }
+
+    // ----- A04: recuperación tras un underrun -----
+
+    /// Motor con pistas de anillo manual: el test decide qué fotogramas entrega el «feeder» y cuándo.
+    /// Devuelve los productores de cada pista.
+    fn engine_con_productores(ids: &[&str], capacidad_frames: usize) -> (PlaybackEngine, Vec<rtrb::Producer<f32>>) {
+        let engine = PlaybackEngine::new(Arc::new(AudioStreamStats::default()));
+        let (mut activas, mut handles, mut productores) = (Vec::new(), Vec::new(), Vec::new());
+        for id in ids {
+            let (prod, cons) = rtrb::RingBuffer::<f32>::new(capacidad_frames * 2);
+            productores.push(prod);
+            let t = ActiveTrack {
+                track_id: id.to_string(),
+                file_path: std::path::PathBuf::new(),
+                original_channels: 2,
+                total_frames: 1_000_000,
+                gain: Arc::new(AtomicU32::new(1.0f32.to_bits())),
+                pan: Arc::new(AtomicI32::new(0)),
+                muted: Arc::new(AtomicBool::new(false)),
+                soloed: Arc::new(AtomicBool::new(false)),
+                bus: Arc::new(AtomicU8::new(TrackBus::Main as u8)),
+                consumer: Arc::new(std::sync::Mutex::new(cons)),
+                stop_signal: Arc::new(AtomicBool::new(false)),
+                seek_request: Arc::new(AtomicI64::new(-1)),
+                jump_request: Arc::new(std::sync::Mutex::new(None)),
+                is_vamping: Arc::new(AtomicBool::new(false)),
+                active_section_loop: Arc::new(std::sync::Mutex::new(None)),
+                pitch_semitones: Arc::new(AtomicI32::new(0)),
+                meter: Arc::new(PeakMeter::default()),
+                eof: Arc::new(AtomicBool::new(false)),
+                seek_ack: Arc::new(AtomicU64::new(0)),
+                flush_done: Arc::new(AtomicU64::new(0)),
+                feeder_alive: Arc::new(AtomicBool::new(false)),
+                skip_frames: Arc::new(AtomicU64::new(0)),
+            };
+            handles.push(StreamTrackHandle {
+                consumer: Arc::clone(&t.consumer),
+                gain: Arc::clone(&t.gain),
+                pan: Arc::clone(&t.pan),
+                muted: Arc::clone(&t.muted),
+                soloed: Arc::clone(&t.soloed),
+                bus: Arc::clone(&t.bus),
+                meter: Arc::clone(&t.meter),
+                eof: Arc::clone(&t.eof),
+                flush_done: Arc::clone(&t.flush_done),
+                skip_frames: Arc::clone(&t.skip_frames),
+            });
+            activas.push(t);
+        }
+        *engine.tracks.try_lock().unwrap() = activas;
+        *engine.stream_tracks.lock().unwrap() = handles;
+        engine.total_frames.store(1_000_000, Ordering::SeqCst);
+        engine.is_playing.store(true, Ordering::SeqCst);
+        (engine, productores)
+    }
+
+    /// Empuja los fotogramas `[desde, hasta)` de la rampa de prueba (el mismo valor que escribe
+    /// `escribir_cache_rampa`).
+    fn empujar_rampa(prod: &mut rtrb::Producer<f32>, desde: usize, hasta: usize) {
+        for f in desde..hasta {
+            let v = (f / PASO_RAMPA) as f32 / 32768.0;
+            prod.push(v).unwrap();
+            prod.push(v).unwrap();
+        }
+    }
+
+    #[test]
+    fn test_a04_consume_track_block_descarta_lo_que_llega_tarde() {
+        let (mut prod, mut cons) = rtrb::RingBuffer::<f32>::new(4096);
+        let skip = AtomicU64::new(0);
+        let mut vistos: Vec<f32> = Vec::new();
+        let rampa = |prod: &mut rtrb::Producer<f32>, desde: usize, hasta: usize| {
+            for f in desde..hasta {
+                prod.push(f as f32).unwrap();
+                prod.push(f as f32).unwrap();
+            }
+        };
+
+        rampa(&mut prod, 0, 100);
+        assert!(!consume_track_block(&mut cons, &skip, false, 60, |_, l, _| vistos.push(l)));
+        assert_eq!(vistos.last().copied(), Some(59.0));
+
+        // Quedan 40 fotogramas y se piden 60: faltan 20.
+        vistos.clear();
+        assert!(consume_track_block(&mut cons, &skip, false, 60, |_, l, _| vistos.push(l)), "debe avisar del underrun");
+        assert_eq!(vistos.len(), 40);
+        assert_eq!(skip.load(Ordering::Relaxed), 20, "debe anotar los 20 fotogramas que no sonaron");
+
+        // El feeder se recupera y entrega los fotogramas 100.. (los 100..119 debían sonar durante el hueco).
+        rampa(&mut prod, 100, 200);
+        vistos.clear();
+        assert!(!consume_track_block(&mut cons, &skip, false, 50, |_, l, _| vistos.push(l)));
+        assert_eq!(vistos.first().copied(), Some(120.0), "debe saltarse lo vencido y seguir en el fotograma 120");
+        assert_eq!(skip.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn test_a04_consume_track_block_no_desalinea_los_canales_con_un_fotograma_a_medias() {
+        let (mut prod, mut cons) = rtrb::RingBuffer::<f32>::new(64);
+        let skip = AtomicU64::new(0);
+        // El feeder empuja muestra a muestra: el callback puede ver L1 sin su R1.
+        for v in [0.0, 0.0, 1.0f32] {
+            prod.push(v).unwrap();
+        }
+        let mut leidos: Vec<(f32, f32)> = Vec::new();
+        assert!(consume_track_block(&mut cons, &skip, false, 2, |_, l, r| leidos.push((l, r))));
+        assert_eq!(leidos, vec![(0.0, 0.0)], "solo el fotograma completo");
+        assert_eq!(skip.load(Ordering::Relaxed), 1);
+
+        for v in [1.0, 2.0, 2.0f32] {
+            prod.push(v).unwrap();
+        }
+        leidos.clear();
+        consume_track_block(&mut cons, &skip, false, 1, |_, l, r| leidos.push((l, r)));
+        assert_eq!(leidos, vec![(2.0, 2.0)], "el fotograma 1 vencido se descarta entero y L/R siguen en su sitio");
+    }
+
+    #[test]
+    fn test_a04_pista_terminada_no_acumula_descarte() {
+        let (_prod, mut cons) = rtrb::RingBuffer::<f32>::new(64);
+        let skip = AtomicU64::new(0);
+        consume_track_block(&mut cons, &skip, true, 480, |_, _, _| {});
+        assert_eq!(skip.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn test_a04_tras_un_underrun_la_pista_vuelve_a_coincidir_con_el_reloj() {
+        let (engine, mut productores) = engine_con_productores(&["a"], 20_000);
+        empujar_rampa(&mut productores[0], 0, 960);
+        bloque(&engine);
+        let (pos, reloj) = bloque(&engine);
+        assert!(!fuera_de_sitio(pos, reloj), "antes del hueco la pista debe coincidir con el reloj: {pos:?} / {reloj}");
+
+        // El feeder se atrasa: este bloque no tiene datos y suena silencio, pero el reloj avanza.
+        let (pos_hueco, reloj_hueco) = bloque(&engine);
+        assert_eq!(pos_hueco, None);
+        assert_eq!(reloj_hueco, 1440);
+
+        // El feeder se recupera y entrega el audio a partir del fotograma 960, que debía sonar durante el hueco.
+        empujar_rampa(&mut productores[0], 960, 960 + 4_800);
+        for _ in 0..4 {
+            let (pos, reloj) = bloque(&engine);
+            assert!(pos.is_some(), "debe volver a sonar");
+            assert!(!fuera_de_sitio(pos, reloj), "tras el hueco la pista quedó atrasada: audio {pos:?}, reloj {reloj}");
+        }
+    }
+
+    #[test]
+    fn test_a04_dos_pistas_siguen_alineadas_si_solo_una_se_atrasa() {
+        let (engine, mut productores) = engine_con_productores(&["sana", "lenta"], 20_000);
+        empujar_rampa(&mut productores[0], 0, 4_800);
+        empujar_rampa(&mut productores[1], 0, 480);
+        // Bloque 1: ambas suenan. Bloques 2 y 3: la lenta no tiene datos.
+        for _ in 0..3 {
+            bloque_n(&engine, 1.0);
+        }
+        // La lenta se recupera con el audio acumulado desde el fotograma 480.
+        empujar_rampa(&mut productores[1], 480, 4_800);
+        let (pos, reloj) = bloque_n(&engine, 2.0);
+        assert!(pos.is_some());
+        // Con las dos pistas en el mismo punto de la rampa, la salida es el doble de una sola.
+        assert!(!fuera_de_sitio(pos, reloj), "la pista que se atrasó no volvió a su sitio: audio {pos:?}, reloj {reloj}");
     }
 

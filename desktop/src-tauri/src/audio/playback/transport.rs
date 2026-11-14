@@ -163,6 +163,8 @@ impl PlaybackEngine {
             if let Ok(mut c) = trk.consumer.lock() {
                 while c.pop().is_ok() {}
             }
+            // El hueco anterior pertenece a la posición que se abandona.
+            trk.skip_frames.store(0, Ordering::SeqCst);
             trk.flush_done.store(generation, Ordering::SeqCst);
         }
     }

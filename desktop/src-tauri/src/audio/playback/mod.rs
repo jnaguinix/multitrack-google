@@ -29,7 +29,7 @@ pub mod types;
 pub use types::*;
 
 pub mod block;
-pub use block::buffering_ready;
+pub use block::{buffering_ready, consume_track_block};
 
 pub mod clock;
 pub use clock::{advance_clock, ClockJumps};
@@ -236,6 +236,7 @@ impl PlaybackEngine {
             let seek_ack_track = Arc::new(AtomicU64::new(initial_generation));
             let flush_done_track = Arc::new(AtomicU64::new(initial_generation));
             let feeder_alive_track = Arc::new(AtomicBool::new(true));
+            let skip_frames_track = Arc::new(AtomicU64::new(0));
 
             let thread_pcm_path = pcm_path.clone();
             let thread_stop = Arc::clone(&stop_signal);
@@ -556,6 +557,7 @@ impl PlaybackEngine {
                 seek_ack: seek_ack_track,
                 flush_done: flush_done_track,
                 feeder_alive: feeder_alive_track,
+                skip_frames: skip_frames_track,
             });
         }
 
@@ -593,6 +595,7 @@ impl PlaybackEngine {
                 meter: Arc::clone(&t.meter),
                 eof: Arc::clone(&t.eof),
                 flush_done: Arc::clone(&t.flush_done),
+                skip_frames: Arc::clone(&t.skip_frames),
             })
             .collect();
 
@@ -922,14 +925,15 @@ impl PlaybackEngine {
                         let track_bus = TrackBus::from_u8(trk.bus.load(Ordering::Relaxed));
 
                         if is_muted || (any_solo && !is_solo) {
+                            // Una pista silenciada también avanza: se consume (y se resincroniza) igual.
                             if let Ok(mut c) = trk.consumer.try_lock() {
                                 let unread_frames = (c.slots() / 2) as u64;
                                 if unread_frames < callback_min_track_frames {
                                     callback_min_track_frames = unread_frames;
                                 }
-                                for _ in 0..frames * 2 {
-                                    let _ = c.pop();
-                                }
+                                consume_track_block(&mut c, &trk.skip_frames, trk.eof.load(Ordering::Relaxed), frames, |_, _, _| {});
+                            } else {
+                                trk.skip_frames.fetch_add(frames as u64, Ordering::Relaxed);
                             }
                             continue;
                         }
@@ -946,24 +950,10 @@ impl PlaybackEngine {
                                 callback_min_track_frames = unread_frames;
                             }
 
-                            let mut had_underrun = false;
+                            let track_eof = trk.eof.load(Ordering::Relaxed);
                             let mut pk_l = 0.0f32;
                             let mut pk_r = 0.0f32;
-                            for f in 0..frames {
-                                let l = match c.pop() {
-                                    Ok(v) => v,
-                                    Err(_) => {
-                                        had_underrun = true;
-                                        0.0
-                                    }
-                                };
-                                let r = match c.pop() {
-                                    Ok(v) => v,
-                                    Err(_) => {
-                                        had_underrun = true;
-                                        0.0
-                                    }
-                                };
+                            let had_underrun = consume_track_block(&mut c, &trk.skip_frames, track_eof, frames, |f, l, r| {
                                 let tl = l * pan_l;
                                 let tr = r * pan_r;
                                 pk_l = pk_l.max(tl.abs());
@@ -982,11 +972,15 @@ impl PlaybackEngine {
                                         both_r[f] += tr;
                                     }
                                 }
-                            }
+                            });
                             trk.meter.record(pk_l, pk_r);
-                            if had_underrun && !trk.eof.load(Ordering::Relaxed) && !is_buffering_arc.load(Ordering::Relaxed) {
+                            if had_underrun && !track_eof && !is_buffering_arc.load(Ordering::Relaxed) {
                                 stats.underruns.fetch_add(1, Ordering::Relaxed);
                             }
+                        } else {
+                            // El transporte tiene el anillo: este bloque no se leyó, la pista queda un bloque
+                            // atrás respecto al reloj y se recupera descartando esa cantidad después.
+                            trk.skip_frames.fetch_add(frames as u64, Ordering::Relaxed);
                         }
                     }
 
@@ -1189,9 +1183,7 @@ impl PlaybackEngine {
 
             if is_muted || (any_solo && !is_solo) {
                 if let Ok(mut c) = trk.consumer.lock() {
-                    for _ in 0..frames * 2 {
-                        let _ = c.pop();
-                    }
+                    consume_track_block(&mut c, &trk.skip_frames, trk.eof.load(Ordering::Relaxed), frames, |_, _, _| {});
                 }
                 continue;
             }
@@ -1205,9 +1197,7 @@ impl PlaybackEngine {
             if let Ok(mut c) = trk.consumer.lock() {
                 let mut pk_l = 0.0f32;
                 let mut pk_r = 0.0f32;
-                for f in 0..frames {
-                    let l = c.pop().unwrap_or(0.0);
-                    let r = c.pop().unwrap_or(0.0);
+                consume_track_block(&mut c, &trk.skip_frames, trk.eof.load(Ordering::Relaxed), frames, |f, l, r| {
                     let tl = l * pan_l;
                     let tr = r * pan_r;
                     pk_l = pk_l.max(tl.abs());
@@ -1226,7 +1216,7 @@ impl PlaybackEngine {
                             both_r[f] += tr;
                         }
                     }
-                }
+                });
                 trk.meter.record(pk_l, pk_r);
             }
         }
