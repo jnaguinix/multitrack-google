@@ -159,24 +159,28 @@ pub fn resample_channels(
         .map_err(|e| format!("Error creando resampler: {e}"))?;
 
     let in_frames = channels[0].len();
-    // Capacidad de salida reservada de una vez (un bloque extra por el relleno del último).
-    let out_capacity = ((in_frames as f64) * (to_rate as f64) / (from_rate as f64)).ceil() as usize + chunk_size;
-    let mut out_channels: Vec<Vec<f32>> = (0..n_channels).map(|_| Vec::with_capacity(out_capacity)).collect();
+    // Longitud exacta que debe tener el resultado y retardo del filtro: la salida válida empieza
+    // `delay` fotogramas después del inicio de lo que produce rubato, y la cola final se obtiene
+    // alimentando ceros hasta completar la longitud (A11).
+    let target_len = ((in_frames as f64) * (to_rate as f64) / (from_rate as f64)).round() as usize;
+    let delay = resampler.output_delay();
+    let needed_out = delay + target_len;
+    let mut out_channels: Vec<Vec<f32>> =
+        (0..n_channels).map(|_| Vec::with_capacity(needed_out + chunk_size * 2)).collect();
 
-    // Búferes de entrada y salida reutilizados en cada bloque (antes se reservaban y ponían a cero cada vez).
+    // Búferes de entrada y salida reutilizados en cada bloque.
     let mut in_chunk: Vec<Vec<f32>> = Vec::new();
     let mut out_chunk = resampler.output_buffer_allocate(true);
 
     let mut pos = 0;
-    while pos < in_frames {
+    while out_channels[0].len() < needed_out {
         let needed = resampler.input_frames_next();
         if in_chunk.len() != n_channels || in_chunk[0].len() != needed {
             in_chunk = vec![vec![0.0f32; needed]; n_channels];
         }
-        let remaining = in_frames - pos;
-        let take = remaining.min(needed);
+        let take = in_frames.saturating_sub(pos).min(needed);
 
-        // El último bloque se rellena con ceros, igual que antes.
+        // Pasado el final de la entrada se alimentan ceros para vaciar la cola del filtro.
         for ch in 0..n_channels {
             in_chunk[ch][..take].copy_from_slice(&channels[ch][pos..pos + take]);
             in_chunk[ch][take..].fill(0.0);
@@ -185,15 +189,20 @@ pub fn resample_channels(
         let (_, produced) = resampler
             .process_into_buffer(&in_chunk, &mut out_chunk, None)
             .map_err(|e| format!("Error en remuestreo: {e}"))?;
-
-        let expected_out = ((take as f64) * (to_rate as f64) / (from_rate as f64)).round() as usize;
-        let copy_len = expected_out.min(produced);
+        if produced == 0 && take == 0 {
+            return Err("El remuestreador dejó de producir audio antes de completar la cola".to_string());
+        }
 
         for ch in 0..n_channels {
-            out_channels[ch].extend_from_slice(&out_chunk[ch][..copy_len]);
+            out_channels[ch].extend_from_slice(&out_chunk[ch][..produced]);
         }
 
         pos += take;
+    }
+
+    for ch in out_channels.iter_mut() {
+        ch.drain(..delay);
+        ch.truncate(target_len);
     }
 
     Ok(out_channels)
@@ -1003,6 +1012,49 @@ mod tests {
         assert!(canales[0][10..].iter().all(|v| *v == 0.0));
     }
 
+    /// Posición del pico más alto de un canal.
+    fn posicion_pico(canal: &[f32]) -> usize {
+        let mut mejor = 0;
+        for (i, v) in canal.iter().enumerate() {
+            if v.abs() > canal[mejor].abs() {
+                mejor = i;
+            }
+        }
+        mejor
+    }
+
+    #[test]
+    fn test_a11_el_remuestreo_conserva_la_alineacion_y_la_longitud() {
+        // Impulsos al inicio, en el centro y cerca del final de un stem de 44,1 kHz que se pasa a 48 kHz.
+        let n_in = 44_100 * 3;
+        let casos = [100usize, 66_000, n_in - 300];
+        for &pos_in in &casos {
+            let mut x = vec![0.0f32; n_in];
+            x[pos_in] = 1.0;
+            let y = resample_channels(&[x], 44_100, 48_000).unwrap();
+            let esperado_len = (n_in as f64 * 48_000.0 / 44_100.0).round() as usize;
+            assert_eq!(y[0].len(), esperado_len, "la longitud debe ser exactamente la objetivo");
+            let esperado_pos = (pos_in as f64 * 48_000.0 / 44_100.0).round() as i64;
+            let pos_out = posicion_pico(&y[0]) as i64;
+            assert!(
+                (pos_out - esperado_pos).abs() <= 1,
+                "impulso en {pos_in}: salió en {pos_out}, esperado {esperado_pos} (retardo del filtro sin compensar)"
+            );
+            assert!(y[0][pos_out as usize].abs() > 0.5, "el impulso cerca del final no debe perderse");
+        }
+    }
+
+    #[test]
+    fn test_a11_el_remuestreo_a_la_baja_tambien_queda_alineado() {
+        let n_in = 48_000 * 2;
+        let mut x = vec![0.0f32; n_in];
+        x[30_000] = 1.0;
+        let y = resample_channels(&[x], 48_000, 44_100).unwrap();
+        assert_eq!(y[0].len(), (n_in as f64 * 44_100.0 / 48_000.0).round() as usize);
+        let esperado = (30_000f64 * 44_100.0 / 48_000.0).round() as i64;
+        assert!((posicion_pico(&y[0]) as i64 - esperado).abs() <= 1);
+    }
+
     #[test]
     fn test_decode_and_cache_track_bytes() {
         let temp_dir = std::env::temp_dir().join(format!("omnitracks_bytes_test_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
@@ -1134,11 +1186,11 @@ mod tests {
     fn test_pcm_golden_hashes() {
         // (nombre, hz, bits, frames, canales iguales, amplitud, huella, canales esperados, frames esperados)
         let cases: Vec<(&str, u32, u16, usize, bool, i32, u64, u16, u64)> = vec![
-            ("44k_estereo_16", 44100, 16, 44100, false, 20000, 0x75cd1937dc5c6ca0, 2, 48000),
-            ("44k_estereo_24", 44100, 24, 44100, false, 6_000_000, 0x3b55a46f3f1731e9, 2, 48000),
+            ("44k_estereo_16", 44100, 16, 44100, false, 20000, 0x6d1dd4f022454e09, 2, 48000),
+            ("44k_estereo_24", 44100, 24, 44100, false, 6_000_000, 0xca4c5072c1c9af4d, 2, 48000),
             ("48k_estereo_16_exacto", 48000, 16, 48000, false, 20000, 0xdc25187a43e76cd7, 2, 48000),
-            ("44k_mono_efectivo", 44100, 16, 44100, true, 20000, 0xf27d628291716e12, 1, 48000),
-            ("44k_recorte", 44100, 16, 44100, false, 32767, 0x64ea83df63b7ba86, 2, 48000),
+            ("44k_mono_efectivo", 44100, 16, 44100, true, 20000, 0x1d916035bdc48f81, 1, 48000),
+            ("44k_recorte", 44100, 16, 44100, false, 32767, 0xd4f213cbb8999448, 2, 48000),
         ];
         let mut fallos = Vec::new();
         for (name, hz, bits, n, same, amp, want_hash, want_ch, want_frames) in cases {
