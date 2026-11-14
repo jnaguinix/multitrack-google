@@ -221,10 +221,12 @@ const WaveformCanvas: React.FC<WaveformCanvasProps> = ({
         style={{ clipPath: `inset(0 ${((1 - ratio) * 100).toFixed(3)}% 0 0)` }}
       />
       <div
-        className="absolute inset-0 pointer-events-none"
+        // Misma geometría que la línea de la regla de tiempo: 2 px de ancho con el borde izquierdo en la posición.
+        className="absolute top-0 bottom-0 left-0 pointer-events-none"
         style={{
-          transform: `translateX(${((ratio - 1) * 100).toFixed(3)}%)`,
-          borderRight: '2px solid #8dd6cd',
+          width: 2,
+          backgroundColor: '#8dd6cd',
+          transform: `translateX(${(ratio * size.w).toFixed(2)}px)`,
           willChange: 'transform',
         }}
       />
