@@ -206,6 +206,13 @@ pub struct DecodedAudioInfo {
     pub bits_per_sample: Option<u32>,
 }
 
+/// Añade `frames` fotogramas de silencio a todos los canales.
+fn push_silence(channels: &mut [Vec<f32>], frames: usize) {
+    for ch in channels.iter_mut() {
+        ch.resize(ch.len() + frames, 0.0);
+    }
+}
+
 /// Decodes an audio stream from any `MediaSourceStream` using `symphonia`.
 /// Supports cooperative cancellation via `cancel_flag`.
 pub fn decode_audio_stream(
@@ -234,6 +241,8 @@ pub fn decode_audio_stream(
         .ok_or_else(|| format!("No se encontró pista de audio válida en '{file_label}'"))?;
 
     let track_id = track.id;
+    // Duración declarada por el contenedor: sirve para detectar archivos truncados (A13).
+    let declared_frames = track.codec_params.n_frames;
     let original_sample_rate = track.codec_params.sample_rate.unwrap_or(44100);
     let original_channels = track.codec_params.channels.map(|c| c.count() as u16).unwrap_or(2);
     let bits_per_sample = track.codec_params.bits_per_sample;
@@ -245,6 +254,8 @@ pub fn decode_audio_stream(
 
     let mut channels: Vec<Vec<f32>> = vec![Vec::new(); (original_channels as usize).max(1)];
     let mut sample_buf: Option<symphonia::core::audio::SampleBuffer<f32>> = None;
+    // Fotogramas de paquetes corruptos que se sustituyeron por silencio para no desplazar el resto.
+    let mut damaged_frames: u64 = 0;
 
     loop {
         if let Some(flag) = cancel_flag {
@@ -264,7 +275,20 @@ pub fn decode_audio_stream(
                 decoder.reset();
                 continue;
             }
-            Err(_) => break,
+            Err(e) => {
+                // Un error de lectura que no es el fin normal del archivo: si ya llegó casi todo el
+                // audio declarado se acepta con un aviso; en cualquier otro caso la caché quedaría
+                // truncada, así que se rechaza la importación (A13).
+                let decoded = channels[0].len() as u64;
+                let casi_completo = declared_frames.map(|n| decoded * 1000 >= n * 995).unwrap_or(false);
+                if casi_completo {
+                    tracing::warn!("Lectura interrumpida al final de {file_label}: {e}");
+                    break;
+                }
+                return Err(format!(
+                    "Error leyendo '{file_label}' tras {decoded} fotogramas: {e}. El archivo está dañado o incompleto."
+                ));
+            }
         };
 
         if packet.track_id() != track_id {
@@ -296,17 +320,44 @@ pub fn decode_audio_stream(
                     }
                 }
             }
-            Err(symphonia::core::errors::Error::DecodeError(_)) => continue,
+            Err(symphonia::core::errors::Error::DecodeError(msg)) => {
+                // Paquete corrupto: se conserva la línea temporal rellenando su duración con silencio.
+                // Sin la duración del paquete no se puede conservar, y se rechaza el archivo.
+                let dur = packet.dur();
+                if dur == 0 {
+                    return Err(format!(
+                        "Paquete corrupto en '{file_label}' ({msg}) y sin duración conocida: no se puede conservar la sincronía"
+                    ));
+                }
+                tracing::warn!("Paquete corrupto en {file_label} ({msg}): se sustituyen {dur} fotogramas por silencio");
+                push_silence(&mut channels, dur as usize);
+                damaged_frames += dur;
+            }
             Err(symphonia::core::errors::Error::IoError(e))
                 if e.kind() == std::io::ErrorKind::UnexpectedEof =>
             {
+                tracing::warn!("Fin de archivo inesperado al decodificar {file_label}");
                 break;
             }
             Err(e) => {
-                tracing::warn!("Error al decodificar paquete en {file_label}: {e}");
-                break;
+                return Err(format!("Error al decodificar '{file_label}': {e}"));
             }
         }
+    }
+
+    let decoded_frames = channels[0].len() as u64;
+    if let Some(declared) = declared_frames {
+        // Margen del 1 %: retardos de codificador y paquetes finales incompletos.
+        if decoded_frames * 100 < declared * 99 {
+            return Err(format!(
+                "'{file_label}' está incompleto: se decodificaron {decoded_frames} de {declared} fotogramas declarados"
+            ));
+        }
+    }
+    if decoded_frames > 0 && damaged_frames * 100 > decoded_frames {
+        return Err(format!(
+            "'{file_label}' tiene demasiado audio dañado: {damaged_frames} de {decoded_frames} fotogramas"
+        ));
     }
 
     Ok(DecodedAudioInfo {
@@ -914,6 +965,42 @@ mod tests {
         assert!((meta.duration_sec - 1.0).abs() < 0.05);
 
         let _ = std::fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn test_a13_un_wav_truncado_no_se_publica_como_cache_valida() {
+        let temp_dir = std::env::temp_dir().join(format!("omnitracks_a13_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        std::fs::create_dir_all(&temp_dir).unwrap();
+        let wav_path = temp_dir.join("completo.wav");
+        let samples: Vec<i16> = (0..48000).map(|i| ((i % 500) as i16) * 20).collect();
+        write_test_wav_16bit(&wav_path, 48000, 1, &samples);
+        let completo = std::fs::read(&wav_path).unwrap();
+
+        // El archivo completo se decodifica entero.
+        let ok = decode_audio_bytes(completo.clone(), "completo.wav", None).expect("el archivo completo debe decodificar");
+        assert_eq!(ok.channels[0].len(), 48000);
+
+        // La cabecera declara 48000 fotogramas, pero faltan los últimos 24000 (copia cortada).
+        let mitad = completo[..completo.len() - 48000].to_vec();
+        let truncado = decode_audio_bytes(mitad.clone(), "truncado.wav", None);
+        assert!(truncado.is_err(), "un archivo truncado no debe darse por válido: {:?}", truncado.map(|d| d.channels[0].len()));
+
+        // Y la importación a caché tampoco debe publicar nada.
+        let res = decode_and_cache_track_bytes(&temp_dir, "a13", "stem-01", "truncado.wav", mitad, 48000, None);
+        assert!(res.is_err());
+        let pcm = cache::get_track_pcm_path(&temp_dir, "a13", 48000, "stem-01");
+        assert!(!pcm.exists(), "no debe quedar PCM publicado");
+
+        let _ = std::fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn test_a13_push_silence_conserva_la_longitud_de_todos_los_canales() {
+        let mut canales = vec![vec![1.0f32; 10], vec![1.0f32; 10]];
+        push_silence(&mut canales, 5);
+        assert_eq!(canales[0].len(), 15);
+        assert_eq!(canales[1].len(), 15);
+        assert!(canales[0][10..].iter().all(|v| *v == 0.0));
     }
 
     #[test]
