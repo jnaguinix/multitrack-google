@@ -15,7 +15,6 @@ export interface NativeMetersSnapshot {
   cue: NativeLevelPair;
   out: NativeLevelPair;
   click?: NativeLevelPair;
-  guide?: NativeLevelPair;
   clipped: boolean;
 }
 
@@ -55,7 +54,7 @@ export class MeterBallistics {
       push(`t:${t.trackId}:l`, t.l);
       push(`t:${t.trackId}:r`, t.r);
     }
-    for (const bus of ['main', 'cue', 'out', 'click', 'guide'] as const) {
+    for (const bus of ['main', 'cue', 'out', 'click'] as const) {
       const pair = raw[bus];
       push(`b:${bus}:l`, pair?.l ?? 0);
       push(`b:${bus}:r`, pair?.r ?? 0);
@@ -105,7 +104,6 @@ export class MeterBallistics {
         cue: this.pair('cue', now),
         out: this.pair('out', now),
         click: this.pair('click', now),
-        guide: this.pair('guide', now),
         clipping,
       },
     };

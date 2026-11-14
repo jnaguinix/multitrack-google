@@ -795,7 +795,6 @@ export default function App() {
     handleChangePitch,
     handleChangeQuantize,
     handleToggleClick,
-    handleToggleGuide,
     handleToggleSplitRouting,
     handleToggleTrackMute,
     handleToggleTrackSolo,
@@ -1016,7 +1015,6 @@ export default function App() {
           onChangePitch={handleChangePitch}
           onChangeQuantize={handleChangeQuantize}
           onToggleClick={handleToggleClick}
-          onToggleGuide={handleToggleGuide}
           onToggleSplitRouting={handleToggleSplitRouting}
           onAddMarkerAtPlayhead={handleAddMarkerAtPlayhead}
           onOpenSectionEditor={() => setIsSectionEditorOpen(true)}
@@ -1122,13 +1120,6 @@ export default function App() {
                 updateCurrentProject((p) => ({ ...p, clickPan: pan }))
               }
               onToggleClick={handleToggleClick}
-              onChangeGuideGain={(gain) =>
-                updateCurrentProject((p) => ({ ...p, guideGain: gain }))
-              }
-              onChangeGuidePan={(pan) =>
-                updateCurrentProject((p) => ({ ...p, guidePan: pan }))
-              }
-              onToggleGuide={handleToggleGuide}
               onChangeMasterGain={(gain) =>
                 updateCurrentProject((p) => ({ ...p, masterGain: gain }))
               }
@@ -1248,13 +1239,6 @@ export default function App() {
                             updateCurrentProject((p) => ({ ...p, clickPan: pan }))
                           }
                           onToggleClick={handleToggleClick}
-                          onChangeGuideGain={(gain) =>
-                            updateCurrentProject((p) => ({ ...p, guideGain: gain }))
-                          }
-                          onChangeGuidePan={(pan) =>
-                            updateCurrentProject((p) => ({ ...p, guidePan: pan }))
-                          }
-                          onToggleGuide={handleToggleGuide}
                           onChangeMasterGain={(gain) =>
                             updateCurrentProject((p) => ({ ...p, masterGain: gain }))
                           }
@@ -1307,13 +1291,6 @@ export default function App() {
                   updateCurrentProject((p) => ({ ...p, clickPan: pan }))
                 }
                 onToggleClick={handleToggleClick}
-                onChangeGuideGain={(gain) =>
-                  updateCurrentProject((p) => ({ ...p, guideGain: gain }))
-                }
-                onChangeGuidePan={(pan) =>
-                  updateCurrentProject((p) => ({ ...p, guidePan: pan }))
-                }
-                onToggleGuide={handleToggleGuide}
                 onChangeMasterGain={(gain) =>
                   updateCurrentProject((p) => ({ ...p, masterGain: gain }))
                 }

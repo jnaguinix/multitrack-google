@@ -328,9 +328,6 @@ export interface MultitrackMixerProps {
   onChangeClickGain: (gain: number) => void;
   onChangeClickPan?: (pan: number) => void;
   onToggleClick: () => void;
-  onChangeGuideGain: (gain: number) => void;
-  onChangeGuidePan?: (pan: number) => void;
-  onToggleGuide: () => void;
   onChangeMasterGain: (gain: number) => void;
   onChangeCueMasterGain: (gain: number) => void;
   onResetMixer: () => void;
@@ -348,9 +345,6 @@ export const MultitrackMixer: React.FC<MultitrackMixerProps> = ({
   onChangeClickGain,
   onChangeClickPan,
   onToggleClick,
-  onChangeGuideGain,
-  onChangeGuidePan,
-  onToggleGuide,
   onChangeMasterGain,
   onChangeCueMasterGain,
   onResetMixer,
@@ -361,23 +355,17 @@ export const MultitrackMixer: React.FC<MultitrackMixerProps> = ({
   const live = transport.isPlaying;
 
   // Niveles de los buses: cada medidor los calcula con su propia lectura (ver componentes hoja).
-  const busLevelsOf = (bus: 'click' | 'guide' | 'main' | 'cue') => (m: MetersSnapshot): MeterLevels => {
+  const busLevelsOf = (bus: 'click' | 'main' | 'cue') => (m: MetersSnapshot): MeterLevels => {
     const lv = computeMixerLevels(project, transport, m);
     return { l: lv[bus].l, r: lv[bus].r, dbScale: lv.nativeScale };
   };
 
-  // Check if user already imported custom tracks named "Click" or "Guía" / "Cues"
+  // Check if user already imported a custom track named "Click" / metronome
   const hasCustomClickTrack = project.tracks.some((t) => {
     if (t.role === 'click') return true;
     const norm = (t.name || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
     return norm.includes('click') || norm.includes('metro');
   });
-  const hasCustomGuideTrack = project.tracks.some((t) => {
-    if (t.role === 'guide') return true;
-    const norm = (t.name || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
-    return norm.includes('guide') || norm.includes('cue') || norm.includes('guia');
-  });
-
   return (
     <div
       className={`lt-mixer-surface flex flex-col select-none ${
@@ -543,64 +531,6 @@ export const MultitrackMixer: React.FC<MultitrackMixerProps> = ({
             </div>
           )}
 
-          {/* Built-in Voice / Tone Guide Strip (if no custom Guide stem exists) */}
-          {!hasCustomGuideTrack && (
-            <div
-              style={{ '--c': '#22d3ee' } as React.CSSProperties}
-              className={`lt-strip ${!project.guideCuesEnabled || anySolo ? 'lt-dim' : ''}`}
-            >
-              <div className="lt-cap" />
-              <div className="lt-name" title="Guía Vocal">
-                Guía
-              </div>
-
-              <PanKnob
-                name="Guía"
-                pan={project.guidePan ?? 0}
-                onChangePan={(nextPan) => onChangeGuidePan?.(nextPan)}
-              />
-
-              <StudioFader
-                name="Guía"
-                gain={project.guideGain}
-                live={live}
-                levelsOf={busLevelsOf('guide')}
-                onChangeGain={onChangeGuideGain}
-              />
-
-              <div className="lt-ms">
-                <button
-                  type="button"
-                  className="lt-m"
-                  aria-pressed={!project.guideCuesEnabled}
-                  aria-label="Mute Guía"
-                  onClick={onToggleGuide}
-                >
-                  M
-                </button>
-                <button
-                  type="button"
-                  className="lt-s"
-                  aria-pressed={false}
-                  aria-label="Solo Guía"
-                  onClick={() => {
-                    if (!project.guideCuesEnabled) onToggleGuide();
-                  }}
-                >
-                  S
-                </button>
-              </div>
-
-              <button
-                type="button"
-                className="lt-route"
-                data-bus="cue-click"
-                title="Ruteado al bus Click / Cue"
-              >
-                Click / Cue
-              </button>
-            </div>
-          )}
         </section>
 
         {/* Right: Master Output Buses (#buses — Main L/R & Click / Cue) */}

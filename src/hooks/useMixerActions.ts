@@ -39,10 +39,6 @@ export function useMixerActions({
     updateCurrentProject((p) => ({ ...p, clickEnabled: !p.clickEnabled }));
   };
 
-  const handleToggleGuide = () => {
-    updateCurrentProject((p) => ({ ...p, guideCuesEnabled: !p.guideCuesEnabled }));
-  };
-
   const handleToggleSplitRouting = () => {
     updateCurrentProject((p) => ({
       ...p,
@@ -99,8 +95,6 @@ export function useMixerActions({
       ...p,
       clickGain: 1.0,
       clickPan: 0,
-      guideGain: 1.0,
-      guidePan: 0,
       masterGain: 1.0,
       cueMasterGain: 1.0,
       tracks: p.tracks.map((t) => ({
@@ -138,7 +132,6 @@ export function useMixerActions({
     handleChangePitch,
     handleChangeQuantize,
     handleToggleClick,
-    handleToggleGuide,
     handleToggleSplitRouting,
     handleToggleTrackMute,
     handleToggleTrackSolo,

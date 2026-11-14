@@ -8,7 +8,7 @@ OmniTracks es un reproductor de multitracks para cultos y música en vivo. **Un 
 Pila: escritorio Windows con Tauri v2; motor de audio en Rust (CPAL/WASAPI, Symphonia, rubato, rtrb); interfaz en React 19, TypeScript, Tailwind 4 y Vite. `main` es la rama del motor nativo (versión 0.3.0). La versión web ya no se mantiene.
 
 ## 2. Orden de la auditoría (de más a menos crítico)
-1. **Callback de audio en tiempo real**: `desktop/src-tauri/src/audio/playback/mod.rs` (función `ensure_stream`), `bus.rs`, `fade.rs`, `guide.rs`, `types.rs`.
+1. **Callback de audio en tiempo real**: `desktop/src-tauri/src/audio/playback/mod.rs` (función `ensure_stream`), `bus.rs`, `fade.rs`, `types.rs`.
 2. **Transporte, saltos de sección y buffers**: `playback/transport.rs`, `playback/jumps.rs`, `playback/clock.rs`, `playback/block.rs`, `playback/feeder_io.rs`, `playback/mod.rs`.
 3. **Importación y caché PCM**: `audio/import.rs`, `audio/cache.rs`, `audio/resampler.rs`, `audio/mod.rs` (comandos `audio_*`).
 4. **Biblioteca y persistencia**: `desktop/src-tauri/src/library/mod.rs` (`library.json`, escritura atómica, sidecars).

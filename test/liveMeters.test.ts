@@ -46,8 +46,6 @@ async function main() {
       ],
       clickEnabled: true,
       clickGain: 1,
-      guideCuesEnabled: true,
-      guideGain: 1,
       masterGain: 1,
       cueMasterGain: 0.708,
     };
@@ -67,7 +65,7 @@ async function main() {
 
     const nativos = computeMixerLevels(project, transport, {
       ...meters,
-      nativeBuses: { main: { l: 0.1, r: 0.05 }, cue: { l: 0, r: 0 }, click: { l: 0, r: 0 }, guide: { l: 0, r: 0 } },
+      nativeBuses: { main: { l: 0.1, r: 0.05 }, cue: { l: 0, r: 0 }, click: { l: 0, r: 0 } },
     });
     assert(nativos.nativeScale, 'con niveles nativos la escala es dBFS');
     assert(close(nativos.main.l, peakPosition(20 * Math.log10(0.1))), 'nivel nativo en dBFS');

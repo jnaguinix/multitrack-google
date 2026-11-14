@@ -32,7 +32,6 @@ interface TransportDeckProps {
   onChangePitch: (semitones: number) => void;
   onChangeQuantize: (mode: QuantizeMode) => void;
   onToggleClick: () => void;
-  onToggleGuide: () => void;
   onToggleSplitRouting: () => void;
   onAddMarkerAtPlayhead: () => void;
   onOpenSectionEditor: () => void;
@@ -70,7 +69,6 @@ export const TransportDeck: React.FC<TransportDeckProps> = ({
   onChangePitch,
   onChangeQuantize,
   onToggleClick,
-  onToggleGuide,
   onToggleSplitRouting,
 
   onCancelQueuedJump,
@@ -181,7 +179,6 @@ export const TransportDeck: React.FC<TransportDeckProps> = ({
           </div>
           <div className="flex flex-wrap gap-1.5">
             <button type="button" onClick={onToggleClick} aria-pressed={project.clickEnabled} className="lt-control">Click</button>
-            <button type="button" onClick={onToggleGuide} aria-pressed={project.guideCuesEnabled} className="lt-control">Guía</button>
             <button type="button" onClick={onToggleSplitRouting} aria-pressed={split} className="lt-control" title="Alternar entre estéreo y Split-Mono (L: guía y click · R: pistas)">{split ? 'Split-mono' : 'Estéreo'}</button>
           </div>
         </section>

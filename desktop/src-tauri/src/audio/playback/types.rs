@@ -119,9 +119,8 @@ pub struct BusMeters {
     pub main: PeakMeter,
     pub cue: PeakMeter,
     pub out: PeakMeter,
-    /// Click sintético y guía hablada, ya con el cue master aplicado (señales mono).
+    /// Click sintético, ya con el cue master aplicado (señal mono).
     pub click: PeakMeter,
-    pub guide: PeakMeter,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
@@ -153,7 +152,6 @@ pub struct MetersSnapshotDto {
     pub cue: LevelPair,
     pub out: LevelPair,
     pub click: LevelPair,
-    pub guide: LevelPair,
     /// La salida superó 1.0 antes del recorte en algún momento desde la lectura anterior.
     pub clipped: bool,
 }

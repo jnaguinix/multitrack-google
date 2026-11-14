@@ -24,7 +24,6 @@ export interface StripLevels {
 
 export interface MixerLevels {
   click: StripLevels;
-  guide: StripLevels;
   main: StripLevels;
   cue: StripLevels;
   /** Con niveles nativos la escala es dBFS (zonas de color de los medidores de pista). */
@@ -69,12 +68,7 @@ export function computeMixerLevels(
     transport.isPlaying && project.clickEnabled && !anySolo
       ? activityFromGain(project.clickGain) * (transport.currentBeat === 1 ? 0.86 : 0.65) * beatDecay
       : 0;
-  const guideStripLevel =
-    transport.isPlaying && project.guideCuesEnabled && !anySolo
-      ? activityFromGain(project.guideGain) * (transport.queuedSectionId ? 0.78 : 0.25) * beatDecay
-      : 0;
-
-  maxCueBusLevel = Math.max(maxCueBusLevel, clickStripLevel, guideStripLevel);
+  maxCueBusLevel = Math.max(maxCueBusLevel, clickStripLevel);
 
   const cueMasterGain = project.cueMasterGain ?? 0.708; // -3.0 dB por defecto
   const mainBusOutLevel = transport.isPlaying
@@ -91,7 +85,6 @@ export function computeMixerLevels(
 
   return {
     click: strip(nb?.click, clickStripLevel, 0.96),
-    guide: strip(nb?.guide, guideStripLevel, 0.95),
     main: strip(nb?.main, mainBusOutLevel, 0.95),
     cue: strip(nb?.cue, cueBusOutLevel, 0.95),
     nativeScale: Boolean(meters.nativeBuses),

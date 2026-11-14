@@ -40,7 +40,6 @@ impl PlaybackEngine {
             tracing::info!("[NativeEngine] Immediate jump to '{}' ({:.2}s)", section_id, target_sec_obj.start_sec);
             self.seek(target_sec_obj.start_sec).await;
             *self.queued_jump.lock().unwrap() = None;
-            self.guide_cue.lock().unwrap().trigger_chime();
             return Ok(QueuedJumpInfo {
                 target_section_id: target_sec_obj.id,
                 target_sec: target_sec_obj.start_sec,
@@ -115,7 +114,6 @@ impl PlaybackEngine {
         // publicar el salto en cola: `get_playback_state` da por aplicado un salto sin programar.
         self.clock_jumps.schedule_jump(transition_frame, target_frame);
         *self.queued_jump.lock().unwrap() = Some(jump_info.clone());
-        self.guide_cue.lock().unwrap().trigger_chime();
 
         let req = QueuedJumpRequest {
             target_frame,
@@ -154,7 +152,6 @@ impl PlaybackEngine {
         tracing::info!("[NativeEngine] toggle_vamp: new_state={new_state}, cur_frame={cur_frame}, cur_sec={cur_sec:.2}");
 
         if new_state {
-            self.guide_cue.lock().unwrap().trigger_chime();
             let active_loop = {
                 let sections_guard = self.sections.lock().unwrap();
                 sections_guard

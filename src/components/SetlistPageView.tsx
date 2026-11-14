@@ -76,9 +76,6 @@ interface SetlistPageViewProps {
   onChangeClickGain: (gain: number) => void;
   onChangeClickPan?: (pan: number) => void;
   onToggleClick: () => void;
-  onChangeGuideGain: (gain: number) => void;
-  onChangeGuidePan?: (pan: number) => void;
-  onToggleGuide: () => void;
   onChangeMasterGain: (gain: number) => void;
   onChangeCueMasterGain: (gain: number) => void;
   onResetMixer: () => void;
@@ -139,9 +136,6 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
   onChangeClickGain,
   onChangeClickPan,
   onToggleClick,
-  onChangeGuideGain,
-  onChangeGuidePan,
-  onToggleGuide,
   onChangeMasterGain,
   onChangeCueMasterGain,
   onResetMixer,
@@ -597,9 +591,6 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
                 onChangeClickGain={onChangeClickGain}
                 onChangeClickPan={onChangeClickPan}
                 onToggleClick={onToggleClick}
-                onChangeGuideGain={onChangeGuideGain}
-                onChangeGuidePan={onChangeGuidePan}
-                onToggleGuide={onToggleGuide}
                 onChangeMasterGain={onChangeMasterGain}
                 onChangeCueMasterGain={onChangeCueMasterGain}
                 onResetMixer={onResetMixer}

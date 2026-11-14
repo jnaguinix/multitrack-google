@@ -251,7 +251,6 @@ impl PlaybackEngine {
             main: self.bus_meters.main.take().into(),
             cue: self.bus_meters.cue.take().into(),
             click: self.bus_meters.click.take().into(),
-            guide: self.bus_meters.guide.take().into(),
             clipped: out.l > 1.0 || out.r > 1.0,
             out,
         }

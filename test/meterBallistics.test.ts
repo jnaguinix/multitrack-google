@@ -33,7 +33,6 @@ const raw = (tracks: [string, number][], main = 0, clipped = false) => ({
   cue: { l: 0, r: 0 },
   out: { l: main, r: main },
   click: { l: 0.2, r: 0.2 },
-  guide: { l: 0, r: 0 },
   clipped,
 });
 

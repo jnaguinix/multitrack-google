@@ -611,45 +611,6 @@
     }
 
     #[test]
-    fn test_guide_cue_chime_synthesis() {
-        let sample_rate = 48000u32;
-        let mut gc = GuideCueEngine::new();
-        assert!(gc.enabled);
-        gc.trigger_chime();
-
-        let total_samples = (0.19 * sample_rate as f32) as usize; // 9120 samples
-        let mut out = vec![0.0f32; total_samples + 1000];
-        let sections = vec![];
-        gc.render_block(0, out.len(), sample_rate, &sections, &mut out);
-
-        // After 9120 samples, chime finishes and outputs 0.0
-        assert!(out[total_samples - 1].abs() > 0.0, "Chime ended prematurely");
-        assert_eq!(out[total_samples + 10], 0.0, "Chime continued past 190 ms");
-
-        // Measure dominant frequency in Part 1 (first 0.06s, samples 200..2800)
-        // Should be around 587.33 Hz (D5)
-        let mut crossings_1 = 0;
-        for i in 200..2800 {
-            if out[i] <= 0.0 && out[i + 1] > 0.0 {
-                crossings_1 += 1;
-            }
-        }
-        let freq_1 = (crossings_1 as f32 / 2600.0) * sample_rate as f32;
-        assert!((freq_1 - 587.33).abs() < 25.0, "Part 1 freq mismatch: {freq_1} vs 587.33 Hz");
-
-        // Measure dominant frequency in Part 2 (samples 4000..7000)
-        // Should be around 880.0 Hz (A5)
-        let mut crossings_2 = 0;
-        for i in 4000..7000 {
-            if out[i] <= 0.0 && out[i + 1] > 0.0 {
-                crossings_2 += 1;
-            }
-        }
-        let freq_2 = (crossings_2 as f32 / 3000.0) * sample_rate as f32;
-        assert!((freq_2 - 880.0).abs() < 25.0, "Part 2 freq mismatch: {freq_2} vs 880.0 Hz");
-    }
-
-    #[test]
     fn test_split_mono_routing_by_bus() {
         // cue-click bus strictly ch 0 (Left), main bus strictly ch 1 (Right), both bus in both ch 0 and ch 1
         let frames = 256;
@@ -660,7 +621,6 @@
         let both_l = vec![0.5f32; frames];
         let both_r = vec![0.5f32; frames];
         let click_buf = vec![0.2f32; frames];
-        let guide_buf = vec![0.1f32; frames];
 
         let master_g = 1.0f32;
         let cue_g = 1.0f32;
@@ -669,7 +629,7 @@
         let mut data = vec![0.0f32; frames * 2];
 
         for f in 0..frames {
-            let cue_sum = ((cue_l[f] + cue_r[f] + both_l[f] + both_r[f]) * 0.5 + click_buf[f] + guide_buf[f]) * cue_g * env_gain;
+            let cue_sum = ((cue_l[f] + cue_r[f] + both_l[f] + both_r[f]) * 0.5 + click_buf[f]) * cue_g * env_gain;
             let main_sum = ((main_l[f] + main_r[f] + both_l[f] + both_r[f]) * 0.5) * master_g * env_gain;
 
             data[f * 2] = cue_sum.clamp(-1.0, 1.0);
@@ -926,7 +886,6 @@
             let mut both_l = vec![0.0f32; frames_per_block];
             let mut both_r = vec![0.0f32; frames_per_block];
             let click_buf = vec![0.0f32; frames_per_block];
-            let guide_buf = vec![0.0f32; frames_per_block];
 
             let mut callback_min_track_frames = u64::MAX;
 
@@ -948,7 +907,7 @@
                                 main_r[f] += r * g;
                             }
                             TrackBus::CueClick => {
-                                cue_l[f] += l * g + click_buf[f] + guide_buf[f];
+                                cue_l[f] += l * g + click_buf[f];
                                 cue_r[f] += r * g;
                             }
                             TrackBus::Both => {
@@ -1011,7 +970,6 @@
         let mut both_l = Vec::<f32>::with_capacity(4096);
         let mut both_r = Vec::<f32>::with_capacity(4096);
         let mut click_buf = Vec::<f32>::with_capacity(4096);
-        let mut guide_buf = Vec::<f32>::with_capacity(4096);
 
         for _ in 0..total_callbacks {
             let t0 = Instant::now();
@@ -1033,7 +991,6 @@
                 both_l.resize(frames_per_block, 0.0);
                 both_r.resize(frames_per_block, 0.0);
                 click_buf.resize(frames_per_block, 0.0);
-                guide_buf.resize(frames_per_block, 0.0);
             }
             main_l[..frames_per_block].fill(0.0);
             main_r[..frames_per_block].fill(0.0);
@@ -1042,7 +999,6 @@
             both_l[..frames_per_block].fill(0.0);
             both_r[..frames_per_block].fill(0.0);
             click_buf[..frames_per_block].fill(0.0);
-            guide_buf[..frames_per_block].fill(0.0);
 
             let mut callback_min_track_frames = u64::MAX;
 
@@ -1064,7 +1020,7 @@
                                 main_r[f] += r * g;
                             }
                             TrackBus::CueClick => {
-                                cue_l[f] += l * g + click_buf[f] + guide_buf[f];
+                                cue_l[f] += l * g + click_buf[f];
                                 cue_r[f] += r * g;
                             }
                             TrackBus::Both => {
@@ -1310,10 +1266,8 @@
     fn test_medidores_click_y_guia_llegan_al_estado() {
         let engine = PlaybackEngine::new(Arc::new(AudioStreamStats::default()));
         engine.bus_meters.click.record(0.3, 0.3);
-        engine.bus_meters.guide.record(0.1, 0.1);
         let s = engine.get_playback_state();
         assert!((s.meters.click.l - 0.3).abs() < 1e-6, "click: {}", s.meters.click.l);
-        assert!((s.meters.guide.l - 0.1).abs() < 1e-6, "guía: {}", s.meters.guide.l);
         let s = engine.get_playback_state();
         assert_eq!(s.meters.click.l, 0.0, "tras leer vuelve a 0");
     }
@@ -1883,7 +1837,6 @@
     /// consecutivas (canal izquierdo) y en qué muestra ocurrió. Sin metrónomo ni guía: solo las pistas.
     fn mayor_salto_entre_muestras(engine: &PlaybackEngine, segundos: f64) -> (f32, usize, usize) {
         engine.metronome.lock().unwrap().config.enabled = false;
-        engine.guide_cue.lock().unwrap().enabled = false;
         let (mut previa, mut mayor, mut donde, mut n) = (None::<f32>, 0.0f32, 0usize, 0usize);
         let mut silencios = 0usize;
         let limite = Instant::now() + std::time::Duration::from_secs(20);

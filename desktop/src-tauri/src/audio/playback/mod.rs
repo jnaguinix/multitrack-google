@@ -19,8 +19,6 @@ pub use fade::*;
 pub mod bus;
 pub use bus::*;
 
-pub mod guide;
-pub use guide::*;
 
 pub mod feeder_io;
 pub use feeder_io::*;
@@ -71,7 +69,6 @@ pub struct PlaybackEngine {
     pub pitch_semitones: Arc<AtomicI32>,
     pub queued_jump: Arc<std::sync::Mutex<Option<QueuedJumpInfo>>>,
     pub metronome: Arc<std::sync::Mutex<MetronomeEngine>>,
-    pub guide_cue: Arc<std::sync::Mutex<GuideCueEngine>>,
     pub preloaded_project_id: TokioMutex<Option<String>>,
     pub device_disconnected: Arc<AtomicBool>,
     /// Picos de los buses Main, Cue y salida (los escribe el hilo de audio).
@@ -111,7 +108,6 @@ impl PlaybackEngine {
             metronome: Arc::new(std::sync::Mutex::new(MetronomeEngine::new(
                 MetronomeConfig::default(),
             ))),
-            guide_cue: Arc::new(std::sync::Mutex::new(GuideCueEngine::new())),
             preloaded_project_id: TokioMutex::new(None),
             device_disconnected: Arc::new(AtomicBool::new(false)),
             bus_meters: Arc::new(BusMeters::default()),
@@ -565,11 +561,6 @@ impl PlaybackEngine {
         self.clock_jumps.reset();
         *self.fade.lock().unwrap() = FadeEnvelope::new(FADE_MS, device_sample_rate);
         *self.queued_jump.lock().unwrap() = None;
-        {
-            let mut gc = self.guide_cue.lock().unwrap();
-            gc.last_announced_section = None;
-            gc.active_chime_sample = None;
-        }
 
         let duration_sec = max_frames as f64 / device_sample_rate as f64;
         let track_count = active_tracks.len();
@@ -816,8 +807,6 @@ impl PlaybackEngine {
         let fade_arc = Arc::clone(&self.fade);
         let stats = Arc::clone(&self.stats);
         let metronome_arc = Arc::clone(&self.metronome);
-        let guide_cue_arc = Arc::clone(&self.guide_cue);
-        let sections_arc = Arc::clone(&self.sections);
         let split_mono_arc = Arc::clone(&self.split_mono);
         let master_gain_arc = Arc::clone(&self.master_gain);
         let cue_master_gain_arc = Arc::clone(&self.cue_master_gain);
@@ -843,7 +832,6 @@ impl PlaybackEngine {
         let mut both_l = vec![0.0f32; MAX_CALLBACK_FRAMES];
         let mut both_r = vec![0.0f32; MAX_CALLBACK_FRAMES];
         let mut click_buf = vec![0.0f32; MAX_CALLBACK_FRAMES];
-        let mut guide_buf = vec![0.0f32; MAX_CALLBACK_FRAMES];
         // Fotograma de la canción donde debería empezar el siguiente bloque si el reloj fuera continuo.
         // Si no coincide (seek, salto de sección, vuelta de vamp) el metrónomo se recoloca.
         let mut expected_start_frame = u64::MAX;
@@ -890,7 +878,6 @@ impl PlaybackEngine {
                     both_l[..frames].fill(0.0);
                     both_r[..frames].fill(0.0);
                     click_buf[..frames].fill(0.0);
-                    guide_buf[..frames].fill(0.0);
 
                     let mut fade = match fade_arc.try_lock() {
                         Ok(f) => f,
@@ -1025,12 +1012,6 @@ impl PlaybackEngine {
                     }
                     expected_start_frame = if metronome_pending_reposition { u64::MAX } else { end_song_f };
 
-                    if let Ok(mut gc) = guide_cue_arc.try_lock() {
-                        if let Ok(sec_guard) = sections_arc.try_lock() {
-                            gc.render_block(start_song_f, frames, sample_rate_u32, &sec_guard, &mut guide_buf[..frames]);
-                        }
-                    }
-
                     let is_split = split_mono_arc.load(Ordering::Relaxed);
                     let master_g = f32::from_bits(master_gain_arc.load(Ordering::Relaxed));
                     let cue_g = f32::from_bits(cue_master_gain_arc.load(Ordering::Relaxed));
@@ -1038,19 +1019,18 @@ impl PlaybackEngine {
                     // Medidores de bus: acumuladores locales en la pila; se publican una vez por bloque.
                     let (mut mk_l, mut mk_r, mut ck_l, mut ck_r, mut ok_l, mut ok_r) =
                         (0.0f32, 0.0f32, 0.0f32, 0.0f32, 0.0f32, 0.0f32);
-                    let (mut clk_pk, mut gde_pk) = (0.0f32, 0.0f32);
+                    let mut clk_pk = 0.0f32;
 
                     // Write into output buffer applying the micro-fade envelope and split-mono / stereo routing
                     for f in 0..frames {
                         let env_gain = fade.next_gain();
                         clk_pk = clk_pk.max((click_buf[f] * cue_g * env_gain).abs());
-                        gde_pk = gde_pk.max((guide_buf[f] * cue_g * env_gain).abs());
 
                         if is_split {
                             // Split-Mono mode:
                             // Output channel 0 (Left / In-Ear) -> pure Cue/Click bus: cue tracks + both tracks + click + guide
                             // Output channel 1 (Right / Main)  -> Main bus tracks + both tracks summed to mono
-                            let cue_sum = ((cue_l[f] + cue_r[f] + both_l[f] + both_r[f]) * 0.5 + click_buf[f] + guide_buf[f]) * cue_g * env_gain;
+                            let cue_sum = ((cue_l[f] + cue_r[f] + both_l[f] + both_r[f]) * 0.5 + click_buf[f]) * cue_g * env_gain;
                             let main_sum = ((main_l[f] + main_r[f] + both_l[f] + both_r[f]) * 0.5) * master_g * env_gain;
 
                             mk_l = mk_l.max(main_sum.abs());
@@ -1066,8 +1046,8 @@ impl PlaybackEngine {
                             // Standard Stereo mode (misma suma que antes, separada por bus para medirla):
                             let bus_main_l = (main_l[f] + both_l[f]) * master_g;
                             let bus_main_r = (main_r[f] + both_r[f]) * master_g;
-                            let bus_cue_l = (cue_l[f] + both_l[f] + click_buf[f] + guide_buf[f]) * cue_g;
-                            let bus_cue_r = (cue_r[f] + both_r[f] + click_buf[f] + guide_buf[f]) * cue_g;
+                            let bus_cue_l = (cue_l[f] + both_l[f] + click_buf[f]) * cue_g;
+                            let bus_cue_r = (cue_r[f] + both_r[f] + click_buf[f]) * cue_g;
                             let out_l = (bus_main_l + bus_cue_l) * env_gain;
                             let out_r = (bus_main_r + bus_cue_r) * env_gain;
 
@@ -1093,7 +1073,6 @@ impl PlaybackEngine {
                     bus_meters_arc.cue.record(ck_l, ck_r);
                     bus_meters_arc.out.record(ok_l, ok_r);
                     bus_meters_arc.click.record(clk_pk, clk_pk);
-                    bus_meters_arc.guide.record(gde_pk, gde_pk);
 
                     let vamping_now = vamping_arc.load(Ordering::Relaxed);
                     let clock_now = advance_clock(

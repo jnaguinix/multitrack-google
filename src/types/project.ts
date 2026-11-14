@@ -69,10 +69,6 @@ export interface SongProject {
   clickGain: number;
   clickPan?: number;
   clickSubdivision: 1 | 2; // 1 = quarter notes, 2 = eighth notes
-  guideCuesEnabled: boolean;
-  guideVoiceReadout: boolean;
-  guideGain: number;
-  guidePan?: number;
   masterGain: number;
   cueMasterGain?: number; // Master output gain for the Click / Cue bus ("Auriculares banda")
   pitchSemitones: number; // -6 to +6 semitones detune for stems
@@ -127,7 +123,6 @@ export interface NativeBusLevels {
   cue: { l: number; r: number };
   out: { l: number; r: number };
   click: { l: number; r: number };
-  guide: { l: number; r: number };
   clipping: boolean;
 }
 

@@ -43,7 +43,6 @@ desktop/src-tauri/src/audio/playback/
 ├── clock.rs        # ClockJumps y advance_clock: saltos de sección y vueltas de vamp aplicados al reloj current_frame desde el callback
 ├── fade.rs         # FadeEnvelope, FadeType y constantes (FADE_MS = 8.0): micro-fundidos
 ├── feeder_io.rs    # Lectura de frames PCM desde disco, staging, drenaje con remuestreo, begin_new_segment (tras empalmes) y FeederAliveGuard
-├── guide.rs        # GuideCueEngine: síntesis y renderizado de cues vocales de guía para saltos de sección
 ├── jumps.rs        # queue_section_jump, cancel_queued_jump, toggle_vamp (impl PlaybackEngine)
 ├── transport.rs    # play, pause, stop, seek (con rewind_tracks: handshake con los feeders), get_playback_state, reopen_stream (impl PlaybackEngine)
 ├── types.rs        # NativeSongSection, QueuedJumpInfo, ActiveTrack, PlaybackStateSnapshot, PeakMeter/BusMeters (medidores), etc.
@@ -136,7 +135,7 @@ Puentes con el escritorio en `desktop/frontend/`: `RemoteConnectionBridge.tsx` m
    audio_play -> PlaybackEngine::play (fade-in 8 ms en fade.rs)
           │
           ▼ Callback de Audio en Tiempo Real (ensure_stream en playback/mod.rs)
-   Drena rtrb buffers + mezcla click (metronome.rs) + cues (guide.rs) -> CPAL WASAPI
+   Drena rtrb buffers + mezcla click (metronome.rs) -> CPAL WASAPI
 ```
 
 1. **Importar**: `handleImportNative` (TS, `useImportFlow.ts`) invoca `audio_scan_folder` o `audio_scan_files` (Rust, `audio/mod.rs`), extrae metadatos y guarda la canción en `library.json` mediante `library_save_song` y el sidecar `omnitracks.project.json` mediante `library_write_sidecar`. **No se genera caché PCM en este paso**.
@@ -144,7 +143,7 @@ Puentes con el escritorio en `desktop/frontend/`: `RemoteConnectionBridge.tsx` m
 3. **Añadir al Setlist**: `handleAddToSetlist` (TS, `useSetlist.ts`) añade la canción a `setlistQueue`. Verifica la caché con `nativeAudioEngine.checkProjectCacheStatus` (`audio_get_project_cache_status`). Si `isReady == false`, invoca `nativeAudioEngine.generateNativeCacheForProject`.
 4. **Caché PCM**: `audio_import_tracks` (`audio/mod.rs`) decodifica cada stem con `import::decode_and_cache_track` (`audio/import.rs`), remuestrea al `target_sample_rate` y escribe `stem-*.pcm` y `stem-*.json` en disco vía `cache::write_track_pcm_and_metadata` (`audio/cache.rs`), emitiendo eventos `audio://import-progress`.
 5. **Reproducir**: `activateProject` invoca `nativeAudioEngine.loadProject` (`audio_load_project`). `PlaybackEngine::load_project` prellena los buffers circulares `rtrb` mediante los hilos feeder (`playback/feeder_io.rs`). `audio_play` inicia el micro-fundido de 8 ms y el callback de salida CPAL en `ensure_stream` (`playback/mod.rs`) entrega las muestras a WASAPI sin alocaciones ni bloqueos.
-6. **Medidores**: el callback guarda el pico post-fader de cada pista y de los buses (Main, Cue, salida, click, guía) en `PeakMeter` atómicos (`playback/types.rs`), una vez por bloque. `get_playback_state` (`playback/transport.rs`) los lee y pone a cero sin tocar `stream_tracks`, y viajan en el campo `meters` de `audio_get_playback_state`. En TS, `MeterBallistics` (`src/audio/meterBallistics.ts`) aplica una caída de ~20 dB/s y `nativeAudioEngine.getTrackMeters` los entrega a Arreglo y Mezcla. Los medidores de la interfaz se suscriben al ciclo compartido de `meterFeed.ts` mediante `useLiveMeters`: cada lectura solo renderiza los componentes hoja del medidor, no la consola. El estado de reproducción se consulta con `StatePoller` (`statePoller.ts`): una petición pendiente, siguiente consulta al terminar la anterior, 33 ms reproduciendo y 200 ms en pausa, y consulta inmediata tras play, pausa, seek, saltos y carga. Las ondas de Arreglo se dibujan en dos canvas estáticos (base y reproducido, recortado con `clip-path`) y el cursor se mueve con `transform`: avanzar la posición no redibuja ningún canvas.
+6. **Medidores**: el callback guarda el pico post-fader de cada pista y de los buses (Main, Cue, salida, click) en `PeakMeter` atómicos (`playback/types.rs`), una vez por bloque. `get_playback_state` (`playback/transport.rs`) los lee y pone a cero sin tocar `stream_tracks`, y viajan en el campo `meters` de `audio_get_playback_state`. En TS, `MeterBallistics` (`src/audio/meterBallistics.ts`) aplica una caída de ~20 dB/s y `nativeAudioEngine.getTrackMeters` los entrega a Arreglo y Mezcla. Los medidores de la interfaz se suscriben al ciclo compartido de `meterFeed.ts` mediante `useLiveMeters`: cada lectura solo renderiza los componentes hoja del medidor, no la consola. El estado de reproducción se consulta con `StatePoller` (`statePoller.ts`): una petición pendiente, siguiente consulta al terminar la anterior, 33 ms reproduciendo y 200 ms en pausa, y consulta inmediata tras play, pausa, seek, saltos y carga. Las ondas de Arreglo se dibujan en dos canvas estáticos (base y reproducido, recortado con `clip-path`) y el cursor se mueve con `transform`: avanzar la posición no redibuja ningún canvas.
 
 ---
 

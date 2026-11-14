@@ -240,18 +240,6 @@ export function mergeSavedProjectMetadata(
     clickPan:
       Number.isFinite(saved.clickPan) ? saved.clickPan : baseProject.clickPan ?? 0,
     clickSubdivision: saved.clickSubdivision || baseProject.clickSubdivision,
-    guideCuesEnabled:
-      typeof saved.guideCuesEnabled === 'boolean'
-        ? saved.guideCuesEnabled
-        : baseProject.guideCuesEnabled,
-    guideVoiceReadout:
-      typeof saved.guideVoiceReadout === 'boolean'
-        ? saved.guideVoiceReadout
-        : baseProject.guideVoiceReadout,
-    guideGain:
-      Number.isFinite(saved.guideGain) ? saved.guideGain : baseProject.guideGain,
-    guidePan:
-      Number.isFinite(saved.guidePan) ? saved.guidePan : baseProject.guidePan ?? 0,
     masterGain:
       Number.isFinite(saved.masterGain) ? saved.masterGain : baseProject.masterGain,
     cueMasterGain:
@@ -331,8 +319,6 @@ export function normalizeProjectSectionsToTime(project: SongProject): SongProjec
     ...project,
     clickGain: Number.isFinite(project.clickGain) ? project.clickGain : 1.0,
     clickPan: Number.isFinite(project.clickPan) ? project.clickPan : 0,
-    guideGain: Number.isFinite(project.guideGain) ? project.guideGain : 1.0,
-    guidePan: Number.isFinite(project.guidePan) ? project.guidePan : 0,
     masterGain: Number.isFinite(project.masterGain) ? project.masterGain : 1.0,
     cueMasterGain: Number.isFinite(project.cueMasterGain) ? project.cueMasterGain : 0.708,
     tracks: normalizedTracks,
