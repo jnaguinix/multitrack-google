@@ -1784,6 +1784,65 @@
         assert_eq!(tracks[0].consumer.lock().unwrap().slots(), 0, "el anillo debe quedar vacío");
     }
 
+    // ----- A05: orden de adquisición de los mutex de proyecto -----
+
+    #[tokio::test]
+    async fn test_a05_load_project_no_retiene_tracks_mientras_espera_loaded_project_id() {
+        // Una descarga en curso tiene `loaded_project_id` y pide `tracks`. Si la carga retuviera `tracks`
+        // mientras espera `loaded_project_id`, ambas se bloquearían para siempre.
+        let dir = escribir_cache_rampa("a05_orden", &[("p", 48_000)]);
+        let engine = Arc::new(PlaybackEngine::new(Arc::new(AudioStreamStats::default())));
+        let loaded_guard = engine.loaded_project_id.lock().await;
+
+        let carga = {
+            let engine = Arc::clone(&engine);
+            tokio::spawn(async move {
+                engine.load_project(&dir, "a05_orden", SR_PRUEBA, None, None, None, None).await
+            })
+        };
+        // Margen para que la carga llegue al punto de espera.
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        assert!(!carga.is_finished(), "la carga debía esperar a loaded_project_id");
+
+        let tracks = tokio::time::timeout(std::time::Duration::from_millis(500), engine.tracks.lock()).await;
+        assert!(
+            tracks.is_ok(),
+            "load_project retiene `tracks` mientras espera `loaded_project_id`: deadlock con unload_project_if_matches"
+        );
+        drop(tracks);
+        drop(loaded_guard);
+        let resultado = tokio::time::timeout(std::time::Duration::from_secs(5), carga).await;
+        assert!(resultado.expect("la carga no terminó").unwrap().is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_a05_cargas_y_descargas_simultaneas_terminan() {
+        let dir = escribir_cache_rampa("a05_stress", &[("p", 48_000)]);
+        let engine = Arc::new(PlaybackEngine::new(Arc::new(AudioStreamStats::default())));
+        let mut tareas = Vec::new();
+        for i in 0..8 {
+            let engine = Arc::clone(&engine);
+            let dir = dir.clone();
+            tareas.push(tokio::spawn(async move {
+                if i % 2 == 0 {
+                    let _ = engine.load_project(&dir, "a05_stress", SR_PRUEBA, None, None, None, None).await;
+                } else {
+                    engine.unload_project_if_matches("a05_stress").await;
+                }
+            }));
+        }
+        let todas = futures_util_join(tareas);
+        tokio::time::timeout(std::time::Duration::from_secs(20), todas)
+            .await
+            .expect("carga y descarga simultáneas se bloquearon");
+    }
+
+    async fn futures_util_join(tareas: Vec<tokio::task::JoinHandle<()>>) {
+        for t in tareas {
+            t.await.unwrap();
+        }
+    }
+
     #[tokio::test]
     async fn test_a02_seeks_consecutivos_con_varias_pistas_nunca_suenan_audio_viejo() {
         let engine = motor_real(

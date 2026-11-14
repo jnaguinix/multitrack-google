@@ -599,6 +599,10 @@ impl PlaybackEngine {
             })
             .collect();
 
+        // Orden de adquisición de los mutex de estado de proyecto: primero `loaded_project_id`, después
+        // `tracks`. `unload_project_if_matches` usa el mismo orden; con el inverso una carga y una
+        // descarga simultáneas podían esperarse mutuamente para siempre (A05).
+        let mut loaded = self.loaded_project_id.lock().await;
         let mut tracks_guard = self.tracks.lock().await;
         // Stop any old tracks
         for old in tracks_guard.iter() {
@@ -606,8 +610,6 @@ impl PlaybackEngine {
         }
         *tracks_guard = active_tracks;
         *self.stream_tracks.lock().unwrap() = new_stream_tracks;
-
-        let mut loaded = self.loaded_project_id.lock().await;
         *loaded = Some(project_id.to_string());
 
         tracing::info!(
