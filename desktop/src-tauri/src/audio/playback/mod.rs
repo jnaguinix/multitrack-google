@@ -355,19 +355,15 @@ impl PlaybackEngine {
                                 || (current_frame >= jump.transition_frame);
 
                             if should_jump {
+                                // El empalme se hace EN LA ENTRADA del remuestreador: lo que queda antes de la
+                                // transición, el cruce de 8 ms y el audio nuevo entran como una sola señal continua,
+                                // sin vaciar ni reiniciar el filtro. Reiniciarlo (como se hacía) deja el audio nuevo
+                                // desplazado respecto al cruce y se oye como un clic en cada salto.
                                 if current_frame < jump.transition_frame {
                                     let pre_frames = (jump.transition_frame - current_frame) as usize;
                                     if pre_frames > 0 {
                                         read_into_staging(&mut file, is_mono, pre_frames, &mut input_staging);
                                     }
-                                    drain_staging_through_resampler(
-                                        &mut resampler,
-                                        is_mono,
-                                        &mut input_staging,
-                                        &mut output_staging,
-                                        &mut delay_compensated,
-                                        true,
-                                    );
                                 }
 
                                 let m = crossfade_frames;
@@ -385,14 +381,15 @@ impl PlaybackEngine {
                                     let alpha = i as f32 / m as f32;
                                     let sl = out_l[i] * (1.0 - alpha) + in_l[i] * alpha;
                                     let sr = out_r[i] * (1.0 - alpha) + in_r[i] * alpha;
-                                    output_staging.push(sl);
-                                    output_staging.push(sr);
+                                    input_staging[0].push(sl);
+                                    if !is_mono {
+                                        input_staging[1].push(sr);
+                                    }
                                 }
 
                                 current_frame = jump.target_frame + m as u64;
                                 let next_offset = current_frame * bytes_per_frame as u64;
                                 let _ = file.seek(SeekFrom::Start(next_offset));
-                                begin_new_segment(&mut resampler, &mut delay_compensated, thread_pitch.load(Ordering::Relaxed));
                                 *thread_jump.lock().unwrap() = None;
                                 continue;
                             }
@@ -409,19 +406,13 @@ impl PlaybackEngine {
                                     || (current_frame >= loop_end);
 
                                 if should_loop {
+                                    // Igual que en el salto de sección: el empalme entra al remuestreador como una
+                                    // sola señal continua, sin vaciarlo ni reiniciarlo.
                                     if current_frame < loop_end {
                                         let pre_frames = (loop_end - current_frame) as usize;
                                         if pre_frames > 0 {
                                             read_into_staging(&mut file, is_mono, pre_frames, &mut input_staging);
                                         }
-                                        drain_staging_through_resampler(
-                                            &mut resampler,
-                                            is_mono,
-                                            &mut input_staging,
-                                            &mut output_staging,
-                                            &mut delay_compensated,
-                                            true,
-                                        );
                                     }
 
                                     let m = crossfade_frames;
@@ -439,14 +430,15 @@ impl PlaybackEngine {
                                         let alpha = i as f32 / m as f32;
                                         let sl = out_l[i] * (1.0 - alpha) + in_l[i] * alpha;
                                         let sr = out_r[i] * (1.0 - alpha) + in_r[i] * alpha;
-                                        output_staging.push(sl);
-                                        output_staging.push(sr);
+                                        input_staging[0].push(sl);
+                                        if !is_mono {
+                                            input_staging[1].push(sr);
+                                        }
                                     }
 
                                     current_frame = loop_start + m as u64;
                                     let next_offset = current_frame * bytes_per_frame as u64;
                                     let _ = file.seek(SeekFrom::Start(next_offset));
-                                    begin_new_segment(&mut resampler, &mut delay_compensated, thread_pitch.load(Ordering::Relaxed));
                                     continue;
                                 }
                             }

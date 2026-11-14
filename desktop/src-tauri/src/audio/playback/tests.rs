@@ -1843,6 +1843,133 @@
         }
     }
 
+    // ----- Clics al cambiar de sección -----
+
+    /// Caché PCM sintética con un seno de 440 Hz (amplitud 8000/32768) en cada pista.
+    fn escribir_cache_seno(nombre: &str, pistas: &[(&str, usize)]) -> std::path::PathBuf {
+        use crate::audio::cache::{write_track_pcm_and_metadata, TrackPcmMetadata};
+        let dir = std::env::temp_dir().join(format!("omnitracks_clics_{nombre}"));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        for (id, frames) in pistas {
+            let mut muestras = Vec::with_capacity(frames * 2);
+            for f in 0..*frames {
+                let v = ((2.0 * std::f64::consts::PI * 440.0 * f as f64 / SR_PRUEBA as f64).sin() * 8000.0) as i16;
+                muestras.push(v);
+                muestras.push(v);
+            }
+            let meta = TrackPcmMetadata {
+                format_version: 1,
+                track_id: id.to_string(),
+                target_sample_rate: SR_PRUEBA,
+                original_sample_rate: SR_PRUEBA,
+                original_channels: 2,
+                original_path: format!("{nombre}/{id}.wav"),
+                original_file_size: (*frames * 4) as u64,
+                original_modified_ms: 1000,
+                channels: 2,
+                is_effectively_mono: false,
+                frame_count: *frames as u64,
+                duration_sec: *frames as f64 / SR_PRUEBA as f64,
+                peaks: vec![0.5; 16],
+                created_at: "1000".to_string(),
+            };
+            write_track_pcm_and_metadata(&dir, nombre, &meta, &muestras).unwrap();
+        }
+        dir
+    }
+
+    /// Reproduce `segundos` de audio con el callback simulado y devuelve el mayor salto entre muestras
+    /// consecutivas (canal izquierdo) y en qué muestra ocurrió. Sin metrónomo ni guía: solo las pistas.
+    fn mayor_salto_entre_muestras(engine: &PlaybackEngine, segundos: f64) -> (f32, usize, usize) {
+        engine.metronome.lock().unwrap().config.enabled = false;
+        engine.guide_cue.lock().unwrap().enabled = false;
+        let (mut previa, mut mayor, mut donde, mut n) = (None::<f32>, 0.0f32, 0usize, 0usize);
+        let mut silencios = 0usize;
+        let limite = Instant::now() + std::time::Duration::from_secs(20);
+        let objetivo = (segundos * SR_PRUEBA as f64) as usize;
+        while n < objetivo && Instant::now() < limite && engine.is_playing.load(Ordering::SeqCst) {
+            let mut buf = vec![0.0f32; 480 * 2];
+            engine.simulate_callback_block(&mut buf, 2);
+            std::thread::sleep(std::time::Duration::from_millis(5));
+            if engine.is_buffering.load(Ordering::SeqCst) {
+                previa = None;
+                continue;
+            }
+            for f in 0..480 {
+                let v = buf[f * 2];
+                if v == 0.0 {
+                    silencios += 1;
+                }
+                if let Some(p) = previa {
+                    let d = (v - p).abs();
+                    if d > mayor {
+                        mayor = d;
+                        donde = n;
+                    }
+                }
+                previa = Some(v);
+                n += 1;
+            }
+        }
+        (mayor, donde, silencios)
+    }
+
+    // Un seno de 440 Hz con amplitud 8000/32768 y ganancia de centro 0,7071 no puede variar más de ~0,0100
+    // entre muestras. Un clic (escalón o hueco) lo supera con mucho.
+    const SALTO_MAX_SENO: f32 = 0.0105;
+
+    #[tokio::test]
+    async fn test_clics_pasar_de_una_seccion_a_otra_sin_salto_no_produce_clics() {
+        let secciones = vec![seccion("a", 0.0, 2.0), seccion("b", 2.0, 4.0), seccion("c", 4.0, 6.0)];
+        let dir = escribir_cache_seno("natural", &[("p", 288_000)]);
+        let engine = PlaybackEngine::new(Arc::new(AudioStreamStats::default()));
+        engine
+            .load_project(&dir, "natural", SR_PRUEBA, Some(120.0), Some(4), Some(secciones), Some("section-end".to_string()))
+            .await
+            .unwrap();
+        engine.seek(1.0).await;
+        reproducir(&engine).await;
+        let (mayor, donde, _) = mayor_salto_entre_muestras(&engine, 3.0);
+        assert!(mayor < SALTO_MAX_SENO, "clic al cruzar la sección: salto {mayor} en la muestra {donde}");
+    }
+
+    #[tokio::test]
+    async fn test_clics_saltar_a_otra_seccion_no_produce_clics() {
+        for modo in ["1-bar", "section-end"] {
+            let secciones = vec![seccion("a", 0.0, 2.0), seccion("b", 2.0, 4.0), seccion("c", 4.0, 6.0)];
+            let dir = escribir_cache_seno(&format!("salto_{modo}"), &[("p", 288_000)]);
+            let engine = PlaybackEngine::new(Arc::new(AudioStreamStats::default()));
+            engine
+                .load_project(&dir, &format!("salto_{modo}"), SR_PRUEBA, Some(120.0), Some(4), Some(secciones), Some(modo.to_string()))
+                .await
+                .unwrap();
+            engine.seek(0.5).await;
+            reproducir(&engine).await;
+            engine.queue_section_jump("c", Some(modo)).await.unwrap();
+            // 3 s: cubre el salto (a los ~1,5 s) sin llegar al final del archivo, donde el audio acaba en seco.
+            let (mayor, donde, _) = mayor_salto_entre_muestras(&engine, 3.0);
+            assert!(mayor < SALTO_MAX_SENO, "clic al saltar ({modo}): salto {mayor} en la muestra {donde}");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_clics_la_vuelta_del_vamp_no_produce_clics() {
+        let secciones = vec![seccion("a", 0.0, 2.0), seccion("b", 2.0, 4.0), seccion("c", 4.0, 6.0)];
+        let dir = escribir_cache_seno("vamp", &[("p", 288_000)]);
+        let engine = PlaybackEngine::new(Arc::new(AudioStreamStats::default()));
+        engine
+            .load_project(&dir, "vamp", SR_PRUEBA, Some(120.0), Some(4), Some(secciones), Some("section-end".to_string()))
+            .await
+            .unwrap();
+        engine.seek(2.5).await;
+        reproducir(&engine).await;
+        assert!(engine.toggle_vamp(Some(true)).await);
+        // 4 s: 1,5 s hasta el final de B y más de una vuelta del bucle.
+        let (mayor, donde, _) = mayor_salto_entre_muestras(&engine, 4.0);
+        assert!(mayor < SALTO_MAX_SENO, "clic en la vuelta del vamp: salto {mayor} en la muestra {donde}");
+    }
+
     #[tokio::test]
     async fn test_a02_seeks_consecutivos_con_varias_pistas_nunca_suenan_audio_viejo() {
         let engine = motor_real(
