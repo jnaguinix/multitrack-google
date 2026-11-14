@@ -28,6 +28,9 @@ pub use feeder_io::*;
 pub mod types;
 pub use types::*;
 
+pub mod clock;
+pub use clock::{advance_clock, ClockJumps};
+
 pub mod jumps;
 pub mod transport;
 
@@ -39,6 +42,8 @@ pub struct PlaybackEngine {
     pub last_prefill_duration_ms: Arc<AtomicU64>,
     pub seek_generation: Arc<AtomicU64>,
     pub current_frame: Arc<AtomicU64>,
+    /// Saltos de sección y vueltas de vamp pendientes de aplicar al reloj (`current_frame`).
+    pub clock_jumps: Arc<ClockJumps>,
     pub total_frames: Arc<AtomicU64>,
     pub sample_rate: Arc<AtomicU32>,
     pub tracks: TokioMutex<Vec<ActiveTrack>>,
@@ -78,6 +83,7 @@ impl PlaybackEngine {
             last_prefill_duration_ms: Arc::new(AtomicU64::new(0)),
             seek_generation: Arc::new(AtomicU64::new(0)),
             current_frame: Arc::new(AtomicU64::new(0)),
+            clock_jumps: Arc::new(ClockJumps::new()),
             total_frames: Arc::new(AtomicU64::new(0)),
             sample_rate: Arc::new(AtomicU32::new(48000)),
             tracks: TokioMutex::new(Vec::new()),
@@ -517,6 +523,7 @@ impl PlaybackEngine {
         self.reposition_metronome(0);
         self.total_frames.store(max_frames, Ordering::SeqCst);
         self.is_vamping.store(false, Ordering::SeqCst);
+        self.clock_jumps.reset();
         *self.fade.lock().unwrap() = FadeEnvelope::new(FADE_MS, device_sample_rate);
         *self.queued_jump.lock().unwrap() = None;
         {
@@ -658,6 +665,7 @@ impl PlaybackEngine {
             self.is_buffering.store(false, Ordering::SeqCst);
             self.current_frame.store(0, Ordering::SeqCst);
             self.reposition_metronome(0);
+            self.clock_jumps.reset();
             self.total_frames.store(0, Ordering::SeqCst);
             let mut tracks = self.tracks.lock().await;
             for old in tracks.iter() {
@@ -745,6 +753,7 @@ impl PlaybackEngine {
         let buffering_start_arc = Arc::clone(&self.buffering_start_time);
         let prefill_dur_arc = Arc::clone(&self.last_prefill_duration_ms);
         let current_frame = Arc::clone(&self.current_frame);
+        let clock_jumps = Arc::clone(&self.clock_jumps);
         let total_frames = Arc::clone(&self.total_frames);
         let fade_arc = Arc::clone(&self.fade);
         let stats = Arc::clone(&self.stats);
@@ -777,6 +786,9 @@ impl PlaybackEngine {
         let mut both_r = Vec::<f32>::with_capacity(4096);
         let mut click_buf = Vec::<f32>::with_capacity(4096);
         let mut guide_buf = Vec::<f32>::with_capacity(4096);
+        // Fotograma de la canción donde debería empezar el siguiente bloque si el reloj fuera continuo.
+        // Si no coincide (seek, salto de sección, vuelta de vamp) el metrónomo se recoloca.
+        let mut expected_start_frame = u64::MAX;
 
         let stream = device
             .build_output_stream(
@@ -964,9 +976,16 @@ impl PlaybackEngine {
                     let pitch_ratio = 2.0f64.powf(pitch_st as f64 / 12.0);
                     let end_song_f = start_song_f + (frames as f64 * pitch_ratio).round() as u64;
 
+                    let mut metronome_pending_reposition = false;
                     if let Ok(mut met) = metronome_arc.try_lock() {
+                        if start_song_f != expected_start_frame {
+                            met.seek_to_frame(start_song_f, sample_rate_u32);
+                        }
                         met.render_block(start_song_f, end_song_f, frames, sample_rate_u32, &mut click_buf[..frames]);
+                    } else if start_song_f != expected_start_frame {
+                        metronome_pending_reposition = true;
                     }
+                    expected_start_frame = if metronome_pending_reposition { u64::MAX } else { end_song_f };
 
                     if let Ok(mut gc) = guide_cue_arc.try_lock() {
                         if let Ok(sec_guard) = sections_arc.try_lock() {
@@ -1038,8 +1057,14 @@ impl PlaybackEngine {
                     bus_meters_arc.click.record(clk_pk, clk_pk);
                     bus_meters_arc.guide.record(gde_pk, gde_pk);
 
-                    current_frame.fetch_add((frames as f64 * pitch_ratio).round() as u64, Ordering::Relaxed);
-                    if current_frame.load(Ordering::Relaxed) >= total_frames.load(Ordering::Relaxed) && !vamping_arc.load(Ordering::Relaxed) {
+                    let vamping_now = vamping_arc.load(Ordering::Relaxed);
+                    let clock_now = advance_clock(
+                        &current_frame,
+                        &clock_jumps,
+                        (frames as f64 * pitch_ratio).round() as u64,
+                        vamping_now,
+                    );
+                    if clock_now >= total_frames.load(Ordering::Relaxed) && !vamping_now {
                         is_playing.store(false, Ordering::Relaxed);
                     }
 
@@ -1209,10 +1234,14 @@ impl PlaybackEngine {
 
         let pitch_st = self.pitch_semitones.load(Ordering::Relaxed);
         let pitch_ratio = 2.0f64.powf(pitch_st as f64 / 12.0);
-        self.current_frame.fetch_add((frames as f64 * pitch_ratio).round() as u64, Ordering::Relaxed);
-        if self.current_frame.load(Ordering::Relaxed) >= self.total_frames.load(Ordering::Relaxed)
-            && !self.is_vamping.load(Ordering::Relaxed)
-        {
+        let vamping_now = self.is_vamping.load(Ordering::Relaxed);
+        let clock_now = advance_clock(
+            &self.current_frame,
+            &self.clock_jumps,
+            (frames as f64 * pitch_ratio).round() as u64,
+            vamping_now,
+        );
+        if clock_now >= self.total_frames.load(Ordering::Relaxed) && !vamping_now {
             self.is_playing.store(false, Ordering::Relaxed);
         }
     }

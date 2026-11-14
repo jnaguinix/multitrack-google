@@ -1429,8 +1429,89 @@
     }
 
     // ---------------------------------------------------------------------
-    // Fase 1 de la auditoría: reloj, fin de pista, seek y recuperación (A01–A04, A15)
+    // Fase 1 de la auditoría: reloj, fin de pista, seek y recuperación (A01–A04)
     // ---------------------------------------------------------------------
+
+    const SR_PRUEBA: u32 = 48_000;
+    /// Ganancia de una pista centrada (pan 0, ganancia 1): cos(π/4).
+    const GANANCIA_CENTRO: f32 = 0.707_106_78;
+
+    fn seccion(id: &str, inicio: f64, fin: f64) -> NativeSongSection {
+        NativeSongSection { id: id.to_string(), name: id.to_string(), code: None, start_sec: inicio, end_sec: fin }
+    }
+
+    /// Escribe una caché PCM sintética: cada pista es una rampa estéreo (valor = fotograma / 10), de modo
+    /// que en la salida se puede leer en qué punto de la canción está sonando el audio. Con 288 000
+    /// fotogramas (6 s) el valor máximo es 28 800, dentro de i16.
+    fn escribir_cache_rampa(nombre: &str, pistas: &[(&str, usize)]) -> std::path::PathBuf {
+        use crate::audio::cache::{write_track_pcm_and_metadata, TrackPcmMetadata};
+        let dir = std::env::temp_dir().join(format!("omnitracks_fase1_{nombre}"));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        for (id, frames) in pistas {
+            let mut muestras = Vec::with_capacity(frames * 2);
+            for f in 0..*frames {
+                let v = (f / 10) as i16;
+                muestras.push(v);
+                muestras.push(v);
+            }
+            let meta = TrackPcmMetadata {
+                format_version: 1,
+                track_id: id.to_string(),
+                target_sample_rate: SR_PRUEBA,
+                original_sample_rate: SR_PRUEBA,
+                original_channels: 2,
+                original_path: format!("{nombre}/{id}.wav"),
+                original_file_size: (*frames * 4) as u64,
+                original_modified_ms: 1000,
+                channels: 2,
+                is_effectively_mono: false,
+                frame_count: *frames as u64,
+                duration_sec: *frames as f64 / SR_PRUEBA as f64,
+                peaks: vec![0.5; 16],
+                created_at: "1000".to_string(),
+            };
+            write_track_pcm_and_metadata(&dir, nombre, &meta, &muestras).unwrap();
+        }
+        dir
+    }
+
+    /// Motor real (con hilos de lectura) cargado sobre una caché de rampas. Sin salida de audio: el
+    /// callback se simula con `simulate_callback_block`.
+    async fn motor_real(nombre: &str, pistas: &[(&str, usize)], secciones: Vec<NativeSongSection>) -> PlaybackEngine {
+        let dir = escribir_cache_rampa(nombre, pistas);
+        let engine = PlaybackEngine::new(Arc::new(AudioStreamStats::default()));
+        engine
+            .load_project(&dir, nombre, SR_PRUEBA, Some(120.0), Some(4), Some(secciones), Some("1-bar".to_string()))
+            .await
+            .expect("load_project");
+        engine
+    }
+
+    async fn reproducir(engine: &PlaybackEngine) {
+        engine.begin_playback(|| async { Ok::<(), String>(()) }).await.unwrap();
+    }
+
+    /// Un bloque de 480 fotogramas del callback simulado, con una pausa para dejar trabajar a los
+    /// hilos de lectura. Devuelve (posición de la canción que suena en el último fotograma, o `None`
+    /// si salió en silencio; reloj tras el bloque).
+    fn bloque(engine: &PlaybackEngine) -> (Option<i64>, u64) {
+        let mut buf = vec![0.0f32; 480 * 2];
+        engine.simulate_callback_block(&mut buf, 2);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        let ultimo = buf[(480 - 1) * 2];
+        let pos = if ultimo.abs() < 1e-6 {
+            None
+        } else {
+            Some((ultimo / GANANCIA_CENTRO * 32768.0 * 10.0).round() as i64)
+        };
+        (pos, engine.current_frame.load(Ordering::SeqCst))
+    }
+
+    /// El reloj debe coincidir con lo que suena (tolerancia de un par de bloques).
+    fn desajustado(pos: Option<i64>, reloj: u64) -> bool {
+        matches!(pos, Some(p) if (p - reloj as i64).abs() > 1000)
+    }
 
     #[test]
     fn test_a15_el_vaciado_parcial_no_añade_relleno_de_silencio() {
@@ -1458,3 +1539,128 @@
         begin_new_segment(&mut r, &mut compensado, 12);
         assert!((r.resample_ratio() - 0.5).abs() < 1e-9, "una octava arriba reduce a la mitad los fotogramas de salida");
     }
+
+    #[test]
+    fn test_clock_jumps_aplica_el_salto_con_el_sobrante_del_bloque() {
+        let j = ClockJumps::new();
+        j.schedule_jump(1000, 200);
+        assert!(j.jump_pending());
+        assert_eq!(j.resolve(990, false), 990, "antes del instante no se toca el reloj");
+        assert_eq!(j.resolve(1010, false), 210, "pasa a destino + lo que se pasó del instante");
+        assert!(!j.jump_pending(), "el salto se consume");
+        assert_eq!(j.resolve(2000, false), 2000);
+    }
+
+    #[test]
+    fn test_clock_jumps_cancelar_descarta_el_salto() {
+        let j = ClockJumps::new();
+        j.schedule_jump(1000, 200);
+        j.cancel_jump();
+        assert!(!j.jump_pending());
+        assert_eq!(j.resolve(1500, false), 1500);
+    }
+
+    #[test]
+    fn test_clock_jumps_vamp_da_la_vuelta_solo_si_esta_activo() {
+        let j = ClockJumps::new();
+        j.set_loop(1000, 2000);
+        assert_eq!(j.resolve(2000, false), 2000, "sin vamp no hay vuelta");
+        assert_eq!(j.resolve(1999, true), 1999);
+        assert_eq!(j.resolve(2010, true), 1010);
+        assert_eq!(j.resolve(3500, true), 1500, "un bloque más largo que el bucle sigue dando vueltas");
+        j.clear_loop();
+        assert_eq!(j.resolve(2010, true), 2010);
+    }
+
+    #[test]
+    fn test_advance_clock_un_seek_concurrente_manda_sobre_el_salto() {
+        let reloj = AtomicU64::new(900);
+        let j = ClockJumps::new();
+        j.schedule_jump(1000, 200);
+        // El bloque lleva el reloj a 1100; el salto lo dejaría en 300.
+        assert_eq!(advance_clock(&reloj, &j, 200, false), 300);
+        assert_eq!(reloj.load(Ordering::SeqCst), 300);
+    }
+
+    #[tokio::test]
+    async fn test_a01_el_reloj_coincide_con_el_audio_sin_saltos() {
+        let engine = motor_real("a01_base", &[("pista", 288_000)], vec![seccion("a", 0.0, 6.0)]).await;
+        reproducir(&engine).await;
+        let (mut desajustes, mut con_audio) = (0, 0);
+        let limite = Instant::now() + std::time::Duration::from_secs(8);
+        while Instant::now() < limite {
+            let (pos, reloj) = bloque(&engine);
+            if pos.is_some() {
+                con_audio += 1;
+            }
+            if desajustado(pos, reloj) {
+                desajustes += 1;
+            }
+            if reloj >= 72_000 {
+                break;
+            }
+        }
+        assert!(con_audio > 50, "casi no sonó audio ({con_audio} bloques)");
+        assert!(desajustes <= 1, "el reloj no coincide con el audio en reproducción normal ({desajustes} bloques)");
+    }
+
+    #[tokio::test]
+    async fn test_a01_salto_cuantizado_hacia_atras_mueve_el_reloj_con_el_audio() {
+        let secciones = vec![seccion("a", 0.0, 2.0), seccion("b", 2.0, 4.0), seccion("c", 4.0, 6.0)];
+        let engine = motor_real("a01_salto", &[("pista", 288_000)], secciones).await;
+        engine.seek(3.0).await;
+        reproducir(&engine).await;
+        let salto = engine.queue_section_jump("a", Some("1-bar")).await.unwrap();
+        assert_eq!(salto.transition_frame, 192_000, "el salto debe caer en el compás de los 4 s");
+        assert_eq!(salto.target_frame, 0);
+
+        let (mut desajustes, mut reloj_volvio_atras) = (0, false);
+        let limite = Instant::now() + std::time::Duration::from_secs(8);
+        while Instant::now() < limite && engine.is_playing.load(Ordering::SeqCst) {
+            let (pos, reloj) = bloque(&engine);
+            if desajustado(pos, reloj) {
+                desajustes += 1;
+            }
+            if reloj < 100_000 && !engine.is_buffering.load(Ordering::SeqCst) {
+                reloj_volvio_atras = true;
+            }
+            if reloj_volvio_atras && reloj > 40_000 {
+                break;
+            }
+        }
+        assert!(reloj_volvio_atras, "el audio saltó a la sección A pero el reloj siguió por la línea antigua");
+        assert!(desajustes <= 3, "el reloj no sigue al audio tras el salto ({desajustes} bloques desajustados)");
+        assert!(engine.is_playing.load(Ordering::SeqCst), "la reproducción no debe detenerse tras el salto");
+        let estado = engine.get_playback_state();
+        assert_eq!(estado.queued_section_id, None, "el salto ya se aplicó: no debe seguir en cola");
+        assert_eq!(estado.active_section_id.as_deref(), Some("a"));
+    }
+
+    #[tokio::test]
+    async fn test_a01_vamp_mantiene_el_reloj_dentro_del_bucle_y_no_detiene_la_reproduccion() {
+        let secciones = vec![seccion("a", 0.0, 2.0), seccion("b", 2.0, 4.0), seccion("c", 4.0, 6.0)];
+        let engine = motor_real("a01_vamp", &[("pista", 288_000)], secciones).await;
+        engine.seek(2.5).await;
+        reproducir(&engine).await;
+        assert!(engine.toggle_vamp(Some(true)).await);
+
+        let (mut desajustes, mut vueltas, mut previo, mut bloques) = (0, 0, 0u64, 0u32);
+        let limite = Instant::now() + std::time::Duration::from_secs(10);
+        // 4 s de audio: 1,5 s hasta el final de B y casi otra vuelta completa de 2 s.
+        while Instant::now() < limite && bloques < 400 {
+            let (pos, reloj) = bloque(&engine);
+            bloques += 1;
+            if desajustado(pos, reloj) {
+                desajustes += 1;
+            }
+            assert!(reloj < 192_000, "el reloj salió del bucle del vamp: {reloj}");
+            if reloj + 20_000 < previo {
+                vueltas += 1;
+            }
+            previo = reloj;
+            assert!(engine.is_playing.load(Ordering::SeqCst), "el vamp no debe detener la reproducción");
+        }
+        assert!(vueltas >= 1, "el reloj nunca dio la vuelta del bucle");
+        assert!(desajustes <= 4, "el reloj no sigue al audio en las vueltas del vamp ({desajustes} bloques)");
+    }
+

@@ -111,6 +111,9 @@ impl PlaybackEngine {
             transition_frame,
         };
 
+        // El reloj debe saltar en el mismo instante en que lo hace el audio. Se programa antes de
+        // publicar el salto en cola: `get_playback_state` da por aplicado un salto sin programar.
+        self.clock_jumps.schedule_jump(transition_frame, target_frame);
         *self.queued_jump.lock().unwrap() = Some(jump_info.clone());
         self.guide_cue.lock().unwrap().trigger_chime();
 
@@ -129,6 +132,7 @@ impl PlaybackEngine {
 
     pub async fn cancel_queued_jump(&self) {
         tracing::info!("[NativeEngine] cancel_queued_jump");
+        self.clock_jumps.cancel_jump();
         *self.queued_jump.lock().unwrap() = None;
         let tracks = self.tracks.lock().await;
         for trk in tracks.iter() {
@@ -160,6 +164,7 @@ impl PlaybackEngine {
             };
             if let Some((loop_start, loop_end)) = active_loop {
                 tracing::info!("[NativeEngine] Vamp active loop: frames {} -> {}", loop_start, loop_end);
+                self.clock_jumps.set_loop(loop_start, loop_end);
                 let tracks = self.tracks.lock().await;
                 for trk in tracks.iter() {
                     trk.is_vamping.store(true, Ordering::Relaxed);
@@ -167,6 +172,7 @@ impl PlaybackEngine {
                 }
             }
         } else {
+            self.clock_jumps.clear_loop();
             let tracks = self.tracks.lock().await;
             for trk in tracks.iter() {
                 trk.is_vamping.store(false, Ordering::Relaxed);

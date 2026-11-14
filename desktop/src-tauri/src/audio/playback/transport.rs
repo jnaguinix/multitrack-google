@@ -90,6 +90,7 @@ impl PlaybackEngine {
         // El metrónomo vuelve al inicio junto con el transporte; si no, no sonaría ningún clic hasta
         // alcanzar de nuevo la posición anterior.
         self.reposition_metronome(0);
+        self.clock_jumps.cancel_jump();
         *self.queued_jump.lock().unwrap() = None;
         let tracks = self.tracks.lock().await;
         for trk in tracks.iter() {
@@ -118,6 +119,7 @@ impl PlaybackEngine {
 
         self.current_frame.store(target_frame as u64, Ordering::SeqCst);
         self.reposition_metronome(target_frame as u64);
+        self.clock_jumps.cancel_jump();
         *self.queued_jump.lock().unwrap() = None;
 
         let tracks = self.tracks.lock().await;
@@ -146,7 +148,9 @@ impl PlaybackEngine {
 
         let mut queued_guard = self.queued_jump.lock().unwrap();
         if let Some(q) = queued_guard.as_ref() {
-            if cur >= q.transition_frame {
+            // El salto ya se aplicó si el reloj lo alcanzó o si dejó de estar pendiente (tras un salto
+            // hacia atrás el reloj queda por debajo de `transition_frame`).
+            if cur >= q.transition_frame || !self.clock_jumps.jump_pending() {
                 *queued_guard = None;
             }
         }
