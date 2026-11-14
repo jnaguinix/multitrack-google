@@ -14,6 +14,10 @@ Reproductor de multitracks optimizado para cultos y música en vivo. Dispone de 
 - `src/components/SetlistStrip.tsx`: Fila de fichas del setlist con la flecha de transición por canción y el modo editar.
 - `src/utils/setlistTransition.ts` y `src/utils/sectionTemplates.ts`: Transición por canción (con respaldo en el ajuste general) y plantillas de sección (Intro, Verso 1, Coro…).
 - `src/components/SongPickerModal.tsx`: Explorador de canciones superpuesto de la página Setlist (buscar en la biblioteca, ordenar, añadir o quitar del setlist e importar).
+- `src/components/LibraryAndModals.tsx`: Página Biblioteca (lista a una columna con buscador, orden y carga por tandas) y los modales de confirmar montaje de canción, huella ambigua y edición de metadatos.
+- `src/components/LiveSetView.tsx`: Página En vivo (reloj, mapa proporcional de secciones, saltos cuantizados, cola del setlist).
+- `src/utils/songSearch.ts` y `src/hooks/useProgressiveList.ts`: Búsqueda sin acentos ni mayúsculas (título, artista, tono, BPM) y render de listas largas por tandas, compartidos por la Biblioteca y el explorador del Setlist.
+- `desktop/frontend/*`: Puentes de la UI con Tauri: `RemoteConnectionBridge.tsx` (diálogo «Conexión remota», botón fijo en la barra superior), `DesktopAudioSettings.tsx`, `DesktopUpdates.tsx` y `previewInvoke.ts` (simulación del servidor LAN solo en `npm run dev`, excluida de producción).
 - `src/audio/nativeAudioEngine.ts`: Adaptador puente TypeScript para invocar los comandos Tauri del motor nativo en Rust (`audio_*`).
 - `src/audio/meterBallistics.ts`: Balística (caída ~20 dB/s, retención de recorte) de los picos reales que mide el motor nativo para los medidores de Arreglo y Mezcla.
 - `src/audio/audioEngine.ts`: Motor de audio Web (Web Audio API / OPFS). La versión web ya no se usa ni se mantiene; el archivo sigue porque el escritorio aún depende de partes de él (retiro pendiente).
@@ -22,7 +26,8 @@ Reproductor de multitracks optimizado para cultos y música en vivo. Dispone de 
 - `desktop/src-tauri/src/library/`: Gestión de `library.json`, persistencia atómica y sidecars `omnitracks.project.json` (comandos `library_*`).
 - `desktop/src-tauri/src/lan.rs`: Servidor HTTP/WebSocket local para control remoto desde móviles (músicos y sonidistas) en la LAN (puerto 8765 definido como `const PORT` en `desktop/src-tauri/src/main.rs:14`).
 - `desktop/src-tauri/tests/`: Pruebas de integración de Rust (`lan_protocol.rs`, `verify_manual_flow.rs`, `import_flow.rs`, `benchmark_import.rs`).
-- `test/`: Pruebas unitarias en Node/TypeScript (`titleCleaning.test.ts`, `trackFingerprint.test.ts`, `nativeCacheGeneration.test.ts`, `meterBallistics.test.ts`, `setlistPlan.test.ts`).
+- `docs/AUDITORIA.md`: Guía para auditar el código (orden, reglas, lo ya conocido, formato del informe).
+- `test/`: Pruebas unitarias en Node/TypeScript (`titleCleaning.test.ts`, `trackFingerprint.test.ts`, `nativeCacheGeneration.test.ts`, `meterBallistics.test.ts`, `setlistPlan.test.ts`, `songSearch.test.ts`).
 
 ---
 
@@ -45,6 +50,9 @@ Reproductor de multitracks optimizado para cultos y música en vivo. Dispone de 
 - **ASIO diferido, sin decidir**: Depende de la licencia del SDK de Steinberg y de la decisión del dueño.
 - **Caché PCM al sample rate del dispositivo**: Al decodificar pistas con `import.rs`, el audio se remuestrea a la frecuencia nativa del hardware (`target_sample_rate`) para garantizar cero remuestreo pesado durante la reproducción.
 - **Biblioteca como índice ligero**: `library.json` contiene únicamente metadatos. Las carpetas de caché PCM (`pcm/<id>/`) solo existen para canciones que forman parte del setlist o están activas en consola.
+- **Páginas de la app**: Setlist, En vivo, Arreglo, Mezcla y Biblioteca. La página «Control rápido» y el panel lateral de la Biblioteca se eliminaron el 2026-11-13.
+- **Fuente incluida en la app**: Inter variable (`@fontsource-variable/inter`, importada en `src/main.tsx`). El CSP de `tauri.conf.json` solo permite fuentes propias (`font-src 'self'`): no se cargan recursos remotos. Tamaño mínimo de texto: 12 px.
+- **Escala en pantallas grandes**: `src/index.css` define `--ui-zoom` (1,2 / 1,45 / 1,8 desde 1800 / 2300 / 3000 px de ancho) y aplica `zoom` a `html`; `.app-shell` compensa las unidades de viewport.
 - **Licencia LibreTracks (AGPL)**: Prohibido copiar o portar su código; las ideas generales sí se pueden usar.
 
 ---
@@ -57,7 +65,7 @@ Reproductor de multitracks optimizado para cultos y música en vivo. Dispone de 
 - Un cambio lógico por commit, con mensaje descriptivo y preciso.
 - Nunca tragar errores: terminantemente prohibido `.catch(() => {})` o silenciar excepciones sin log o notificación visual al usuario.
 - En reportes de verificación, marcar explícitamente como «No medido» toda prueba o métrica no ejecutada.
-- Actualizar este archivo (`CLAUDE.md`) y `docs/ARQUITECTURA.md` inmediatamente si se mueven, renombran o agregan módulos.
+- Actualizar este archivo (`CLAUDE.md`), su copia `AGENTS.md` (idéntica salvo esa frase) y `docs/ARQUITECTURA.md` inmediatamente si se mueven, renombran o agregan módulos.
 
 ---
 
@@ -67,6 +75,11 @@ Reproductor de multitracks optimizado para cultos y música en vivo. Dispone de 
 - **Verificación completa sin cerrar**: `verify.ps1 -Completo` no se completó sobre `main` tras la migración (faltaron `verify_manual_flow` y `build:portable`). Las pruebas rápidas sí pasaron.
 - **Importación HTML/arrastre vs nativa**: La importación por selector HTML o arrastre de archivos sigue decodificando al importar (`src/hooks/useImportFlow.ts:250, 440`); solo la ruta nativa de carpeta importa sin decodificar.
 - **Saltos cuantizados tardíos**: Si el compás objetivo ya cayó dentro de los ~500 ms prellenados en el ring buffer `rtrb`, el salto se pospone al siguiente compás.
+- **Errores silenciados (incumplen la regla de §5)**: `.catch(() => {})` en `src/App.tsx` (442, 537, 575, 684, 917), `src/hooks/useSetlist.ts:97`, `src/audio/audioEngine.ts` (1563, 1577, 1961, 2049, 2210, 2274) y `src/audio/nativeAudioEngine.ts` (523–586, controles de pista y ganancias).
+- **Código sin interfaz**: `handleCreateNewProject` y `handleImportJsonFile` (`src/hooks/useProjectActions.ts`) ya no tienen botón desde que se retiró «Crear canción» e «Importar proyecto JSON» de la Biblioteca.
+- **`BroadcastChannel` heredado**: `src/App.tsx` (~640–720) sincroniza pestañas, herencia del antiguo «Control rápido»; no está verificado que algo lo siga usando.
+- **Archivos grandes**: `src/audio/audioEngine.ts` (~2600 líneas), `src/App.tsx` (~1700), `src/components/LibraryAndModals.tsx` (~1550).
+- **Ramas sin fusionar**: `diag/medidores-reales` y `diag/tiempo-cache` (trabajo ya incorporado por otra vía; sin revisar si conservan algo propio).
 - **Fase 5 diferida**: Ruteo libre multicanal a más de 2 salidas físicas independientes de la tarjeta.
 - **Fase 7 diferida**: Soporte de drivers de audio ASIO (diferido, sin decidir: depende de la licencia del SDK de Steinberg y de la decisión del dueño).
 - **Retiro del motor web**: Desacoplar definitivamente `audioEngine.ts` de la aplicación de escritorio.

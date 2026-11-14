@@ -77,10 +77,16 @@ src/hooks/
 ├── useOptimization.ts     # Poda y optimización PCM en navegador / OPFS (Web Audio)
 ├── useProjectActions.ts   # Carga inmediata, creación, edición de metadatos, borrado y JSON export/import
 ├── useSetlist.ts          # Gestión de lista de canciones (setlist), reorden, precarga y expulsión de RAM
+├── useSetlistMeta.ts      # Nombre y fecha del servicio (almacenamiento local)
+├── useProgressiveList.ts  # Render por tandas de listas largas (Biblioteca y explorador del Setlist)
 ├── useImportFlow.ts       # Importación instantánea (Drop / Selector), escaneo y decodificación nativa
 ├── useMixerActions.ts     # Control de transporte, volumen, mute, solo, paneo, bus y secciones
 └── useDawDragDrop.ts      # Manejo de eventos Drag & Drop de archivos y canciones sobre la DAW
 ```
+
+Páginas (`WorkspaceView` en `TopBar.tsx`): Setlist (`SetlistPageView.tsx`, `SetlistStrip.tsx`, `SongPickerModal.tsx`), En vivo (`LiveSetView.tsx`), Arreglo (`TimelineArranger.tsx`), Mezcla (`MultitrackMixer.tsx`) y Biblioteca (`LibraryAndModals.tsx`). La búsqueda de canciones está en `src/utils/songSearch.ts`.
+
+Puentes con el escritorio en `desktop/frontend/`: `RemoteConnectionBridge.tsx` monta el diálogo «Conexión remota» y el botón de la barra superior mediante un portal; en `npm run dev` usa `previewInvoke.ts` (datos simulados, descartado de la compilación de producción) para poder ver el diseño sin Tauri.
 
 ---
 
@@ -140,3 +146,6 @@ src/hooks/
 2. **`handleRelinkProject` en `src/App.tsx`**:
    - Se mantuvo directamente en `App.tsx` para respetar el orden de declaración y evitar errores de hoisting temporal (`TS2448`) con `activateProject` y `handleSelectView`.
    - *Acción recomendada*: Pasar las dependencias como callbacks a un submódulo específico durante una próxima fase de refactorización de vistas.
+3. **Errores silenciados**: `.catch(() => {})` en `App.tsx`, `useSetlist.ts:97`, `audioEngine.ts` y `nativeAudioEngine.ts` (lista exacta en `CLAUDE.md` §6). Incumplen la regla «nunca tragar errores».
+4. **Código sin interfaz**: `handleCreateNewProject` y `handleImportJsonFile` en `useProjectActions.ts`.
+5. **Archivos grandes**: `audioEngine.ts` (~2600 líneas), `App.tsx` (~1700), `LibraryAndModals.tsx` (~1550).
