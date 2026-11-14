@@ -15,7 +15,8 @@ Reproductor de multitracks optimizado para cultos y música en vivo. Dispone de 
 - `src/components/SetlistStrip.tsx`: Fila de fichas del setlist con la flecha de transición por canción y el modo editar.
 - `src/utils/setlistTransition.ts` y `src/utils/sectionTemplates.ts`: Transición por canción (con respaldo en el ajuste general) y plantillas de sección (Intro, Verso 1, Coro…).
 - `src/components/SongPickerModal.tsx`: Explorador de canciones superpuesto de la página Setlist (buscar en la biblioteca, ordenar, añadir o quitar del setlist e importar).
-- `src/components/LibraryAndModals.tsx`: Página Biblioteca (lista a una columna con buscador, orden y carga por tandas) y los modales de confirmar montaje de canción, huella ambigua y edición de metadatos.
+- `src/components/LibraryView.tsx`: Página Biblioteca (lista a una columna con buscador, orden y carga por tandas).
+- `src/components/modals/*`: Modales: `ConfirmSongActionModal` (confirmar montaje), `SongFingerprintPromptModal` (huella ambigua), `SongMetadataEditModal`, `StemImporterModal`, `SectionEditorModal` y `OptimizationProgressModal`. `src/utils/trackRole.ts`: `inferTrackRoleAndColor`.
 - `src/components/LiveSetView.tsx`: Página En vivo (reloj, mapa proporcional de secciones, saltos cuantizados, cola del setlist).
 - `src/utils/songSearch.ts` y `src/hooks/useProgressiveList.ts`: Búsqueda sin acentos ni mayúsculas (título, artista, tono, BPM) y render de listas largas por tandas, compartidos por la Biblioteca y el explorador del Setlist.
 - `desktop/frontend/*`: Puentes de la UI con Tauri: `RemoteConnectionBridge.tsx` (diálogo «Conexión remota», botón fijo en la barra superior), `DesktopAudioSettings.tsx`, `DesktopUpdates.tsx` y `previewInvoke.ts` (simulación del servidor LAN solo en `npm run dev`, excluida de producción).
@@ -85,7 +86,7 @@ Reproductor de multitracks optimizado para cultos y música en vivo. Dispone de 
 - **Pistas más cortas que la canción tras un salto de sección**: un feeder que ya llegó al final de su archivo no evalúa saltos ni vamp; si la canción salta hacia atrás, esa pista (p. ej. una guía corta) queda en silencio hasta el siguiente seek. No medido en el motor real.
 - **Crossfade de empalme con tono**: el cruce de 8 ms de un salto o vuelta de vamp se lee del archivo sin pasar por el remuestreador; con tono distinto de cero esos 8 ms suenan sin transponer.
 - **Saltos cuantizados tardíos**: Si el compás objetivo ya cayó dentro del audio ya encolado en el ring buffer `rtrb`, el salto se pospone al siguiente compás. Cifras reales (`playback/mod.rs`): el ring buffer tiene 500 ms de *capacidad*, el feeder lo mantiene en ~350 ms y el callback sale de buffering a partir de 150 ms disponibles por pista; no son equivalentes.
-- **Archivos grandes**: `src/App.tsx` (~1490), `src/components/LibraryAndModals.tsx` (~1550).
+- **Archivos grandes**: `src/App.tsx` (~1490) y `src/components/modals/SectionEditorModal.tsx` (~430).
 - **Ramas sin fusionar**: `diag/medidores-reales` y `diag/tiempo-cache` (trabajo ya incorporado por otra vía; sin revisar si conservan algo propio).
 - **Fase 5 diferida**: Ruteo libre multicanal a más de 2 salidas físicas independientes de la tarjeta.
 - **Fase 7 diferida**: Soporte de drivers de audio ASIO (diferido, sin decidir: depende de la licencia del SDK de Steinberg y de la decisión del dueño).

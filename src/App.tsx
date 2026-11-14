@@ -64,15 +64,13 @@ import {
 import {
   PcmOptimizationProgress,
 } from './storage/pcmOptimizer';
-import {
-  ConfirmSongActionModal,
-  inferTrackRoleAndColor,
-  LibraryView,
-  OptimizationProgressModal,
-  SectionEditorModal,
-  SongFingerprintPromptModal,
-  StemImporterModal,
-} from './components/LibraryAndModals';
+import { LibraryView } from './components/LibraryView';
+import { ConfirmSongActionModal } from './components/modals/ConfirmSongActionModal';
+import { OptimizationProgressModal } from './components/modals/OptimizationProgressModal';
+import { SectionEditorModal } from './components/modals/SectionEditorModal';
+import { SongFingerprintPromptModal } from './components/modals/SongFingerprintPromptModal';
+import { StemImporterModal } from './components/modals/StemImporterModal';
+import { inferTrackRoleAndColor } from './utils/trackRole';
 import {
   FingerprintCandidate,
 } from './audio/fingerprint';

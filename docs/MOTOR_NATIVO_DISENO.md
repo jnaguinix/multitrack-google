@@ -146,7 +146,7 @@ Se examinaron todos los accesos `audioEngine.*` en `src/` y `desktop/frontend/`.
 | 6 | `getEffectiveEngineModeForProject` | `src/components/SetlistPageView.tsx` | En la interfaz | Devuelve `'stream'` (la UI muestra el distintivo de reproducción desde disco). |
 | 7 | `getEngineMode` | `src/App.tsx` | En la interfaz | Devuelve `'stream'`. |
 | 8 | `getGlobalStreamStats` | `src/audio/audioEngine.ts` | Opcional | Devuelve las métricas de underruns y rendimiento recolectadas desde Rust vía `audio_get_stats`. |
-| 9 | `getProjectPcmEstimatedMB` | `src/components/LibraryAndModals.tsx`, `src/components/SetlistPageView.tsx` | En la interfaz | Calcula la estimación de tamaño de archivo PCM en disco: $\text{frames} \times \text{canales} \times 2 \text{ bytes}$. |
+| 9 | `getProjectPcmEstimatedMB` | `src/components/LibraryView.tsx`, `src/components/SetlistPageView.tsx` | En la interfaz | Calcula la estimación de tamaño de archivo PCM en disco: $\text{frames} \times \text{canales} \times 2 \text{ bytes}$. |
 | 10 | `getRamBudgetMB` | `src/App.tsx` | En la interfaz | Devuelve `0` o valor neutral (en escritorio no hay límite de presupuesto de RAM Web Audio). |
 | 11 | `getSongRamCacheInfo` | `src/App.tsx`, `src/components/LiveSetView.tsx`, `src/components/SetlistPageView.tsx` | En la interfaz | Devuelve `{ isReady: true, cachedCount: total, totalCount: total }` si el proyecto tiene caché PCM completa en disco. |
 | 12 | `getTotalCachedMB` | `src/App.tsx` | En la interfaz | Devuelve el tamaño en MB ocupado por los búferes circulares de streaming activos (~15 MB). |
@@ -155,7 +155,7 @@ Se examinaron todos los accesos `audioEngine.*` en `src/` y `desktop/frontend/`.
 | 15 | `getTransportState` | `desktop/frontend/RemoteConnectionBridge.tsx` | En la interfaz | **Síncrono.** Devuelve el último `TransportState` interpolado localmente a 60 fps. |
 | 16 | `hasFullProjectInCache` | `src/App.tsx` | En la interfaz | Devuelve si el proyecto tiene sus archivos PCM listos en disco (`isProjectPcmReady(project)`). |
 | 17 | `hasPlayableAudio` | `src/App.tsx` | En la interfaz | Devuelve `true` si el proyecto activo tiene pistas con PCM válido listo para streaming. |
-| 18 | `isProjectPcmReady` | `src/App.tsx`, `src/components/LibraryAndModals.tsx`, `src/components/LiveSetView.tsx`, `src/components/SetlistPageView.tsx` | En la interfaz | Comprueba si todas las pistas tienen metadatos PCM completos en el modelo del proyecto. |
+| 18 | `isProjectPcmReady` | `src/App.tsx`, `src/components/LibraryView.tsx`, `src/components/LiveSetView.tsx`, `src/components/SetlistPageView.tsx` | En la interfaz | Comprueba si todas las pistas tienen metadatos PCM completos en el modelo del proyecto. |
 | 19 | `loadProject` | `src/App.tsx` | En la interfaz | Llama a `audio_load_project` en Rust y retorna `{ peaksMap, wasCancelled: false }`. |
 | 20 | `logStreamMetrics` | `src/audio/audioEngine.ts` | Opcional | Registra en consola las estadísticas del motor nativo. |
 | 21 | `mountDecodedTrack` | `src/App.tsx` | Opcional | Exclusivo de decodificación Web Audio. En escritorio la carga la hace el feeder directamente desde el archivo `.pcm`. |

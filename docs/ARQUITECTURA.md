@@ -94,7 +94,7 @@ src/hooks/
 └── useDawDragDrop.ts      # Manejo de eventos Drag & Drop de archivos y canciones sobre la DAW
 ```
 
-Páginas (`WorkspaceView` en `TopBar.tsx`): Setlist (`SetlistPageView.tsx`, `SetlistStrip.tsx`, `SongPickerModal.tsx`), En vivo (`LiveSetView.tsx`), Arreglo (`TimelineArranger.tsx`), Mezcla (`MultitrackMixer.tsx`) y Biblioteca (`LibraryAndModals.tsx`). La búsqueda de canciones está en `src/utils/songSearch.ts`.
+Páginas (`WorkspaceView` en `TopBar.tsx`): Setlist (`SetlistPageView.tsx`, `SetlistStrip.tsx`, `SongPickerModal.tsx`), En vivo (`LiveSetView.tsx`), Arreglo (`TimelineArranger.tsx`), Mezcla (`MultitrackMixer.tsx`) y Biblioteca (`LibraryView.tsx`; modales en `components/modals/`). La búsqueda de canciones está en `src/utils/songSearch.ts`.
 
 Puentes con el escritorio en `desktop/frontend/`: `RemoteConnectionBridge.tsx` monta el diálogo «Conexión remota» y el botón de la barra superior mediante un portal; en `npm run dev` usa `previewInvoke.ts` (datos simulados, descartado de la compilación de producción) para poder ver el diseño sin Tauri.
 
@@ -140,7 +140,7 @@ Puentes con el escritorio en `desktop/frontend/`: `RemoteConnectionBridge.tsx` m
 ```
 
 1. **Importar**: `handleImportNative` (TS, `useImportFlow.ts`) invoca `audio_scan_folder` o `audio_scan_files` (Rust, `audio/mod.rs`), extrae metadatos y guarda la canción en `library.json` mediante `library_save_song` y el sidecar `omnitracks.project.json` mediante `library_write_sidecar`. **No se genera caché PCM en este paso**.
-2. **Biblioteca**: `library_load` carga `library.json` al iniciar. La UI lista las canciones en `LibraryView.tsx` (`LibraryAndModals.tsx`).
+2. **Biblioteca**: `library_load` carga `library.json` al iniciar. La UI lista las canciones en `LibraryView.tsx` (`LibraryView.tsx`; modales en `components/modals/`).
 3. **Añadir al Setlist**: `handleAddToSetlist` (TS, `useSetlist.ts`) añade la canción a `setlistQueue`. Verifica la caché con `nativeAudioEngine.checkProjectCacheStatus` (`audio_get_project_cache_status`). Si `isReady == false`, invoca `nativeAudioEngine.generateNativeCacheForProject`.
 4. **Caché PCM**: `audio_import_tracks` (`audio/mod.rs`) decodifica cada stem con `import::decode_and_cache_track` (`audio/import.rs`), remuestrea al `target_sample_rate` y escribe `stem-*.pcm` y `stem-*.json` en disco vía `cache::write_track_pcm_and_metadata` (`audio/cache.rs`), emitiendo eventos `audio://import-progress`.
 5. **Reproducir**: `activateProject` invoca `nativeAudioEngine.loadProject` (`audio_load_project`). `PlaybackEngine::load_project` prellena los buffers circulares `rtrb` mediante los hilos feeder (`playback/feeder_io.rs`). `audio_play` inicia el micro-fundido de 8 ms y el callback de salida CPAL en `ensure_stream` (`playback/mod.rs`) entrega las muestras a WASAPI sin alocaciones ni bloqueos.
@@ -153,4 +153,4 @@ Puentes con el escritorio en `desktop/frontend/`: `RemoteConnectionBridge.tsx` m
 1. **`handleRelinkProject` en `src/App.tsx`**:
    - Se mantuvo directamente en `App.tsx` para respetar el orden de declaración y evitar errores de hoisting temporal (`TS2448`) con `activateProject` y `handleSelectView`.
    - *Acción recomendada*: Pasar las dependencias como callbacks a un submódulo específico durante una próxima fase de refactorización de vistas.
-2. **Archivos grandes**: `App.tsx` (~1490), `LibraryAndModals.tsx` (~1550).
+2. **Archivos grandes**: `App.tsx` (~1490).

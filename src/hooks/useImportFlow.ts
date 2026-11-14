@@ -22,7 +22,7 @@ import {
   extractSidecarFromFileList,
   parseWavHeaderFast,
 } from '../utils/fileImportHelper';
-import { inferTrackRoleAndColor } from '../components/LibraryAndModals';
+import { inferTrackRoleAndColor } from '../utils/trackRole';
 import {
   findSongFingerprintMatches,
   FingerprintCandidate,
