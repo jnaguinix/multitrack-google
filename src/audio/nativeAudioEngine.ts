@@ -6,6 +6,7 @@
 // nativo en Rust vía IPC. El motor web (audioEngine.ts) se mantiene 100% intacto.
 // =============================================================================
 
+import { logAsyncError } from '../utils/asyncErrors';
 import { SongProject, TrackChannel, TransportState, MetersSnapshot } from '../types/project';
 import { MeterBallistics, NativeMetersSnapshot } from './meterBallistics';
 import { StatePoller } from './statePoller';
@@ -552,43 +553,43 @@ export class NativeAudioEngine {
   public setTrackGain(trackId: string, gain: number): void {
     const invoke = getInvoke();
     if (!invoke) return;
-    invoke('audio_set_track_controls', { trackId, gain }).catch(() => {});
+    invoke('audio_set_track_controls', { trackId, gain }).catch(logAsyncError('audio_set_track_controls'));
   }
 
   public setTrackPan(trackId: string, pan: number): void {
     const invoke = getInvoke();
     if (!invoke) return;
-    invoke('audio_set_track_controls', { trackId, pan }).catch(() => {});
+    invoke('audio_set_track_controls', { trackId, pan }).catch(logAsyncError('audio_set_track_controls'));
   }
 
   public setTrackMuted(trackId: string, muted: boolean): void {
     const invoke = getInvoke();
     if (!invoke) return;
-    invoke('audio_set_track_controls', { trackId, muted }).catch(() => {});
+    invoke('audio_set_track_controls', { trackId, muted }).catch(logAsyncError('audio_set_track_controls'));
   }
 
   public setTrackSoloed(trackId: string, soloed: boolean): void {
     const invoke = getInvoke();
     if (!invoke) return;
-    invoke('audio_set_track_controls', { trackId, soloed }).catch(() => {});
+    invoke('audio_set_track_controls', { trackId, soloed }).catch(logAsyncError('audio_set_track_controls'));
   }
 
   public setTrackBus(trackId: string, bus: string): void {
     const invoke = getInvoke();
     if (!invoke) return;
-    invoke('audio_set_track_controls', { trackId, bus }).catch(() => {});
+    invoke('audio_set_track_controls', { trackId, bus }).catch(logAsyncError('audio_set_track_controls'));
   }
 
   public setMasterGain(masterGain: number): void {
     const invoke = getInvoke();
     if (!invoke) return;
-    invoke('audio_set_master_gains', { masterGain, cueMasterGain: null }).catch(() => {});
+    invoke('audio_set_master_gains', { masterGain, cueMasterGain: null }).catch(logAsyncError('audio_set_master_gains'));
   }
 
   public setCueMasterGain(cueMasterGain: number): void {
     const invoke = getInvoke();
     if (!invoke) return;
-    invoke('audio_set_master_gains', { masterGain: null, cueMasterGain }).catch(() => {});
+    invoke('audio_set_master_gains', { masterGain: null, cueMasterGain }).catch(logAsyncError('audio_set_master_gains'));
   }
 
   public setClickEnabled(enabled: boolean): void {
@@ -609,13 +610,13 @@ export class NativeAudioEngine {
   public setPitchSemitones(semitones: number): void {
     const invoke = getInvoke();
     if (!invoke) return;
-    invoke('audio_set_pitch', { semitones }).catch(() => {});
+    invoke('audio_set_pitch', { semitones }).catch(logAsyncError('audio_set_pitch'));
   }
 
   public setSplitRoutingMode(mode: 'stereo' | 'split-mono'): void {
     const invoke = getInvoke();
     if (!invoke) return;
-    invoke('audio_set_split_mono', { enabled: mode === 'split-mono' }).catch(() => {});
+    invoke('audio_set_split_mono', { enabled: mode === 'split-mono' }).catch(logAsyncError('audio_set_split_mono'));
   }
 
   private updateMetronome(changes: Partial<SongProject>): void {
@@ -629,7 +630,7 @@ export class NativeAudioEngine {
       gain: changes.clickGain ?? this.currentProject.clickGain ?? 0.8,
       splitMono: this.currentProject.splitRoutingMode === 'split-mono',
     };
-    invoke('audio_set_metronome', { config: cfg }).catch(() => {});
+    invoke('audio_set_metronome', { config: cfg }).catch(logAsyncError('audio_set_metronome'));
   }
 
   // ===========================================================================
@@ -669,7 +670,7 @@ export class NativeAudioEngine {
       beatsPerBar: project.beatsPerBar || 4,
       sections: nativeSections,
       quantizeMode: project.quantizeMode || 'section-end',
-    }).catch(() => {});
+    }).catch(logAsyncError('audio_configure_song'));
 
     // Sincronizar metrónomo
     this.updateMetronome(project);
@@ -683,7 +684,7 @@ export class NativeAudioEngine {
         muted: trk.muted,
         soloed: trk.soloed,
         bus: trk.bus,
-      }).catch(() => {});
+      }).catch(logAsyncError('audio_set_track_controls'));
     }
   }
 

@@ -1,3 +1,4 @@
+import { logAsyncError } from '../utils/asyncErrors';
 import { audioEngine as defaultAudioEngine } from '../audio/audioEngine';
 import { SongProject, QuantizeMode, OutputBus, SongSection } from '../types/project';
 
@@ -120,7 +121,7 @@ export function useMixerActions({
         ...prev,
         sections,
       };
-      syncProjectSidecarNow(next, true).catch(() => {});
+      syncProjectSidecarNow(next, true).catch(logAsyncError('sincronizar el archivo de la canción'));
       return next;
     });
     showToast('Marcadores de sección (mm:ss) guardados en canción y carpeta');

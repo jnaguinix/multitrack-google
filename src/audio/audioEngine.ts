@@ -1,3 +1,4 @@
+import { logAsyncError } from '../utils/asyncErrors';
 import {
   AudioEngineMode,
   MetersSnapshot,
@@ -1560,7 +1561,7 @@ export class OmniTracksAudioEngine {
 
       if (this.isStreamingMode() && track.pcm && track.pcm.frames > 0) {
         try {
-          pcmReaderClient.openProject(this.project.id, [track.id], 'active').catch(() => {});
+          pcmReaderClient.openProject(this.project.id, [track.id], 'active').catch(logAsyncError('abrir el proyecto en el lector PCM'));
           const st = new StreamingTrack({
             projectId: this.project.id,
             trackId: track.id,
@@ -1574,7 +1575,7 @@ export class OmniTracksAudioEngine {
           this.streamingTracks.set(track.id, st);
           if (this.isPlaying) {
             const currentSec = this.getCurrentSongSec();
-            st.seekTo(currentSec).catch(() => {});
+            st.seekTo(currentSec).catch(logAsyncError('reposicionar la pista en streaming'));
           }
         } catch (stErr) {
           console.warn('[AudioEngine] Error mounting streaming track, falling back to buffer:', stErr);
@@ -1958,7 +1959,7 @@ export class OmniTracksAudioEngine {
       pcmReaderClient.bumpGeneration();
       this.streamingTracks.forEach((st) => {
         st.unpinSectionChunks();
-        st.seekTo(clampedSec).catch(() => {});
+        st.seekTo(clampedSec).catch(logAsyncError('reposicionar la pista en streaming'));
       });
     }
 
@@ -2046,7 +2047,7 @@ export class OmniTracksAudioEngine {
     // In streaming mode: pre-fetch target section chunks (4s) with 'seek' priority
     if (this.isStreamingMode()) {
       this.streamingTracks.forEach((st) => {
-        st.prefetchJumpTarget(targetStartSec, 4).catch(() => {});
+        st.prefetchJumpTarget(targetStartSec, 4).catch(logAsyncError('precargar el destino del salto'));
       });
     }
 
@@ -2207,7 +2208,7 @@ export class OmniTracksAudioEngine {
           this.streamingTracks.forEach((st) => {
             st.unpinSectionChunks();
             st.stopSourcesWithFade(exactJumpCtxTime);
-            st.seekTo(targetStartSec).catch(() => {});
+            st.seekTo(targetStartSec).catch(logAsyncError('reposicionar la pista en streaming'));
             if (
               targetSecObj.vampByDefault &&
               targetSecObj.endTimeSec - targetSecObj.startTimeSec <= 4.0
@@ -2271,7 +2272,7 @@ export class OmniTracksAudioEngine {
       if (this.isStreamingMode()) {
         this.streamingTracks.forEach((st) => {
           st.stopSourcesWithFade(exactLoopCtxTime);
-          st.seekTo(loopStartSec).catch(() => {});
+          st.seekTo(loopStartSec).catch(logAsyncError('reposicionar la pista en streaming'));
         });
       } else {
         this.startAllTrackSources(

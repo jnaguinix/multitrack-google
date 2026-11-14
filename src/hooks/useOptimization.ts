@@ -1,3 +1,4 @@
+import { logAsyncError } from '../utils/asyncErrors';
 import { useCallback, useRef } from 'react';
 import { SongProject, TrackChannel } from '../types/project';
 import { nativeAudioEngine } from '../audio/nativeAudioEngine';
@@ -215,7 +216,7 @@ export function useOptimization({
           };
           audioEngine.clearProjectFallback(projectId);
           setProjects((prev: SongProject[]) => prev.map((p) => (p.id === projectId ? merged : p)));
-          saveProjectToDb(merged).catch(() => {});
+          saveProjectToDb(merged).catch(logAsyncError('guardar la canción'));
 
           if (!(await isProjectPcmComplete(merged))) {
             showToast(

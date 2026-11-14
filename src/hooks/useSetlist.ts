@@ -1,3 +1,4 @@
+import { logAsyncError } from '../utils/asyncErrors';
 import { SongProject, TransportState } from '../types/project';
 import { nativeAudioEngine } from '../audio/nativeAudioEngine';
 import { audioEngine } from '../audio/audioEngine';
@@ -94,7 +95,7 @@ export function useSetlist({
             inSetlist: true,
             setlistOrder: maxOrder + 1,
           };
-          saveProjectToDb(updated).catch(() => {});
+          saveProjectToDb(updated).catch(logAsyncError('guardar la canción'));
           if (currentProject?.id === projectId) {
             setCurrentProject(updated);
           }
@@ -146,7 +147,7 @@ export function useSetlist({
       prev.map((p) => {
         if (p.id !== projectId) return p;
         const updated: SongProject = { ...p, inSetlist: false, setlistOrder: undefined };
-        saveProjectToDb(updated).catch(() => {});
+        saveProjectToDb(updated).catch(logAsyncError('guardar la canción'));
         return updated;
       })
     );
@@ -169,9 +170,9 @@ export function useSetlist({
             s.inSetlist = false;
             s.setlistOrder = undefined;
           }
-          saveDesktopLibrary(lib).catch(() => {});
+          saveDesktopLibrary(lib).catch(logAsyncError('guardar la biblioteca de escritorio'));
         }
-      }).catch(() => {});
+      }).catch(logAsyncError('actualizar la biblioteca de escritorio'));
     }
 
     showToast(
@@ -194,7 +195,7 @@ export function useSetlist({
     for (const song of queue) {
       audioEngine.evictSongFromRamCache(song.id);
       if (isDesktopApp) {
-        deleteProjectNativeCache(song.id).catch(() => {});
+        deleteProjectNativeCache(song.id).catch(logAsyncError('borrar la caché nativa de la canción'));
       }
     }
 
@@ -204,7 +205,7 @@ export function useSetlist({
       prev.map((p) => {
         if (!idSet.has(p.id)) return p;
         const updated: SongProject = { ...p, inSetlist: false, setlistOrder: undefined };
-        saveProjectToDb(updated).catch(() => {});
+        saveProjectToDb(updated).catch(logAsyncError('guardar la canción'));
         return updated;
       })
     );
@@ -248,7 +249,7 @@ export function useSetlist({
       prev.map((p) => {
         if (!orderMap.has(p.id)) return p;
         const updated = { ...p, setlistOrder: orderMap.get(p.id)! };
-        saveProjectToDb(updated).catch(() => {});
+        saveProjectToDb(updated).catch(logAsyncError('guardar la canción'));
         return updated;
       })
     );

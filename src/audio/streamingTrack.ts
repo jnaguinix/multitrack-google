@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import { logAsyncError } from '../utils/asyncErrors';
 import { pcmReaderClient } from './pcmReaderClient';
 import {
   CHUNK_SEC,
@@ -203,7 +204,7 @@ export class StreamingTrack {
     for (let c = startChunk; c <= endChunk; c++) {
       this.pinnedChunks.add(c);
       if (!this.chunkBuffers.has(c) && !this.inFlightChunks.has(c)) {
-        this.fetchChunk(c, 'active').catch(() => {});
+        this.fetchChunk(c, 'active').catch(logAsyncError('cargar un fragmento de audio'));
       }
     }
   }
@@ -303,7 +304,7 @@ export class StreamingTrack {
 
       for (let c = currentChunk; c <= targetEndChunk; c++) {
         if (!this.chunkBuffers.has(c) && !this.inFlightChunks.has(c)) {
-          this.fetchChunk(c, 'active').catch(() => {});
+          this.fetchChunk(c, 'active').catch(logAsyncError('cargar un fragmento de audio'));
         }
       }
     }
@@ -345,7 +346,7 @@ export class StreamingTrack {
             `[StreamingTrack][UNDERRUN] Pista "${this.trackId}" chunk ${c} no listo a tiempo. Autoescalando buffer a ${this.targetAheadSec}s (total: ${this.underrunCount})`
           );
           // Request chunk immediately with seek priority
-          this.fetchChunk(c, 'seek').catch(() => {});
+          this.fetchChunk(c, 'seek').catch(logAsyncError('cargar un fragmento de audio'));
           continue;
         }
 

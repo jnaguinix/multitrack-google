@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import { logAsyncError } from '../utils/asyncErrors';
 import { SongProject, TrackChannel, TrackPcmMetadata } from '../types/project';
 import { extractWaveformPeaks } from '../audio/demoSynthesizer';
 import {
@@ -207,7 +208,7 @@ export async function optimizeProjectForStreaming(
         try {
           decoded = await tempCtx.decodeAudioData(rawBuffer);
         } finally {
-          tempCtx.close().catch(() => {});
+          tempCtx.close().catch(logAsyncError('cerrar el contexto de audio temporal'));
         }
       }
       return {
@@ -228,7 +229,7 @@ export async function optimizeProjectForStreaming(
   const launchMore = (consumed: number) => {
     while (launched < work.length && launched < consumed + DECODE_CONCURRENCY) {
       const p = decodeAt(work[launched]);
-      p.catch(() => {});
+      p.catch(() => { /* el error se observa cuando se espera `p` */ });
       decodes[launched] = p;
       launched++;
     }
