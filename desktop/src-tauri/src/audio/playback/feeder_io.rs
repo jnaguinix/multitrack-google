@@ -1,4 +1,6 @@
 use std::io::Read;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use crate::audio::resampler::TrackResampler;
 
 pub fn read_frames_to_slices<R: Read>(
@@ -160,4 +162,14 @@ pub fn begin_new_segment(resampler: &mut TrackResampler, delay_compensated: &mut
     resampler.reset();
     let _ = resampler.set_pitch(pitch_semitones, false);
     *delay_compensated = false;
+}
+
+/// Marca `feeder_alive = false` cuando el hilo feeder termina por cualquier camino (incluido un pánico),
+/// para que quien espera su confirmación de seek no espere para siempre.
+pub struct FeederAliveGuard(pub Arc<AtomicBool>);
+
+impl Drop for FeederAliveGuard {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::SeqCst);
+    }
 }

@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicI32, AtomicI64, AtomicU32, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicI64, AtomicU32, AtomicU64, AtomicU8, Ordering};
 use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 
@@ -50,6 +50,16 @@ pub struct ActiveTrack {
     pub pitch_semitones: Arc<AtomicI32>,
     /// Pico post-fader de la pista; lo escribe el hilo de audio y lo lee `get_playback_state`.
     pub meter: Arc<PeakMeter>,
+    /// El feeder ya empujó al anillo todo lo que le quedaba: llegó al final del archivo, o el destino
+    /// de un seek cae más allá de él. Una pista así no cuenta para salir de buffering.
+    pub eof: Arc<AtomicBool>,
+    /// Última generación de seek que el feeder confirmó: ya no empuja audio de posiciones anteriores.
+    pub seek_ack: Arc<AtomicU64>,
+    /// Última generación de seek cuyo anillo ya se vació. El feeder no empuja audio nuevo hasta que
+    /// coincide con su confirmación y el callback no sale de buffering sin ella.
+    pub flush_done: Arc<AtomicU64>,
+    /// `false` cuando el hilo feeder terminó (error al abrir el archivo, parada o fallo interno).
+    pub feeder_alive: Arc<AtomicBool>,
 }
 
 pub struct StreamTrackHandle {
@@ -60,6 +70,8 @@ pub struct StreamTrackHandle {
     pub soloed: Arc<AtomicBool>,
     pub bus: Arc<AtomicU8>,
     pub meter: Arc<PeakMeter>,
+    pub eof: Arc<AtomicBool>,
+    pub flush_done: Arc<AtomicU64>,
 }
 
 /// Pico (valor absoluto máximo) desde la última lectura, por canal, guardado como bits de f32.

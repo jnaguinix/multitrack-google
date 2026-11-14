@@ -1200,6 +1200,11 @@
                 active_section_loop: Arc::new(std::sync::Mutex::new(None)),
                 pitch_semitones: Arc::new(AtomicI32::new(0)),
                 meter: Arc::new(PeakMeter::default()),
+                eof: Arc::new(AtomicBool::new(false)),
+                seek_ack: Arc::new(AtomicU64::new(0)),
+                flush_done: Arc::new(AtomicU64::new(0)),
+                // Sin hilo feeder: un seek no debe esperar su confirmación.
+                feeder_alive: Arc::new(AtomicBool::new(false)),
             };
             handles.push(StreamTrackHandle {
                 consumer: Arc::clone(&t.consumer),
@@ -1209,6 +1214,8 @@
                 soloed: Arc::clone(&t.soloed),
                 bus: Arc::clone(&t.bus),
                 meter: Arc::clone(&t.meter),
+                eof: Arc::clone(&t.eof),
+                flush_done: Arc::clone(&t.flush_done),
             });
             active.push(t);
         }
@@ -1433,6 +1440,8 @@
     // ---------------------------------------------------------------------
 
     const SR_PRUEBA: u32 = 48_000;
+    /// Fotogramas por cada unidad de la rampa de prueba. Con 20 dos pistas sumadas no saturan la salida.
+    const PASO_RAMPA: usize = 20;
     /// Ganancia de una pista centrada (pan 0, ganancia 1): cos(π/4).
     const GANANCIA_CENTRO: f32 = 0.707_106_78;
 
@@ -1440,9 +1449,9 @@
         NativeSongSection { id: id.to_string(), name: id.to_string(), code: None, start_sec: inicio, end_sec: fin }
     }
 
-    /// Escribe una caché PCM sintética: cada pista es una rampa estéreo (valor = fotograma / 10), de modo
+    /// Escribe una caché PCM sintética: cada pista es una rampa estéreo (valor = fotograma / PASO_RAMPA), de modo
     /// que en la salida se puede leer en qué punto de la canción está sonando el audio. Con 288 000
-    /// fotogramas (6 s) el valor máximo es 28 800, dentro de i16.
+    /// fotogramas (6 s) el valor máximo es 14 400, dentro de i16.
     fn escribir_cache_rampa(nombre: &str, pistas: &[(&str, usize)]) -> std::path::PathBuf {
         use crate::audio::cache::{write_track_pcm_and_metadata, TrackPcmMetadata};
         let dir = std::env::temp_dir().join(format!("omnitracks_fase1_{nombre}"));
@@ -1451,7 +1460,7 @@
         for (id, frames) in pistas {
             let mut muestras = Vec::with_capacity(frames * 2);
             for f in 0..*frames {
-                let v = (f / 10) as i16;
+                let v = (f / PASO_RAMPA) as i16;
                 muestras.push(v);
                 muestras.push(v);
             }
@@ -1496,6 +1505,11 @@
     /// hilos de lectura. Devuelve (posición de la canción que suena en el último fotograma, o `None`
     /// si salió en silencio; reloj tras el bloque).
     fn bloque(engine: &PlaybackEngine) -> (Option<i64>, u64) {
+        bloque_n(engine, 1.0)
+    }
+
+    /// Igual que `bloque`, con `pistas` rampas idénticas sumadas en la salida.
+    fn bloque_n(engine: &PlaybackEngine, pistas: f32) -> (Option<i64>, u64) {
         let mut buf = vec![0.0f32; 480 * 2];
         engine.simulate_callback_block(&mut buf, 2);
         std::thread::sleep(std::time::Duration::from_millis(5));
@@ -1503,7 +1517,7 @@
         let pos = if ultimo.abs() < 1e-6 {
             None
         } else {
-            Some((ultimo / GANANCIA_CENTRO * 32768.0 * 10.0).round() as i64)
+            Some((ultimo / pistas / GANANCIA_CENTRO * 32768.0 * PASO_RAMPA as f32).round() as i64)
         };
         (pos, engine.current_frame.load(Ordering::SeqCst))
     }
@@ -1662,5 +1676,136 @@
         }
         assert!(vueltas >= 1, "el reloj nunca dio la vuelta del bucle");
         assert!(desajustes <= 4, "el reloj no sigue al audio en las vueltas del vamp ({desajustes} bloques)");
+    }
+
+    // ----- A03: pista terminada y buffering -----
+
+    #[tokio::test]
+    async fn test_a03_seek_mas_alla_del_final_de_una_pista_corta_no_deja_todo_en_buffering() {
+        // Guía de 1 s y pista larga de 6 s. Seek a 3 s: la guía no tiene audio desde 1 s.
+        let engine = motor_real(
+            "a03_corta",
+            &[("larga", 288_000), ("corta", 48_000)],
+            vec![seccion("a", 0.0, 6.0)],
+        )
+        .await;
+        engine.seek(3.0).await;
+        reproducir(&engine).await;
+
+        let (mut con_audio, mut desajustes) = (0, 0);
+        let limite = Instant::now() + std::time::Duration::from_secs(4);
+        while Instant::now() < limite {
+            let (pos, reloj) = bloque(&engine);
+            if pos.is_some() {
+                con_audio += 1;
+                if desajustado(pos, reloj) {
+                    desajustes += 1;
+                }
+            }
+            if con_audio >= 40 {
+                break;
+            }
+        }
+        assert!(
+            !engine.is_buffering.load(Ordering::SeqCst),
+            "la pista corta (sin audio tras el seek) dejó toda la canción en buffering"
+        );
+        assert!(con_audio >= 40, "casi no sonó audio tras el seek ({con_audio} bloques)");
+        assert_eq!(desajustes, 0);
+        assert!(engine.current_frame.load(Ordering::SeqCst) > 144_000, "el reloj no avanzó desde el destino");
+    }
+
+    #[tokio::test]
+    async fn test_a03_seek_cerca_del_final_global_sale_de_buffering_y_termina() {
+        // Quedan 480 fotogramas (10 ms): menos de los 150 ms que se exigían para salir de buffering.
+        let engine = motor_real("a03_final", &[("pista", 288_000)], vec![seccion("a", 0.0, 6.0)]).await;
+        engine.seek(6.0 - 480.0 / 48_000.0).await;
+        reproducir(&engine).await;
+        let limite = Instant::now() + std::time::Duration::from_secs(3);
+        while Instant::now() < limite && engine.is_playing.load(Ordering::SeqCst) {
+            bloque(&engine);
+        }
+        assert!(
+            !engine.is_buffering.load(Ordering::SeqCst),
+            "con menos de 150 ms por delante el motor se quedó en buffering"
+        );
+        assert!(
+            !engine.is_playing.load(Ordering::SeqCst),
+            "la reproducción debía terminar al llegar al final de la canción"
+        );
+        assert!(engine.current_frame.load(Ordering::SeqCst) >= 288_000);
+    }
+
+    // ----- A02: seek coordinado con los feeders -----
+
+    #[test]
+    fn test_a02_el_callback_no_sale_de_buffering_con_un_anillo_sin_vaciar() {
+        // Hay 12 000 fotogramas (250 ms, más de los 150 ms de umbral) de audio viejo en cada anillo.
+        let engine = engine_con_pistas(&[("a", 0.5), ("b", 0.5)], 12_000);
+        engine.sample_rate.store(48_000, Ordering::SeqCst);
+        // Un seek acaba de empezar: subió la generación y activó buffering, pero aún no vació los anillos.
+        let generacion = engine.seek_generation.fetch_add(1, Ordering::SeqCst) + 1;
+        engine.is_buffering.store(true, Ordering::SeqCst);
+
+        let mut buf = vec![0.0f32; 480 * 2];
+        engine.simulate_callback_block(&mut buf, 2);
+        assert!(
+            engine.is_buffering.load(Ordering::SeqCst),
+            "salió de buffering con audio de la posición anterior todavía en el anillo"
+        );
+        assert!(buf.iter().all(|s| *s == 0.0), "debía sonar silencio mientras el seek no termina");
+
+        // Cuando el transporte termina de vaciar y confirma la generación, ya puede salir.
+        for trk in engine.stream_tracks.lock().unwrap().iter() {
+            trk.flush_done.store(generacion, Ordering::SeqCst);
+        }
+        engine.simulate_callback_block(&mut buf, 2);
+        assert!(!engine.is_buffering.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn test_a02_seek_sin_feeder_no_se_cuelga_y_da_la_pista_por_terminada() {
+        let engine = engine_con_pistas(&[("a", 0.5)], 12_000);
+        engine.sample_rate.store(48_000, Ordering::SeqCst);
+        let inicio = Instant::now();
+        engine.seek(0.5).await;
+        assert!(inicio.elapsed() < std::time::Duration::from_secs(1), "el seek esperó a un feeder inexistente");
+        let tracks = engine.tracks.lock().await;
+        assert!(tracks[0].eof.load(Ordering::SeqCst), "sin feeder la pista debe darse por terminada");
+        assert_eq!(tracks[0].flush_done.load(Ordering::SeqCst), engine.seek_generation.load(Ordering::SeqCst));
+        assert_eq!(tracks[0].consumer.lock().unwrap().slots(), 0, "el anillo debe quedar vacío");
+    }
+
+    #[tokio::test]
+    async fn test_a02_seeks_consecutivos_con_varias_pistas_nunca_suenan_audio_viejo() {
+        let engine = motor_real(
+            "a02_seeks",
+            &[("uno", 288_000), ("dos", 288_000)],
+            vec![seccion("a", 0.0, 6.0)],
+        )
+        .await;
+        reproducir(&engine).await;
+        // Destinos fijos y dispersos (en segundos): saltos hacia delante y hacia atrás.
+        let destinos = [4.0, 0.5, 5.0, 1.5, 3.0, 0.25, 4.5, 2.0, 5.5, 1.0, 3.5, 0.75];
+        for (i, destino) in destinos.iter().enumerate() {
+            engine.seek(*destino).await;
+            let objetivo = (destino * 48_000.0) as i64;
+            let mut primer_audio: Option<(i64, u64)> = None;
+            let limite = Instant::now() + std::time::Duration::from_secs(3);
+            while Instant::now() < limite && primer_audio.is_none() {
+                let (pos, reloj) = bloque_n(&engine, 2.0);
+                if let Some(p) = pos {
+                    primer_audio = Some((p, reloj));
+                }
+            }
+            let (pos, reloj) = primer_audio.unwrap_or_else(|| panic!("seek {i} a {destino} s: no sonó audio"));
+            // El primer bloque tras la salida de buffering lleva un fundido de entrada de 8 ms; la
+            // posición leída debe estar en el destino, no en la posición anterior.
+            assert!(
+                (pos - objetivo).abs() < 3_000,
+                "seek {i} a {destino} s: sonó la posición {pos} en lugar de ~{objetivo} (reloj {reloj})"
+            );
+            assert!(!desajustado(Some(pos), reloj), "seek {i}: el reloj no coincide con el audio");
+        }
     }
 

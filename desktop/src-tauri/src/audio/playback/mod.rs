@@ -28,6 +28,9 @@ pub use feeder_io::*;
 pub mod types;
 pub use types::*;
 
+pub mod block;
+pub use block::buffering_ready;
+
 pub mod clock;
 pub use clock::{advance_clock, ClockJumps};
 
@@ -226,6 +229,13 @@ impl PlaybackEngine {
             let is_vamping_track = Arc::clone(&self.is_vamping);
             let active_loop_track = Arc::new(std::sync::Mutex::new(None));
             let pitch_track = Arc::clone(&self.pitch_semitones);
+            // Handshake de seek: arrancan en la generación vigente para no bloquear la primera salida de
+            // buffering con un contador atrasado.
+            let initial_generation = self.seek_generation.load(Ordering::SeqCst);
+            let eof_track = Arc::new(AtomicBool::new(false));
+            let seek_ack_track = Arc::new(AtomicU64::new(initial_generation));
+            let flush_done_track = Arc::new(AtomicU64::new(initial_generation));
+            let feeder_alive_track = Arc::new(AtomicBool::new(true));
 
             let thread_pcm_path = pcm_path.clone();
             let thread_stop = Arc::clone(&stop_signal);
@@ -234,6 +244,11 @@ impl PlaybackEngine {
             let thread_vamp = Arc::clone(&is_vamping_track);
             let thread_active_loop = Arc::clone(&active_loop_track);
             let thread_pitch = Arc::clone(&pitch_track);
+            let thread_generation = Arc::clone(&self.seek_generation);
+            let thread_eof = Arc::clone(&eof_track);
+            let thread_seek_ack = Arc::clone(&seek_ack_track);
+            let thread_flush_done = Arc::clone(&flush_done_track);
+            let thread_alive = Arc::clone(&feeder_alive_track);
             let thread_stats = Arc::clone(&self.stats);
             let is_mono = meta.channels == 1;
             let total_trk_frames = meta.frame_count;
@@ -243,6 +258,7 @@ impl PlaybackEngine {
             std::thread::Builder::new()
                 .name(format!("omni-feed-{}", meta.track_id))
                 .spawn(move || {
+                    let _alive = FeederAliveGuard(thread_alive);
                     let mut file = match File::open(&thread_pcm_path) {
                         Ok(f) => f,
                         Err(e) => {
@@ -284,6 +300,17 @@ impl PlaybackEngine {
                             let cur_pitch = thread_pitch.load(Ordering::Relaxed);
                             let _ = resampler.set_pitch(cur_pitch, false);
                             delay_compensated = false;
+                            // Ya no se empujará audio de la posición anterior: se confirma la generación
+                            // y se espera a que el transporte vacíe el anillo antes de producir nada.
+                            thread_eof.store(false, Ordering::SeqCst);
+                            thread_seek_ack.store(thread_generation.load(Ordering::SeqCst), Ordering::SeqCst);
+                            continue;
+                        }
+
+                        // Seek en curso: el transporte aún no vació el anillo. Empujar ahora mezclaría
+                        // audio nuevo con el antiguo que está a punto de descartarse.
+                        if thread_flush_done.load(Ordering::SeqCst) < thread_seek_ack.load(Ordering::SeqCst) {
+                            std::thread::sleep(std::time::Duration::from_millis(1));
                             continue;
                         }
 
@@ -301,6 +328,16 @@ impl PlaybackEngine {
                                 let _ = producer.push(s);
                             }
                             output_staging.drain(..n_to_push);
+                        }
+
+                        // Fin de pista: ya se empujó todo lo que quedaba (o el destino de un seek cae más
+                        // allá del final). El callback no espera audio de esta pista para salir de
+                        // buffering.
+                        let at_end = current_frame >= total_trk_frames
+                            && input_staging[0].is_empty()
+                            && output_staging.is_empty();
+                        if thread_eof.load(Ordering::Relaxed) != at_end {
+                            thread_eof.store(at_end, Ordering::SeqCst);
                         }
 
                         // 4. Check queued jump requests
@@ -515,6 +552,10 @@ impl PlaybackEngine {
                 active_section_loop: active_loop_track,
                 pitch_semitones: pitch_track,
                 meter: Arc::new(PeakMeter::default()),
+                eof: eof_track,
+                seek_ack: seek_ack_track,
+                flush_done: flush_done_track,
+                feeder_alive: feeder_alive_track,
             });
         }
 
@@ -550,6 +591,8 @@ impl PlaybackEngine {
                 soloed: Arc::clone(&t.soloed),
                 bus: Arc::clone(&t.bus),
                 meter: Arc::clone(&t.meter),
+                eof: Arc::clone(&t.eof),
+                flush_done: Arc::clone(&t.flush_done),
             })
             .collect();
 
@@ -754,6 +797,7 @@ impl PlaybackEngine {
         let prefill_dur_arc = Arc::clone(&self.last_prefill_duration_ms);
         let current_frame = Arc::clone(&self.current_frame);
         let clock_jumps = Arc::clone(&self.clock_jumps);
+        let seek_generation_arc = Arc::clone(&self.seek_generation);
         let total_frames = Arc::clone(&self.total_frames);
         let fade_arc = Arc::clone(&self.fade);
         let stats = Arc::clone(&self.stats);
@@ -847,19 +891,12 @@ impl PlaybackEngine {
                     };
 
                     // Check buffering state BEFORE popping any frames from track consumers
-                    if is_buffering_arc.load(Ordering::Relaxed) {
-                        let mut min_avail_frames = u64::MAX;
-                        for trk in tracks_guard.iter() {
-                            if let Ok(c) = trk.consumer.try_lock() {
-                                let avail = (c.slots() / 2) as u64;
-                                if avail < min_avail_frames {
-                                    min_avail_frames = avail;
-                                }
-                            }
-                        }
-                        let sr = (sample_rate_u32.max(1)) as u64;
-                        let track_level_ms = if min_avail_frames == u64::MAX { 0 } else { (min_avail_frames * 1000) / sr };
-                        if track_level_ms < 150 {
+                    if is_buffering_arc.load(Ordering::SeqCst) {
+                        if !buffering_ready(
+                            &tracks_guard,
+                            seek_generation_arc.load(Ordering::SeqCst),
+                            sample_rate_u32 as u64,
+                        ) {
                             data.fill(0.0);
                             return;
                         } else {
@@ -947,7 +984,7 @@ impl PlaybackEngine {
                                 }
                             }
                             trk.meter.record(pk_l, pk_r);
-                            if had_underrun && !is_buffering_arc.load(Ordering::Relaxed) {
+                            if had_underrun && !trk.eof.load(Ordering::Relaxed) && !is_buffering_arc.load(Ordering::Relaxed) {
                                 stats.underruns.fetch_add(1, Ordering::Relaxed);
                             }
                         }
@@ -1120,19 +1157,8 @@ impl PlaybackEngine {
         let frames = data.len() / channels.max(1);
         let mut fade = self.fade.lock().unwrap();
 
-        if self.is_buffering.load(Ordering::Relaxed) {
-            let mut min_avail_frames = u64::MAX;
-            for trk in tracks_guard.iter() {
-                if let Ok(c) = trk.consumer.lock() {
-                    let avail = (c.slots() / 2) as u64;
-                    if avail < min_avail_frames {
-                        min_avail_frames = avail;
-                    }
-                }
-            }
-            let sr = sample_rate_u32 as u64;
-            let track_level_ms = if min_avail_frames == u64::MAX { 0 } else { (min_avail_frames * 1000) / sr };
-            if track_level_ms < 150 {
+        if self.is_buffering.load(Ordering::SeqCst) {
+            if !buffering_ready(&tracks_guard, self.seek_generation.load(Ordering::SeqCst), sample_rate_u32 as u64) {
                 data.fill(0.0);
                 return;
             } else {

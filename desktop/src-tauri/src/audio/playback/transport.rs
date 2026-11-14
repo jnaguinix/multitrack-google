@@ -92,14 +92,8 @@ impl PlaybackEngine {
         self.reposition_metronome(0);
         self.clock_jumps.cancel_jump();
         *self.queued_jump.lock().unwrap() = None;
-        let tracks = self.tracks.lock().await;
-        for trk in tracks.iter() {
-            trk.seek_request.store(0, Ordering::SeqCst);
-            *trk.jump_request.lock().unwrap() = None;
-            if let Ok(mut c) = trk.consumer.lock() {
-                while c.pop().is_ok() {}
-            }
-        }
+        let generation = self.seek_generation.fetch_add(1, Ordering::SeqCst) + 1;
+        self.rewind_tracks(0, generation).await;
     }
 
     pub async fn seek(&self, target_sec: f64) {
@@ -112,8 +106,9 @@ impl PlaybackEngine {
             tokio::time::sleep(std::time::Duration::from_millis((FADE_MS * 1.2) as u64)).await;
         }
 
-        // Enter buffering/preparation state:
-        self.seek_generation.fetch_add(1, Ordering::SeqCst);
+        // Enter buffering/preparation state. La generación sube antes de activar buffering: el callback
+        // no debe ver buffering activo con la generación anterior, o daría por bueno el audio viejo.
+        let generation = self.seek_generation.fetch_add(1, Ordering::SeqCst) + 1;
         self.is_buffering.store(true, Ordering::SeqCst);
         *self.buffering_start_time.lock().unwrap() = Some(Instant::now());
 
@@ -122,16 +117,54 @@ impl PlaybackEngine {
         self.clock_jumps.cancel_jump();
         *self.queued_jump.lock().unwrap() = None;
 
+        self.rewind_tracks(target_frame, generation).await;
+
+        tracing::info!("[NativeEngine] seek to target_sec={:.2} (frame {})", target_sec, target_frame);
+    }
+
+    /// Reposiciona todas las pistas en `target_frame` de forma coordinada con sus feeders:
+    ///
+    /// 1. Pide a cada feeder que se reposicione (`seek_request`).
+    /// 2. Espera a que lo confirme (`seek_ack >= generation`). Desde ese momento el feeder ya no
+    ///    empuja audio de la posición anterior y se queda quieto hasta el paso 4.
+    /// 3. Vacía el anillo: ahora solo puede contener audio viejo.
+    /// 4. Marca `flush_done = generation`. El feeder empieza a producir desde el destino y el callback
+    ///    ya puede salir de buffering con ese audio.
+    ///
+    /// Sin esta espera, vaciar el anillo y reposicionar el feeder son dos acciones independientes y
+    /// pueden intercalarse con un empuje del feeder o con el callback (audio viejo tras el seek).
+    async fn rewind_tracks(&self, target_frame: i64, generation: u64) {
         let tracks = self.tracks.lock().await;
         for trk in tracks.iter() {
-            trk.seek_request.store(target_frame, Ordering::SeqCst);
+            trk.eof.store(false, Ordering::SeqCst);
             *trk.jump_request.lock().unwrap() = None;
+            trk.seek_request.store(target_frame, Ordering::SeqCst);
+        }
+
+        let deadline = Instant::now() + std::time::Duration::from_secs(5);
+        for trk in tracks.iter() {
+            while trk.seek_ack.load(Ordering::SeqCst) < generation
+                && trk.feeder_alive.load(Ordering::SeqCst)
+                && Instant::now() < deadline
+            {
+                tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+            }
+            if trk.seek_ack.load(Ordering::SeqCst) < generation {
+                // El feeder terminó (no pudo abrir el archivo, falló) o no responde. Sin él no llegará
+                // audio de esta pista: se da por terminada para no dejar toda la canción en buffering.
+                tracing::warn!(
+                    "[NativeEngine] La pista '{}' no confirmó el seek a {} (feeder activo: {}); se da por terminada",
+                    trk.track_id,
+                    target_frame,
+                    trk.feeder_alive.load(Ordering::SeqCst)
+                );
+                trk.eof.store(true, Ordering::SeqCst);
+            }
             if let Ok(mut c) = trk.consumer.lock() {
                 while c.pop().is_ok() {}
             }
+            trk.flush_done.store(generation, Ordering::SeqCst);
         }
-
-        tracing::info!("[NativeEngine] seek to target_sec={:.2} (frame {})", target_sec, target_frame);
     }
 
     pub fn get_playback_state(&self) -> PlaybackStateSnapshot {
