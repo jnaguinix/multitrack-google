@@ -773,7 +773,7 @@ export function createEmptyProjectTemplate(
     keySignature,
     totalBars: 24,
     durationSec: 48,
-    quantizeMode: 'immediate',
+    quantizeMode: 'section-end',
     splitRoutingMode: 'stereo',
     clickEnabled: false,
     clickGain: 1.0,

@@ -498,7 +498,7 @@ export class NativeAudioEngine {
     const invoke = getInvoke();
     if (!invoke) return;
     try {
-      const qMode = mode || this.currentProject?.quantizeMode || '1-bar';
+      const qMode = mode || this.currentProject?.quantizeMode || 'section-end';
       await invoke('audio_queue_jump', { sectionId, mode: qMode });
       this.refreshStateNow();
     } catch (err: any) {
@@ -668,7 +668,7 @@ export class NativeAudioEngine {
       bpm: project.bpm || 120,
       beatsPerBar: project.beatsPerBar || 4,
       sections: nativeSections,
-      quantizeMode: project.quantizeMode || '1-bar',
+      quantizeMode: project.quantizeMode || 'section-end',
     }).catch(() => {});
 
     // Sincronizar metrónomo
@@ -971,7 +971,7 @@ export class NativeAudioEngine {
           bpm: project.bpm || 120,
           beatsPerBar: project.beatsPerBar || 4,
           sections: nativeSections,
-          quantizeMode: project.quantizeMode || '1-bar',
+          quantizeMode: project.quantizeMode || 'section-end',
         });
 
         this.loadedProjectId = project.id;
