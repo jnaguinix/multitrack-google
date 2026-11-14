@@ -1308,3 +1308,78 @@
         let s = engine.get_playback_state();
         assert_eq!(s.meters.click.l, 0.0, "tras leer vuelve a 0");
     }
+
+    // ---------------------------------------------------------------------
+    // Fase 0 de la auditoría (A06, A07, A14)
+    // ---------------------------------------------------------------------
+
+    fn metronomo_120_bpm() -> MetronomeEngine {
+        // 120 BPM a 48 kHz: un pulso cada 24 000 frames exactos.
+        MetronomeEngine::new(MetronomeConfig {
+            enabled: true,
+            bpm: 120.0,
+            beats_per_bar: 4,
+            subdivision: 1,
+            gain: 1.0,
+            split_mono: false,
+        })
+    }
+
+    /// Renderiza `[desde, hasta)` en bloques de `bloque` frames y cuenta los clics que empiezan
+    /// (un bloque con señal tras un bloque en silencio; cada clic dura 45 ms y hay 500 ms entre pulsos).
+    fn contar_clics(met: &mut MetronomeEngine, desde: u64, hasta: u64, bloque: usize) -> usize {
+        let mut buf = vec![0.0f32; bloque];
+        let mut inicios = 0;
+        let mut previo_con_senal = false;
+        let mut pos = desde;
+        while pos < hasta {
+            let frames = bloque.min((hasta - pos) as usize);
+            met.render_block(pos, pos + frames as u64, frames, 48000, &mut buf[..frames]);
+            let con_senal = buf[..frames].iter().any(|s| s.abs() > 1e-6);
+            if con_senal && !previo_con_senal {
+                inicios += 1;
+            }
+            previo_con_senal = con_senal;
+            pos += frames as u64;
+        }
+        inicios
+    }
+
+    #[test]
+    fn test_a07_metronomo_no_pierde_pulsos_en_el_borde_del_bloque() {
+        // Pulsos en 0, 24 000, 48 000 y 72 000 dentro de [0, 96 000). Con bloques de 480 frames todos los
+        // pulsos posteriores al primero caen justo en el borde de un bloque: antes se perdían.
+        for bloque in [480usize, 441, 512, 1024, 333] {
+            let mut met = metronomo_120_bpm();
+            assert_eq!(
+                contar_clics(&mut met, 0, 96_000, bloque),
+                4,
+                "bloque de {bloque} frames: debían sonar los 4 pulsos"
+            );
+        }
+    }
+
+    #[test]
+    fn test_a07_pulso_en_el_borde_suena_en_el_bloque_siguiente() {
+        let mut met = metronomo_120_bpm();
+        let mut buf = vec![0.0f32; 480];
+        met.render_block(0, 480, 480, 48000, &mut buf);
+        // Salta a un bloque que termina exactamente en un pulso (24 000): ese pulso no suena en él...
+        met.seek_to_frame(23_520, 48000);
+        met.render_block(23_520, 24_000, 480, 48000, &mut buf);
+        assert!(buf.iter().all(|s| s.abs() < 1e-6), "el pulso de 24 000 no pertenece a [23 520, 24 000)");
+        // ...y sí al siguiente, desde su primer frame.
+        met.render_block(24_000, 24_480, 480, 48000, &mut buf);
+        assert!(buf[..40].iter().any(|s| s.abs() > 1e-6), "el pulso de 24 000 debe sonar al inicio del bloque siguiente");
+    }
+
+    #[test]
+    fn test_a07_metronomo_atrasado_no_recorre_miles_de_subpasos() {
+        // Si la posición salta lejos sin reposicionar, el metrónomo debe seguir sonando en la nueva posición.
+        let mut met = metronomo_120_bpm();
+        let mut buf = vec![0.0f32; 480];
+        met.render_block(0, 480, 480, 48000, &mut buf);
+        let lejos = 24_000u64 * 1000; // pulso número 1000
+        met.render_block(lejos, lejos + 480, 480, 48000, &mut buf);
+        assert!(buf[..40].iter().any(|s| s.abs() > 1e-6));
+    }

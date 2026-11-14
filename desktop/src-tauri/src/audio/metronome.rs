@@ -194,12 +194,23 @@ impl MetronomeEngine {
         let frames_per_substep = (sec_per_substep * sample_rate as f32).max(1.0);
 
         let song_frames_span = (end_song_frame as f64 - start_song_frame as f64).max(1.0);
-        let end_substep = (end_song_frame as f64 / frames_per_substep as f64).floor() as i64;
 
-        // Trigger new pulses if we cross one or more substep boundaries
-        for s in (self.last_substep + 1)..=end_substep {
-            let pulse_song_frame = (s as f64 * frames_per_substep as f64).round() as i64;
-            if pulse_song_frame >= start_song_frame as i64 && pulse_song_frame < end_song_frame as i64 {
+        // Cada bloque cubre el intervalo de frames [inicio, fin). Un pulso que cae exactamente en `fin`
+        // pertenece al bloque siguiente, así que NO se da por procesado aquí: `last_substep` solo avanza
+        // hasta el último pulso realmente tratado. (Antes se marcaba como procesado el pulso del borde y
+        // se perdía; a 120 BPM y 48 kHz todos los pulsos caen en múltiplos de 24 000 frames, o sea, en el
+        // borde de bloques de 480 frames.)
+        let frame_of = |substep: i64| (substep as f64 * frames_per_substep as f64).round() as i64;
+        // Si el metrónomo quedó muy atrás (p. ej. tras un salto de posición sin reposicionarlo), se salta
+        // directamente a los pulsos cercanos en vez de recorrer miles de subpasos dentro del callback.
+        let first_candidate = (start_song_frame as f64 / frames_per_substep as f64).floor() as i64;
+        let mut s = (self.last_substep + 1).max(first_candidate);
+        loop {
+            let pulse_song_frame = frame_of(s);
+            if pulse_song_frame >= end_song_frame as i64 {
+                break;
+            }
+            if pulse_song_frame >= start_song_frame as i64 {
                 let frac = (pulse_song_frame - start_song_frame as i64) as f64 / song_frames_span;
                 let offset = (frac * frames as f64).round() as usize;
                 let offset = offset.min(frames.saturating_sub(1));
@@ -218,8 +229,9 @@ impl MetronomeEngine {
                 );
                 self.active_pulses.push(pulse);
             }
+            self.last_substep = s;
+            s += 1;
         }
-        self.last_substep = self.last_substep.max(end_substep);
 
         // Accumulate active pulses
         for f in 0..frames {
