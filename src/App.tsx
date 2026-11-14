@@ -24,7 +24,6 @@ import {
 } from './storage/projectDb';
 import {
   AudioEngineMode,
-  MetersSnapshot,
   OutputBus,
   QuantizeMode,
   RemoteSyncMessage,
@@ -162,12 +161,6 @@ export default function App() {
   // Same set as state so the UI can show which songs are being prepared
   const [preparingIds, setPreparingIds] = useState<Set<string>>(new Set());
   const [isActivatingProject, setIsActivatingProject] = useState(false);
-
-  // 5. Medidores en un ref (no en el estado de App) para no recargar el hilo principal
-  const metersRef = useRef<MetersSnapshot>({
-    tracks: {},
-    master: { rms: 0, peak: 0, clipping: false },
-  });
 
   const [songToDeleteFromLibrary, setSongToDeleteFromLibrary] = useState<SongProject | null>(null);
   const [missingFolderSong, setMissingFolderSong] = useState<SongProject | null>(null);
@@ -1209,7 +1202,6 @@ export default function App() {
               transport={transport}
               ramCacheVersion={ramCacheVersion}
               setlistTransitionMode={setlistTransitionMode}
-              metersRef={metersRef}
               onUpdateSongNotes={handleUpdateSongNotes}
               onSetSongTransition={handleSetSongTransition}
               onAddSectionTemplate={handleAddSectionTemplate}
@@ -1307,7 +1299,6 @@ export default function App() {
                 <TimelineArranger
                   project={currentProject}
                   transport={transport}
-                  metersRef={metersRef}
                   isDarkMode={true}
                   isDockedMixerOpen={isDockedMixerOpen}
                   onToggleDockedMixer={() => setIsDockedMixerOpen((prev) => !prev)}
@@ -1372,7 +1363,6 @@ export default function App() {
                         <MultitrackMixer
                           project={currentProject}
                           transport={transport}
-                          metersRef={metersRef}
                           docked={true}
                           onToggleTrackMute={handleToggleTrackMute}
                           onToggleTrackSolo={handleToggleTrackSolo}
@@ -1432,7 +1422,6 @@ export default function App() {
               <MultitrackMixer
                 project={currentProject}
                 transport={transport}
-                metersRef={metersRef}
                 docked={false}
                 onToggleTrackMute={handleToggleTrackMute}
                 onToggleTrackSolo={handleToggleTrackSolo}

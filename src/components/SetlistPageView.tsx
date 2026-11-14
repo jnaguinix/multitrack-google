@@ -19,7 +19,6 @@ import {
   Radio,
 } from 'lucide-react';
 import {
-  MetersSnapshot,
   OutputBus,
   QuantizeMode,
   SetlistTransitionMode,
@@ -46,7 +45,6 @@ interface SetlistPageViewProps {
   transport: TransportState;
   ramCacheVersion: number;
   setlistTransitionMode: SetlistTransitionMode;
-  metersRef: React.MutableRefObject<MetersSnapshot>;
   onPlayPause: () => void;
   onStop: () => void;
   onToggleVamp: () => void;
@@ -116,7 +114,6 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
   transport,
   ramCacheVersion: _ramCacheVersion,
   setlistTransitionMode,
-  metersRef,
   onPlayPause,
   onLoadAndPlaySong,
   onRequestSongAction,
@@ -591,7 +588,6 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
               <MultitrackMixer
                 project={filteredProjectForMixer}
                 transport={transport}
-                metersRef={metersRef}
                 docked={true}
                 onToggleTrackMute={onToggleTrackMute}
                 onToggleTrackSolo={onToggleTrackSolo}

@@ -8,7 +8,6 @@ import {
   Flag,
 } from 'lucide-react';
 import {
-  MetersSnapshot,
   OutputBus,
   SongProject,
   SongSection,
@@ -16,13 +15,13 @@ import {
   TransportState,
 } from '../types/project';
 import { audioEngine } from '../audio/audioEngine';
+import { useLiveMeters } from '../audio/liveMeters';
 import { formatMmSs } from './TransportDeck';
 import { isDesktopApp, pickNativeFiles } from '../utils/nativeDialog';
 
 interface TimelineArrangerProps {
   project: SongProject;
   transport: TransportState;
-  metersRef: React.MutableRefObject<MetersSnapshot>;
   isDarkMode: boolean;
   isDockedMixerOpen?: boolean;
   onToggleDockedMixer?: () => void;
@@ -47,6 +46,22 @@ function gainToDbText(gain: number): string {
   return `${db >= 0 ? '+' : ''}${db.toFixed(1)} dB`;
 }
 
+const ZERO_METER = { rms: 0, peak: 0, clipping: false };
+
+const TrackMiniMeter: React.FC<{ live: boolean; trackId: string }> = ({ live, trackId }) => {
+  const meter = useLiveMeters(live).tracks[trackId] || ZERO_METER;
+  return (
+    <div className="w-full h-1 bg-neutral-900 rounded-full overflow-hidden">
+      <div
+        style={{ width: `${Math.min(100, meter.rms * 100)}%` }}
+        className={`h-full transition-[width] duration-75 ${
+          meter.clipping ? 'bg-red-500' : meter.rms > 0.75 ? 'bg-amber-500' : 'bg-studio-accent'
+        }`}
+      />
+    </div>
+  );
+};
+
 interface WaveformCanvasProps {
   peaks: number[];
   color: string;
@@ -56,10 +71,18 @@ interface WaveformCanvasProps {
   activeSectionId: string | null;
   queuedSectionId: string | null;
   isVamping: boolean;
-  progressRatio: number; // 0..1 playhead position
+  progressRatio: number; // 0..1 posición del cursor
   onSeekRatio: (ratio: number) => void;
 }
 
+/**
+ * Onda de una pista en tres capas (UI02):
+ *  1. Base (canvas): secciones, cuadrícula y barras de la parte «no reproducida». Solo se redibuja si cambian los
+ *     datos, el color, el silencio, las secciones o el tamaño.
+ *  2. Reproducido (canvas): las mismas barras en color sólido, recortadas con `clip-path` hasta el cursor.
+ *  3. Cursor: una línea que se mueve con `transform`.
+ * Avanzar la posición solo cambia el estilo de las capas 2 y 3: no se redibuja ningún canvas.
+ */
 const WaveformCanvas: React.FC<WaveformCanvasProps> = ({
   peaks,
   color,
@@ -72,28 +95,54 @@ const WaveformCanvas: React.FC<WaveformCanvasProps> = ({
   progressRatio,
   onSeekRatio,
 }) => {
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const baseRef = useRef<HTMLCanvasElement | null>(null);
+  const playedRef = useRef<HTMLCanvasElement | null>(null);
+  const [size, setSize] = useState({ w: 0, h: 0, dpr: 1 });
+
+  // Tamaño y densidad de píxeles: se redibuja nítido al cambiar de tamaño o de monitor.
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const measure = () => {
+      const w = el.clientWidth;
+      const h = el.clientHeight;
+      const dpr = window.devicePixelRatio || 1;
+      setSize((prev) => (prev.w === w && prev.h === h && prev.dpr === dpr ? prev : { w, h, dpr }));
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(el);
+    window.addEventListener('resize', measure);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener('resize', measure);
+    };
+  }, []);
 
   useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
+    const base = baseRef.current;
+    const played = playedRef.current;
+    const { w: width, h: height, dpr } = size;
+    if (!base || !played || width <= 0 || height <= 0) return;
+    const baseCtx = base.getContext('2d');
+    const playedCtx = played.getContext('2d');
+    if (!baseCtx || !playedCtx) return;
 
-    const dpr = window.devicePixelRatio || 1;
-    const width = canvas.clientWidth;
-    const height = canvas.clientHeight;
-    if (canvas.width !== width * dpr || canvas.height !== height * dpr) {
-      canvas.width = width * dpr;
-      canvas.height = height * dpr;
+    for (const c of [base, played]) {
+      if (c.width !== Math.round(width * dpr) || c.height !== Math.round(height * dpr)) {
+        c.width = Math.round(width * dpr);
+        c.height = Math.round(height * dpr);
+      }
     }
-    ctx.save();
-    ctx.scale(dpr, dpr);
-    ctx.clearRect(0, 0, width, height);
+    baseCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    playedCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    baseCtx.clearRect(0, 0, width, height);
+    playedCtx.clearRect(0, 0, width, height);
 
     const safeTotalSec = Math.max(1, totalDurationSec);
 
-    // 1. Draw time-based section region backgrounds & divider lines
+    // 1. Fondos de sección y divisores
     for (const sec of sections) {
       const startX = (sec.startTimeSec / safeTotalSec) * width;
       const endX = (sec.endTimeSec / safeTotalSec) * width;
@@ -102,108 +151,90 @@ const WaveformCanvas: React.FC<WaveformCanvasProps> = ({
       const isQueued = sec.id === queuedSectionId;
 
       if (isActive && isVamping) {
-        ctx.fillStyle = 'rgba(245, 158, 11, 0.12)';
-        ctx.fillRect(startX, 0, secW, height);
+        baseCtx.fillStyle = 'rgba(245, 158, 11, 0.12)';
+        baseCtx.fillRect(startX, 0, secW, height);
       } else if (isActive) {
-        ctx.fillStyle = 'rgba(16, 185, 129, 0.07)';
-        ctx.fillRect(startX, 0, secW, height);
+        baseCtx.fillStyle = 'rgba(16, 185, 129, 0.07)';
+        baseCtx.fillRect(startX, 0, secW, height);
       } else if (isQueued) {
-        ctx.fillStyle = 'rgba(245, 158, 11, 0.08)';
-        ctx.fillRect(startX, 0, secW, height);
+        baseCtx.fillStyle = 'rgba(245, 158, 11, 0.08)';
+        baseCtx.fillRect(startX, 0, secW, height);
       }
 
-      // Section boundary vertical line
-      ctx.strokeStyle = `${sec.color}66`;
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      ctx.moveTo(startX, 0);
-      ctx.lineTo(startX, height);
-      ctx.stroke();
+      baseCtx.strokeStyle = `${sec.color}66`;
+      baseCtx.lineWidth = 1;
+      baseCtx.beginPath();
+      baseCtx.moveTo(startX, 0);
+      baseCtx.lineTo(startX, height);
+      baseCtx.stroke();
     }
 
-    // Time grid vertical ticks every 5 or 15 seconds
+    // Cuadrícula de tiempo cada 5, 10 o 15 s
     const tickStepSec = safeTotalSec > 180 ? 15 : safeTotalSec > 60 ? 10 : 5;
-    for (let t = tickStepSec; t < safeTotalSec; t += tickStepSec) {
-      const x = (t / safeTotalSec) * width;
-      ctx.strokeStyle =
-        t % 30 === 0 ? 'rgba(148, 163, 184, 0.14)' : 'rgba(148, 163, 184, 0.05)';
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      ctx.moveTo(x, 0);
-      ctx.lineTo(x, height);
-      ctx.stroke();
+    for (let tt = tickStepSec; tt < safeTotalSec; tt += tickStepSec) {
+      const x = (tt / safeTotalSec) * width;
+      baseCtx.strokeStyle = tt % 30 === 0 ? 'rgba(148, 163, 184, 0.14)' : 'rgba(148, 163, 184, 0.05)';
+      baseCtx.lineWidth = 1;
+      baseCtx.beginPath();
+      baseCtx.moveTo(x, 0);
+      baseCtx.lineTo(x, height);
+      baseCtx.stroke();
     }
 
-    // Center zero-crossing hairline
+    // Línea central
     const midY = height / 2;
-    ctx.strokeStyle = 'rgba(148, 163, 184, 0.12)';
-    ctx.beginPath();
-    ctx.moveTo(0, midY);
-    ctx.lineTo(width, midY);
-    ctx.stroke();
+    baseCtx.strokeStyle = 'rgba(148, 163, 184, 0.12)';
+    baseCtx.beginPath();
+    baseCtx.moveTo(0, midY);
+    baseCtx.lineTo(width, midY);
+    baseCtx.stroke();
 
-    // 2. Draw waveform bars
+    // 2. Barras: la capa base lleva la parte «no reproducida»; la de reproducido, el color sólido
     const numPeaks = peaks.length || 1;
     const barStep = width / numPeaks;
     const barWidth = Math.max(1.2, barStep * 0.68);
-    const playheadX = progressRatio * width;
-
+    baseCtx.fillStyle = muted ? 'rgba(100, 116, 139, 0.30)' : `${color}88`;
+    playedCtx.fillStyle = color;
     for (let i = 0; i < numPeaks; i++) {
       const amp = Math.max(0.04, peaks[i] || 0.05);
       const x = i * barStep;
       const halfH = amp * (height * 0.42);
-
-      if (muted) {
-        ctx.fillStyle = 'rgba(100, 116, 139, 0.30)';
-      } else if (x <= playheadX) {
-        ctx.fillStyle = color;
-      } else {
-        ctx.fillStyle = `${color}88`;
-      }
-
-      ctx.fillRect(x, midY - halfH, barWidth, halfH * 2);
+      baseCtx.fillRect(x, midY - halfH, barWidth, halfH * 2);
+      if (!muted) playedCtx.fillRect(x, midY - halfH, barWidth, halfH * 2);
     }
+  }, [peaks, color, muted, sections, totalDurationSec, activeSectionId, queuedSectionId, isVamping, size]);
 
-    // 3. Draw Playhead Cursor
-    ctx.strokeStyle = '#8dd6cd';
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.moveTo(playheadX, 0);
-    ctx.lineTo(playheadX, height);
-    ctx.stroke();
+  const ratio = Math.max(0, Math.min(1, progressRatio));
 
-    ctx.restore();
-  }, [
-    peaks,
-    color,
-    muted,
-    sections,
-    totalDurationSec,
-    activeSectionId,
-    queuedSectionId,
-    isVamping,
-    progressRatio,
-  ]);
-
-  const handleClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
+  const handleClick = (e: React.MouseEvent<HTMLDivElement>) => {
     const rect = e.currentTarget.getBoundingClientRect();
-    const ratio = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
-    onSeekRatio(ratio);
+    const r = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+    onSeekRatio(r);
   };
 
   return (
-    <canvas
-      ref={canvasRef}
-      onClick={handleClick}
-      className="w-full h-full block cursor-pointer"
-    />
+    <div ref={containerRef} onClick={handleClick} className="relative w-full h-full block cursor-pointer">
+      <canvas ref={baseRef} className="absolute inset-0 w-full h-full" />
+      <canvas
+        ref={playedRef}
+        className="absolute inset-0 w-full h-full pointer-events-none"
+        style={{ clipPath: `inset(0 ${((1 - ratio) * 100).toFixed(3)}% 0 0)` }}
+      />
+      <div
+        className="absolute inset-0 pointer-events-none"
+        style={{
+          transform: `translateX(${((ratio - 1) * 100).toFixed(3)}%)`,
+          borderRight: '2px solid #8dd6cd',
+          willChange: 'transform',
+        }}
+      />
+    </div>
   );
 };
 
 export const TimelineArranger: React.FC<TimelineArrangerProps> = ({
   project,
   transport,
-  metersRef,
   isDockedMixerOpen = false,
   onToggleDockedMixer,
   onJumpSection,
@@ -220,21 +251,6 @@ export const TimelineArranger: React.FC<TimelineArrangerProps> = ({
   onOpenSectionEditor,
 }) => {
   const addStemInputRef = useRef<HTMLInputElement | null>(null);
-  const [, setMeterTick] = useState(0);
-
-  useEffect(() => {
-    if (!transport.isPlaying) {
-      setMeterTick((t) => t + 1);
-      return;
-    }
-    const intervalId = window.setInterval(() => {
-      metersRef.current = audioEngine.getTrackMeters();
-      setMeterTick((t) => (t + 1) % 1000000);
-    }, 50);
-    return () => window.clearInterval(intervalId);
-  }, [transport.isPlaying, metersRef]);
-
-  const meters = metersRef.current.tracks;
 
   const secPerBar = (60 / (project.bpm || 120)) * (project.beatsPerBar || 4);
   const totalDurationSec = Math.max(
@@ -432,7 +448,6 @@ export const TimelineArranger: React.FC<TimelineArrangerProps> = ({
           <div className="divide-y divide-neutral-800/90">
             {project.tracks.map((track: TrackChannel) => {
               const isAudible = anySolo ? track.soloed && !track.muted : !track.muted;
-              const meter = meters[track.id] || { rms: 0, peak: 0, clipping: false };
 
               return (
                 <div
@@ -530,21 +545,8 @@ export const TimelineArranger: React.FC<TimelineArrangerProps> = ({
                       </select>
                     </div>
 
-                    {/* Horizontal Mini VU Meter */}
-                    <div className="w-full h-1 bg-neutral-900 rounded-full overflow-hidden">
-                      <div
-                        style={{
-                          width: `${Math.min(100, meter.rms * 100)}%`,
-                        }}
-                        className={`h-full transition-[width] duration-75 ${
-                          meter.clipping
-                            ? 'bg-red-500'
-                            : meter.rms > 0.75
-                            ? 'bg-amber-500'
-                            : 'bg-studio-accent'
-                        }`}
-                      />
-                    </div>
+                    {/* Mini VU horizontal (componente hoja: solo él se renderiza con cada lectura) */}
+                    <TrackMiniMeter live={transport.isPlaying} trackId={track.id} />
                   </div>
 
                   {/* Right Waveform Canvas Area */}

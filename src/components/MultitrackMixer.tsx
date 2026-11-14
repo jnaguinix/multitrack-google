@@ -6,7 +6,8 @@ import {
   TrackChannel,
   TransportState,
 } from '../types/project';
-import { audioEngine } from '../audio/audioEngine';
+import { useLiveMeters } from '../audio/liveMeters';
+import { computeMixerLevels, trackPeak, activityFromGain, peakPosition } from '../utils/mixerLevels';
 
 const MIN_DB = -40;
 const MAX_DB = 10;
@@ -35,11 +36,6 @@ export function posFromDb(db: number): number {
 export function dbFromPos(pos: number): number {
   if (pos < MUTE_TRAVEL) return -Infinity;
   return MIN_DB + (pos - MUTE_TRAVEL) / (1 - MUTE_TRAVEL) * (MAX_DB - MIN_DB);
-}
-
-function activityFromGain(gain: number): number {
-  // The estimated output bars retain their original response independently of fader travel.
-  return Math.max(0, Math.min(1, (gainToDb(gain) + 60) / 66));
 }
 
 export function formatDb(db: number): string {
@@ -136,36 +132,77 @@ const PanKnob: React.FC<PanKnobProps> = ({ name, pan, onChangePan }) => {
  * VERTICAL STUDIO FADER AND LEVEL METERS (.lt-fx)
  * ============================================================================ */
 
+type MeterLevels = { l: number; r: number; dbScale: boolean };
+
 type StudioFaderProps = {
   name: string;
   gain: number;
   onChangeGain: (nextGain: number) => void;
+  /** Hay reproducción: solo entonces los medidores se suscriben al ciclo de lectura. */
+  live: boolean;
 } & (
-  | { peak: number; levelL?: never; levelR?: never; dbScale?: never }
-  | {
-      peak?: never;
-      levelL: number;
-      levelR: number;
-      /** Niveles en la escala dBFS de los medidores de pista: usa sus mismas zonas de color. */
-      dbScale?: boolean;
-    }
+  | { peakOf: (m: MetersSnapshot) => number; levelsOf?: never }
+  | { levelsOf: (m: MetersSnapshot) => MeterLevels; peakOf?: never }
 );
-
-function peakPosition(dbfs: number): number {
-  return Math.max(0, Math.min(1, (dbfs - PEAK_FLOOR_DBFS) / -PEAK_FLOOR_DBFS));
-}
 
 function meterMask(level: number): string {
   return `${Math.max(0, Math.min(100, (1 - level) * 100)).toFixed(1)}%`;
 }
 
+/* Los medidores son componentes hoja: son los únicos que se vuelven a renderizar con cada lectura (UI03). */
+
+const FaderPeakMeter: React.FC<{ live: boolean; peakOf: (m: MetersSnapshot) => number }> = ({ live, peakOf }) => {
+  const peak = peakOf(useLiveMeters(live));
+  const peakDbfs = peak && Number.isFinite(peak) ? 20 * Math.log10(peak) : -Infinity;
+  return (
+    <>
+      <div className="lt-meter lt-peak-meter" aria-hidden="true">
+        <i />
+        <s style={{ height: meterMask(peakPosition(peakDbfs)) }} />
+      </div>
+      <div className="lt-scale lt-peak-scale" aria-hidden="true">
+        {PEAK_TICKS.map((tick) => (
+          <span key={tick} data-zero={tick === 0 || undefined} style={{ bottom: `${peakPosition(tick) * 100}%` }} />
+        ))}
+      </div>
+    </>
+  );
+};
+
+const FaderPeakReadout: React.FC<{ live: boolean; peakOf: (m: MetersSnapshot) => number }> = ({ live, peakOf }) => {
+  const peak = peakOf(useLiveMeters(live));
+  const peakDbfs = peak && Number.isFinite(peak) ? 20 * Math.log10(peak) : -Infinity;
+  const peakLabel = Number.isFinite(peakDbfs) ? `${peakDbfs.toFixed(1)} dBFS` : '−∞ dBFS';
+  const peakTitle = `Pico de muestras del analizador de pista en mono, después de la ganancia y el paneo: ${peakLabel}`;
+  return (
+    <div className="lt-peak-readout" title={peakTitle}>
+      {peakLabel}
+    </div>
+  );
+};
+
+const FaderLevelMeters: React.FC<{ live: boolean; levelsOf: (m: MetersSnapshot) => MeterLevels }> = ({ live, levelsOf }) => {
+  const lv = levelsOf(useLiveMeters(live));
+  return (
+    <>
+      <div className={`lt-meter${lv.dbScale ? ' lt-db-meter' : ''}`} aria-hidden="true">
+        <i />
+        <s style={{ height: meterMask(lv.l) }} />
+      </div>
+      <div className={`lt-meter${lv.dbScale ? ' lt-db-meter' : ''}`} aria-hidden="true">
+        <i />
+        <s style={{ height: meterMask(lv.r) }} />
+      </div>
+    </>
+  );
+};
+
 const StudioFader: React.FC<StudioFaderProps> = ({
   name,
   gain,
-  peak,
-  levelL,
-  levelR,
-  dbScale,
+  live,
+  peakOf,
+  levelsOf,
   onChangeGain,
 }) => {
   const faderRef = useRef<HTMLDivElement | null>(null);
@@ -188,10 +225,6 @@ const StudioFader: React.FC<StudioFaderProps> = ({
     const roundedDb = !isFinite(nextDb) ? -Infinity : Math.round(nextDb * 10) / 10;
     onChangeGain(dbToGain(roundedDb));
   };
-
-  const peakDbfs = peak && Number.isFinite(peak) ? 20 * Math.log10(peak) : -Infinity;
-  const peakLabel = Number.isFinite(peakDbfs) ? `${peakDbfs.toFixed(1)} dBFS` : '−∞ dBFS';
-  const peakTitle = `Pico de muestras del analizador de pista en mono, después de la ganancia y el paneo: ${peakLabel}`;
 
   return (
     <>
@@ -258,38 +291,11 @@ const StudioFader: React.FC<StudioFaderProps> = ({
           <div className="lt-handle" style={{ bottom: `${posPct}%` }} />
         </div>
 
-        {peak !== undefined ? (
-          <>
-            <div className="lt-meter lt-peak-meter" aria-hidden="true">
-              <i />
-              <s style={{ height: meterMask(peakPosition(peakDbfs)) }} />
-            </div>
-            <div className="lt-scale lt-peak-scale" aria-hidden="true">
-              {PEAK_TICKS.map((tick) => (
-                <span key={tick} data-zero={tick === 0 || undefined} style={{ bottom: `${peakPosition(tick) * 100}%` }} />
-              ))}
-            </div>
-          </>
-        ) : (
-          <>
-            <div className={`lt-meter${dbScale ? ' lt-db-meter' : ''}`} aria-hidden="true">
-              <i />
-              <s style={{ height: meterMask(levelL) }} />
-            </div>
-            <div className={`lt-meter${dbScale ? ' lt-db-meter' : ''}`} aria-hidden="true">
-              <i />
-              <s style={{ height: meterMask(levelR) }} />
-            </div>
-          </>
-        )}
+        {peakOf ? <FaderPeakMeter live={live} peakOf={peakOf} /> : <FaderLevelMeters live={live} levelsOf={levelsOf} />}
       </div>
 
       <div className="lt-db">{formatDb(db)}</div>
-      {peak !== undefined && (
-        <div className="lt-peak-readout" title={peakTitle}>
-          {peakLabel}
-        </div>
-      )}
+      {peakOf && <FaderPeakReadout live={live} peakOf={peakOf} />}
     </>
   );
 };
@@ -313,7 +319,6 @@ export function formatTrackDisplayName(name: string): string {
 export interface MultitrackMixerProps {
   project: SongProject;
   transport: TransportState;
-  metersRef: React.MutableRefObject<MetersSnapshot>;
   docked?: boolean;
   onToggleTrackMute: (trackId: string) => void;
   onToggleTrackSolo: (trackId: string) => void;
@@ -334,7 +339,6 @@ export interface MultitrackMixerProps {
 export const MultitrackMixer: React.FC<MultitrackMixerProps> = ({
   project,
   transport,
-  metersRef,
   docked = false,
   onToggleTrackMute,
   onToggleTrackSolo,
@@ -351,87 +355,16 @@ export const MultitrackMixer: React.FC<MultitrackMixerProps> = ({
   onChangeCueMasterGain,
   onResetMixer,
 }) => {
-  const [, setMeterTick] = useState(0);
-
-  // Poll meters into metersRef and refresh only MultitrackMixer at a maximum of 20 fps (50 ms)
-  useEffect(() => {
-    if (!transport.isPlaying) {
-      metersRef.current = {
-        tracks: {},
-        master: { rms: 0, peak: 0, clipping: false },
-      };
-      setMeterTick((t) => t + 1);
-      return;
-    }
-
-    const intervalId = window.setInterval(() => {
-      metersRef.current = audioEngine.getTrackMeters();
-      setMeterTick((t) => (t + 1) % 1000000);
-    }, 50);
-
-    return () => window.clearInterval(intervalId);
-  }, [transport.isPlaying, metersRef]);
-
-  const meters = metersRef.current;
   const anySolo = project.tracks.some((t) => t.soloed);
   const activeSection = project.sections.find((s) => s.id === transport.activeSectionId);
+  const cueMasterGain = project.cueMasterGain ?? 0.708; // -3.0 dB por defecto
+  const live = transport.isPlaying;
 
-  // Compute stereo L/R levels per track and bus
-  let maxMainBusLevel = 0;
-  let maxCueBusLevel = 0;
-
-  for (const trk of project.tracks) {
-    const isAudible = anySolo ? trk.soloed && !trk.muted : !trk.muted;
-    const rawRms = isAudible && transport.isPlaying ? meters.tracks[trk.id]?.rms || 0 : 0;
-    if (rawRms > 0) {
-      if (trk.bus === 'main' || trk.bus === 'both') {
-        maxMainBusLevel = Math.max(maxMainBusLevel, rawRms);
-      }
-      if (trk.bus === 'cue-click' || trk.bus === 'both') {
-        maxCueBusLevel = Math.max(maxCueBusLevel, rawRms);
-      }
-    }
-  }
-
-  // Synthesize realistic beat-synced meter pulse for the built-in Click & Cues strips when playing
-  const beatDecay = transport.isPlaying
-    ? Math.max(0, 1 - transport.beatProgress * 2.6)
-    : 0;
-  const clickStripLevel =
-    transport.isPlaying && project.clickEnabled && !anySolo
-      ? activityFromGain(project.clickGain) *
-        (transport.currentBeat === 1 ? 0.86 : 0.65) *
-        beatDecay
-      : 0;
-  const guideStripLevel =
-    transport.isPlaying && project.guideCuesEnabled && !anySolo
-      ? activityFromGain(project.guideGain) *
-        (transport.queuedSectionId ? 0.78 : 0.25) *
-        beatDecay
-      : 0;
-
-  maxCueBusLevel = Math.max(maxCueBusLevel, clickStripLevel, guideStripLevel);
-
-  const cueMasterGain = project.cueMasterGain ?? 0.708; // -3.0 dB default
-  const mainBusOutLevel = transport.isPlaying
-    ? Math.min(1, Math.max(maxMainBusLevel, meters.master.rms) * activityFromGain(project.masterGain) * 1.05)
-    : 0;
-  const cueBusOutLevel = transport.isPlaying
-    ? Math.min(1, maxCueBusLevel * activityFromGain(cueMasterGain) * 1.05)
-    : 0;
-
-  // Escritorio: el motor nativo mide los buses de verdad. Se muestran en la misma escala en dBFS
-  // que los medidores de pista. En la web se mantiene la estimación anterior.
-  const nb = transport.isPlaying ? meters.nativeBuses ?? null : null;
-  const busPos = (x: number) => peakPosition(x > 0 ? 20 * Math.log10(x) : -Infinity);
-  const stripLevels = (native: { l: number; r: number } | undefined, est: number, rFactor: number) =>
-    nb && native ? { l: busPos(native.l), r: busPos(native.r) } : { l: est, r: est * rFactor };
-  const clickLevels = stripLevels(nb?.click, clickStripLevel, 0.96);
-  const guideLevels = stripLevels(nb?.guide, guideStripLevel, 0.95);
-  const mainLevels = stripLevels(nb?.main, mainBusOutLevel, 0.95);
-  const cueLevels = stripLevels(nb?.cue, cueBusOutLevel, 0.95);
-  // Con niveles nativos la escala es dBFS: amarillo desde −6 dBFS y rojo desde −1 dBFS, como en las pistas.
-  const nativeScale = Boolean(meters.nativeBuses);
+  // Niveles de los buses: cada medidor los calcula con su propia lectura (ver componentes hoja).
+  const busLevelsOf = (bus: 'click' | 'guide' | 'main' | 'cue') => (m: MetersSnapshot): MeterLevels => {
+    const lv = computeMixerLevels(project, transport, m);
+    return { l: lv[bus].l, r: lv[bus].r, dbScale: lv.nativeScale };
+  };
 
   // Check if user already imported custom tracks named "Click" or "Guía" / "Cues"
   const hasCustomClickTrack = project.tracks.some((t) => {
@@ -484,10 +417,6 @@ export const MultitrackMixer: React.FC<MultitrackMixerProps> = ({
         <section className="lt-channels" aria-label="Canales">
           {project.tracks.map((track: TrackChannel) => {
             const isDimmed = track.muted || (anySolo && !track.soloed);
-            const peak =
-              !isDimmed && transport.isPlaying
-                ? meters.tracks[track.id]?.peak ?? 0
-                : 0;
             const isCueRoute = track.bus === 'cue-click';
             const displayName = formatTrackDisplayName(track.name);
 
@@ -511,7 +440,8 @@ export const MultitrackMixer: React.FC<MultitrackMixerProps> = ({
                 <StudioFader
                   name={displayName}
                   gain={track.gain}
-                  peak={peak}
+                  live={live}
+                  peakOf={(m) => trackPeak(project, transport, m, track.id)}
                   onChangeGain={(nextGain) => onChangeTrackGain(track.id, nextGain)}
                 />
 
@@ -574,9 +504,8 @@ export const MultitrackMixer: React.FC<MultitrackMixerProps> = ({
               <StudioFader
                 name="Click"
                 gain={project.clickGain}
-                levelL={clickLevels.l}
-                levelR={clickLevels.r}
-                dbScale={nativeScale}
+                live={live}
+                levelsOf={busLevelsOf('click')}
                 onChangeGain={onChangeClickGain}
               />
 
@@ -634,9 +563,8 @@ export const MultitrackMixer: React.FC<MultitrackMixerProps> = ({
               <StudioFader
                 name="Guía"
                 gain={project.guideGain}
-                levelL={guideLevels.l}
-                levelR={guideLevels.r}
-                dbScale={nativeScale}
+                live={live}
+                levelsOf={busLevelsOf('guide')}
                 onChangeGain={onChangeGuideGain}
               />
 
@@ -689,9 +617,8 @@ export const MultitrackMixer: React.FC<MultitrackMixerProps> = ({
             <StudioFader
               name="Main L/R"
               gain={project.masterGain}
-              levelL={mainLevels.l}
-              levelR={mainLevels.r}
-              dbScale={nativeScale}
+              live={live}
+              levelsOf={busLevelsOf('main')}
               onChangeGain={onChangeMasterGain}
             />
           </div>
@@ -708,9 +635,8 @@ export const MultitrackMixer: React.FC<MultitrackMixerProps> = ({
             <StudioFader
               name="Click / Cue"
               gain={cueMasterGain}
-              levelL={cueLevels.l}
-              levelR={cueLevels.r}
-              dbScale={nativeScale}
+              live={live}
+              levelsOf={busLevelsOf('cue')}
               onChangeGain={onChangeCueMasterGain}
             />
           </div>

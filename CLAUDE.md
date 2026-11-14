@@ -19,6 +19,8 @@ Reproductor de multitracks optimizado para cultos y música en vivo. Dispone de 
 - `src/utils/songSearch.ts` y `src/hooks/useProgressiveList.ts`: Búsqueda sin acentos ni mayúsculas (título, artista, tono, BPM) y render de listas largas por tandas, compartidos por la Biblioteca y el explorador del Setlist.
 - `desktop/frontend/*`: Puentes de la UI con Tauri: `RemoteConnectionBridge.tsx` (diálogo «Conexión remota», botón fijo en la barra superior), `DesktopAudioSettings.tsx`, `DesktopUpdates.tsx` y `previewInvoke.ts` (simulación del servidor LAN solo en `npm run dev`, excluida de producción).
 - `src/audio/nativeAudioEngine.ts`: Adaptador puente TypeScript para invocar los comandos Tauri del motor nativo en Rust (`audio_*`).
+- `src/audio/statePoller.ts`: Sondeo del estado nativo con una sola petición pendiente, respuestas obsoletas descartadas por generación y errores sin silenciar (lo usa `nativeAudioEngine.ts`).
+- `src/audio/meterFeed.ts` y `src/audio/liveMeters.ts`: Ciclo único de lectura de medidores (20 fps, solo mientras haya medidores suscritos) y el hook `useLiveMeters`; `src/utils/mixerLevels.ts` calcula los niveles de pista y de bus. Los medidores son componentes hoja: no re-renderizan la consola.
 - `src/audio/meterBallistics.ts`: Balística (caída ~20 dB/s, retención de recorte) de los picos reales que mide el motor nativo para los medidores de Arreglo y Mezcla.
 - `src/audio/audioEngine.ts`: Motor de audio Web (Web Audio API / OPFS). La versión web ya no se usa ni se mantiene; el archivo sigue porque el escritorio aún depende de partes de él (retiro pendiente).
 - `src/storage/*`: Persistencia en IndexedDB (`projectDb.ts`), OPFS (`opfsStorage.ts`), File System Access (`sourceFiles.ts`) y puente desktop (`desktopLibrary.ts`).
@@ -27,7 +29,7 @@ Reproductor de multitracks optimizado para cultos y música en vivo. Dispone de 
 - `desktop/src-tauri/src/lan.rs`: Servidor HTTP/WebSocket local para control remoto desde móviles (músicos y sonidistas) en la LAN (puerto 8765 definido como `const PORT` en `desktop/src-tauri/src/main.rs:14`).
 - `desktop/src-tauri/tests/`: Pruebas de integración de Rust (`lan_protocol.rs`, `verify_manual_flow.rs`, `import_flow.rs`, `benchmark_import.rs`).
 - `docs/AUDITORIA.md`: Guía para auditar el código (orden, reglas, lo ya conocido, formato del informe).
-- `test/`: Pruebas unitarias en Node/TypeScript (`titleCleaning.test.ts`, `trackFingerprint.test.ts`, `nativeCacheGeneration.test.ts`, `meterBallistics.test.ts`, `setlistPlan.test.ts`, `songSearch.test.ts`).
+- `test/`: Pruebas unitarias en Node/TypeScript (`titleCleaning.test.ts`, `trackFingerprint.test.ts`, `nativeCacheGeneration.test.ts`, `meterBallistics.test.ts`, `setlistPlan.test.ts`, `songSearch.test.ts`, `statePoller.test.ts`, `liveMeters.test.ts`).
 
 ---
 
