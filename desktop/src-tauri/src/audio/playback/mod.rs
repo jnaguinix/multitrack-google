@@ -37,6 +37,10 @@ pub use clock::{advance_clock, ClockJumps};
 pub mod jumps;
 pub mod transport;
 
+/// Fotogramas máximos por bloque del callback. Los búferes de mezcla se reservan con este tamaño al abrir la
+/// salida; WASAPI en modo compartido entrega bloques de unos pocos miles como mucho.
+const MAX_CALLBACK_FRAMES: usize = 32_768;
+
 pub struct PlaybackEngine {
     pub loaded_project_id: TokioMutex<Option<String>>,
     pub is_playing: Arc<AtomicBool>,
@@ -571,7 +575,7 @@ impl PlaybackEngine {
         *self.queued_jump.lock().unwrap() = None;
         {
             let mut gc = self.guide_cue.lock().unwrap();
-            gc.last_announced_section_id = None;
+            gc.last_announced_section = None;
             gc.active_chime_sample = None;
         }
 
@@ -840,14 +844,14 @@ impl PlaybackEngine {
         let stream_config: cpal::StreamConfig = default_config.into();
 
         // Pre-allocated scratch buffers for callback (avoids heap allocation in audio thread)
-        let mut main_l = Vec::<f32>::with_capacity(4096);
-        let mut main_r = Vec::<f32>::with_capacity(4096);
-        let mut cue_l = Vec::<f32>::with_capacity(4096);
-        let mut cue_r = Vec::<f32>::with_capacity(4096);
-        let mut both_l = Vec::<f32>::with_capacity(4096);
-        let mut both_r = Vec::<f32>::with_capacity(4096);
-        let mut click_buf = Vec::<f32>::with_capacity(4096);
-        let mut guide_buf = Vec::<f32>::with_capacity(4096);
+        let mut main_l = vec![0.0f32; MAX_CALLBACK_FRAMES];
+        let mut main_r = vec![0.0f32; MAX_CALLBACK_FRAMES];
+        let mut cue_l = vec![0.0f32; MAX_CALLBACK_FRAMES];
+        let mut cue_r = vec![0.0f32; MAX_CALLBACK_FRAMES];
+        let mut both_l = vec![0.0f32; MAX_CALLBACK_FRAMES];
+        let mut both_r = vec![0.0f32; MAX_CALLBACK_FRAMES];
+        let mut click_buf = vec![0.0f32; MAX_CALLBACK_FRAMES];
+        let mut guide_buf = vec![0.0f32; MAX_CALLBACK_FRAMES];
         // Fotograma de la canción donde debería empezar el siguiente bloque si el reloj fuera continuo.
         // Si no coincide (seek, salto de sección, vuelta de vamp) el metrónomo se recoloca.
         let mut expected_start_frame = u64::MAX;
@@ -880,16 +884,12 @@ impl PlaybackEngine {
 
                     let frames = data.len() / channels;
 
-                    // Ensure scratch buffers are correctly sized without reallocating
-                    if main_l.len() < frames {
-                        main_l.resize(frames, 0.0);
-                        main_r.resize(frames, 0.0);
-                        cue_l.resize(frames, 0.0);
-                        cue_r.resize(frames, 0.0);
-                        both_l.resize(frames, 0.0);
-                        both_r.resize(frames, 0.0);
-                        click_buf.resize(frames, 0.0);
-                        guide_buf.resize(frames, 0.0);
+                    // Los búferes de mezcla se dimensionaron al crear el stream (MAX_CALLBACK_FRAMES): un bloque
+                    // mayor no se procesa (silencio y aviso en las estadísticas) en vez de reasignar aquí (A10).
+                    if frames > MAX_CALLBACK_FRAMES {
+                        data.fill(0.0);
+                        stats.underruns.fetch_add(1, Ordering::Relaxed);
+                        return;
                     }
                     main_l[..frames].fill(0.0);
                     main_r[..frames].fill(0.0);

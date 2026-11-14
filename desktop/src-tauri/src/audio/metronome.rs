@@ -135,6 +135,9 @@ impl ActiveClickPulse {
     }
 }
 
+/// Máximo de clics sonando a la vez. Un clic dura unos 100 ms: ni a 300 BPM con subdivisiones se acercan.
+const MAX_ACTIVE_PULSES: usize = 64;
+
 pub struct MetronomeEngine {
     pub config: MetronomeConfig,
     active_pulses: Vec<ActiveClickPulse>,
@@ -145,7 +148,8 @@ impl MetronomeEngine {
     pub fn new(config: MetronomeConfig) -> Self {
         Self {
             config,
-            active_pulses: Vec::new(),
+            // Capacidad fija reservada aquí, fuera del callback: render_block nunca la amplía.
+            active_pulses: Vec::with_capacity(MAX_ACTIVE_PULSES),
             last_substep: -1,
         }
     }
@@ -227,7 +231,10 @@ impl MetronomeEngine {
                     sample_rate,
                     offset,
                 );
-                self.active_pulses.push(pulse);
+                // Sin espacio no se amplía el vector (asignaría dentro del callback): se omite el clic.
+                if self.active_pulses.len() < self.active_pulses.capacity() {
+                    self.active_pulses.push(pulse);
+                }
             }
             self.last_substep = s;
             s += 1;
@@ -247,4 +254,23 @@ impl MetronomeEngine {
         // Clean up finished pulses
         self.active_pulses.retain(|p| p.current_sample < p.total_samples);
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_a10_el_metronomo_no_asigna_memoria_al_renderizar() {
+        let mut met = MetronomeEngine::new(MetronomeConfig { enabled: true, bpm: 120.0, beats_per_bar: 4, subdivision: 2, gain: 1.0, split_mono: false });
+        let mut out = vec![0.0f32; 480];
+        // Desde el primer pulso y durante 4 s (varios pulsos solapados por la subdivisión).
+        let asignaciones = crate::alloc_probe::count_allocs(|| {
+            for b in 0..400u64 {
+                met.render_block(b * 480, (b + 1) * 480, 480, 48_000, &mut out);
+            }
+        });
+        assert_eq!(asignaciones, 0, "el metrónomo asignó memoria dentro del bloque de audio");
+    }
+
 }

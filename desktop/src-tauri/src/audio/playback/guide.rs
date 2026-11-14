@@ -1,10 +1,19 @@
 use super::NativeSongSection;
 
+/// Hash estable del id de una sección, sin asignar memoria.
+fn hash_section_id(id: &str) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    id.hash(&mut h);
+    h.finish()
+}
+
 pub struct GuideCueEngine {
     pub enabled: bool,
     pub gain: f32, // default 1.0 (level = guide_gain * 0.25)
     pub active_chime_sample: Option<usize>, // current progress in samples (0..total_chime_samples)
-    pub last_announced_section_id: Option<String>,
+    /// Hash del id de la última sección anunciada (comparar hashes evita clonar el `String` en el callback).
+    pub last_announced_section: Option<u64>,
 }
 
 impl GuideCueEngine {
@@ -13,7 +22,7 @@ impl GuideCueEngine {
             enabled: true,
             gain: 1.0,
             active_chime_sample: None,
-            last_announced_section_id: None,
+            last_announced_section: None,
         }
     }
 
@@ -40,8 +49,9 @@ impl GuideCueEngine {
         // Check if an upcoming section starts within 2.0s
         for sec in sections {
             if sec.start_sec > cur_sec && (sec.start_sec - cur_sec) <= 2.0 {
-                if self.last_announced_section_id.as_deref() != Some(&sec.id) {
-                    self.last_announced_section_id = Some(sec.id.clone());
+                let id_hash = hash_section_id(&sec.id);
+                if self.last_announced_section != Some(id_hash) {
+                    self.last_announced_section = Some(id_hash);
                     self.trigger_chime();
                 }
                 break;
@@ -90,3 +100,38 @@ impl GuideCueEngine {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn seccion(id: &str, inicio: f64, fin: f64) -> NativeSongSection {
+        NativeSongSection { id: id.to_string(), name: id.to_string(), code: None, start_sec: inicio, end_sec: fin }
+    }
+
+    #[test]
+    fn test_a10_la_guia_no_asigna_memoria_al_anunciar_una_seccion() {
+        let secciones = vec![seccion("verso", 0.0, 10.0), seccion("coro", 10.0, 20.0)];
+        let mut guia = GuideCueEngine::new();
+        let mut out = vec![0.0f32; 480];
+        // Entre 8 y 10 s la guía anuncia «coro»; se renderizan varios bloques con el aviso sonando.
+        let asignaciones = crate::alloc_probe::count_allocs(|| {
+            for b in 0..60u64 {
+                guia.render_block(8 * 48_000 + b * 480, 480, 48_000, &secciones, &mut out);
+            }
+        });
+        assert_eq!(asignaciones, 0, "la guía asignó memoria dentro del bloque de audio");
+    }
+
+    #[test]
+    fn test_a10_la_guia_anuncia_cada_seccion_una_sola_vez() {
+        let secciones = vec![seccion("verso", 0.0, 10.0), seccion("coro", 10.0, 20.0)];
+        let mut guia = GuideCueEngine::new();
+        let mut out = vec![0.0f32; 480];
+        guia.render_block(9 * 48_000, 480, 48_000, &secciones, &mut out);
+        assert!(guia.active_chime_sample.is_some(), "debe anunciar el coro");
+        guia.active_chime_sample = None;
+        guia.render_block(9 * 48_000 + 480, 480, 48_000, &secciones, &mut out);
+        assert!(guia.active_chime_sample.is_none(), "no debe repetir el aviso de la misma sección");
+    }
+    }
