@@ -8,6 +8,7 @@
 
 import { SongProject, TrackChannel, TransportState, MetersSnapshot } from '../types/project';
 import { MeterBallistics, NativeMetersSnapshot } from './meterBallistics';
+import { StatePoller } from './statePoller';
 import { loadProjectStemsFromDb, extractStemArrayBuffer } from '../storage/projectDb';
 import {
   pickNativeFolder,
@@ -71,7 +72,9 @@ export class NativeAudioEngine {
   private loadingPromises = new Map<string, Promise<{ peaksMap: Map<string, number[]>; wasCancelled: boolean }>>();
   private transportListeners = new Set<(transport: TransportState) => void>();
   private cacheListeners = new Set<() => void>();
-  private pollInterval: number | null = null;
+  private poller: StatePoller<NativePlaybackSnapshot> | null = null;
+  private lastPollErrorLogMs = 0;
+  private suppressedPollErrors = 0;
   private onSongEndedCallback: (() => void) | null = null;
   private onNoticeCallback: ((msg: string) => void) | null = null;
   private onDeviceDisconnectedCallback: ((disconnected: boolean) => void) | null = null;
@@ -309,75 +312,96 @@ export class NativeAudioEngine {
   }
 
   // ===========================================================================
-  // BUCLE DE POLLING DE ESTADO (~30 ms para suavidad de 30 fps)
+  // SONDEO DE ESTADO (una sola petición pendiente; ver statePoller.ts)
   // ===========================================================================
   private startPolling(): void {
-    if (this.pollInterval != null) return;
-    this.pollInterval = window.setInterval(async () => {
-      const invoke = getInvoke();
-      if (!invoke) return;
+    if (this.poller) return;
+    this.poller = new StatePoller<NativePlaybackSnapshot>({
+      request: async () => {
+        const invoke = getInvoke();
+        if (!invoke) return null;
+        return invoke<NativePlaybackSnapshot>('audio_get_playback_state');
+      },
+      onSnapshot: (pb) => this.applySnapshot(pb),
+      onError: (err) => this.reportPollError(err),
+      // Reproduciendo, ~30 fps; en pausa basta una consulta cada 200 ms.
+      delayMs: (last) => (last?.isPlaying ? 33 : 200),
+    });
+    this.poller.start();
+  }
 
-      try {
-        const pb = await invoke<NativePlaybackSnapshot>('audio_get_playback_state');
-        if (!pb) return;
+  /** Registra los fallos del sondeo sin inundar la consola: como mucho un aviso cada 5 s, con el recuento. */
+  private reportPollError(err: unknown): void {
+    const now = Date.now();
+    if (now - this.lastPollErrorLogMs < 5000) {
+      this.suppressedPollErrors++;
+      return;
+    }
+    const extra = this.suppressedPollErrors > 0 ? ` (${this.suppressedPollErrors} fallos más desde el último aviso)` : '';
+    console.warn(`[NativeAudioEngine] Error consultando el estado de reproducción${extra}:`, err);
+    this.lastPollErrorLogMs = now;
+    this.suppressedPollErrors = 0;
+  }
 
-        this.lastPlaybackState = pb;
-        this.meterBallistics.update(pb.meters, meterNow());
-        const curSec = pb.positionSec;
-        const totSec = pb.durationSec;
-        this.lastPositionSec = curSec;
-        this.lastDurationSec = totSec;
+  /** Pide una actualización de estado inmediata (tras play, pausa, seek, salto, carga…). */
+  private refreshStateNow(): void {
+    this.poller?.pollNow();
+  }
 
-        // Detección de desconexión de hardware en caliente
-        if (pb.deviceDisconnected) {
-          if (!this.deviceDisconnectedAlerted) {
-            this.deviceDisconnectedAlerted = true;
-            this.onDeviceDisconnectedCallback?.(true);
-            this.onNoticeCallback?.('Dispositivo de audio desconectado. Reproducción pausada y posición conservada.');
-          }
-        } else if (this.deviceDisconnectedAlerted) {
-          this.deviceDisconnectedAlerted = false;
-          this.onDeviceDisconnectedCallback?.(false);
-        }
+  private applySnapshot(pb: NativePlaybackSnapshot): void {
+    this.lastPlaybackState = pb;
+    this.meterBallistics.update(pb.meters, meterNow());
+    const curSec = pb.positionSec;
+    const totSec = pb.durationSec;
+    this.lastPositionSec = curSec;
+    this.lastDurationSec = totSec;
 
-        // Cálculo de compás y tempo
-        const bpm = (this.currentProject?.bpm) || 120;
-        const bpb = (this.currentProject?.beatsPerBar) || 4;
-        const secPerBeat = 60 / bpm;
-        const totalBeats = curSec / secPerBeat;
-        const currentBar = Math.floor(totalBeats / bpb) + 1;
-        const currentBeat = (Math.floor(totalBeats) % bpb) + 1;
-        const beatProgress = totalBeats - Math.floor(totalBeats);
-
-        // Detección de fin de canción para setlist automático
-        if (this.wasPlayingBeforeEnd && !pb.isPlaying && pb.totalFrames > 0 && pb.currentFrame >= pb.totalFrames) {
-          this.wasPlayingBeforeEnd = false;
-          console.info('[NativeAudioEngine] Canción finalizada.');
-          this.onSongEndedCallback?.();
-        } else {
-          this.wasPlayingBeforeEnd = pb.isPlaying;
-        }
-
-        this.currentTransport = {
-          isPlaying: pb.isPlaying,
-          currentTimeSec: curSec,
-          totalDurationSec: totSec,
-          currentBar,
-          currentBeat,
-          beatProgress,
-          activeSectionId: pb.activeSectionId || null,
-          queuedSectionId: pb.queuedSectionId || null,
-          queuedTargetBar: null,
-          countdownBeats: 0,
-          isVamping: Boolean(pb.isVamping),
-          lastCueMessage: null,
-        };
-
-        this.notifyTransport();
-      } catch {
-        // Silenciar errores transitorios en polling
+    // Detección de desconexión de hardware en caliente
+    if (pb.deviceDisconnected) {
+      if (!this.deviceDisconnectedAlerted) {
+        this.deviceDisconnectedAlerted = true;
+        this.onDeviceDisconnectedCallback?.(true);
+        this.onNoticeCallback?.('Dispositivo de audio desconectado. Reproducción pausada y posición conservada.');
       }
-    }, 33);
+    } else if (this.deviceDisconnectedAlerted) {
+      this.deviceDisconnectedAlerted = false;
+      this.onDeviceDisconnectedCallback?.(false);
+    }
+
+    // Cálculo de compás y tempo
+    const bpm = (this.currentProject?.bpm) || 120;
+    const bpb = (this.currentProject?.beatsPerBar) || 4;
+    const secPerBeat = 60 / bpm;
+    const totalBeats = curSec / secPerBeat;
+    const currentBar = Math.floor(totalBeats / bpb) + 1;
+    const currentBeat = (Math.floor(totalBeats) % bpb) + 1;
+    const beatProgress = totalBeats - Math.floor(totalBeats);
+
+    // Detección de fin de canción para setlist automático
+    if (this.wasPlayingBeforeEnd && !pb.isPlaying && pb.totalFrames > 0 && pb.currentFrame >= pb.totalFrames) {
+      this.wasPlayingBeforeEnd = false;
+      console.info('[NativeAudioEngine] Canción finalizada.');
+      this.onSongEndedCallback?.();
+    } else {
+      this.wasPlayingBeforeEnd = pb.isPlaying;
+    }
+
+    this.currentTransport = {
+      isPlaying: pb.isPlaying,
+      currentTimeSec: curSec,
+      totalDurationSec: totSec,
+      currentBar,
+      currentBeat,
+      beatProgress,
+      activeSectionId: pb.activeSectionId || null,
+      queuedSectionId: pb.queuedSectionId || null,
+      queuedTargetBar: null,
+      countdownBeats: 0,
+      isVamping: Boolean(pb.isVamping),
+      lastCueMessage: null,
+    };
+
+    this.notifyTransport();
   }
 
   // ===========================================================================
@@ -416,6 +440,7 @@ export class NativeAudioEngine {
 
     try {
       await invoke('audio_play');
+      this.refreshStateNow();
     } catch (err: any) {
       console.warn('[NativeAudioEngine] Error al reproducir:', err);
       this.onNoticeCallback?.(`Error al reproducir: ${err}`);
@@ -427,6 +452,7 @@ export class NativeAudioEngine {
     if (!invoke) return;
     try {
       await invoke('audio_pause');
+      this.refreshStateNow();
     } catch (err: any) {
       console.warn('[NativeAudioEngine] Error al pausar:', err);
     }
@@ -444,7 +470,9 @@ export class NativeAudioEngine {
     const invoke = getInvoke();
     if (!invoke) return;
     try {
+      this.poller?.invalidate();
       await invoke('audio_stop');
+      this.refreshStateNow();
       this.currentTransport.isPlaying = false;
       this.currentTransport.currentTimeSec = 0;
       this.currentTransport.currentBar = 1;
@@ -460,6 +488,7 @@ export class NativeAudioEngine {
     if (!invoke) return;
     try {
       await invoke('audio_seek', { positionSec: Math.max(0, sec) });
+      this.refreshStateNow();
     } catch (err: any) {
       console.warn('[NativeAudioEngine] Error al hacer seek:', err);
     }
@@ -471,6 +500,7 @@ export class NativeAudioEngine {
     try {
       const qMode = mode || this.currentProject?.quantizeMode || '1-bar';
       await invoke('audio_queue_jump', { sectionId, mode: qMode });
+      this.refreshStateNow();
     } catch (err: any) {
       console.warn('[NativeAudioEngine] Error en salto de sección:', err);
       this.onNoticeCallback?.(`Error en salto: ${err}`);
@@ -482,6 +512,7 @@ export class NativeAudioEngine {
     if (!invoke) return;
     try {
       await invoke('audio_cancel_jump');
+      this.refreshStateNow();
     } catch (err: any) {
       console.warn('[NativeAudioEngine] Error cancelando salto:', err);
     }
@@ -493,6 +524,7 @@ export class NativeAudioEngine {
     try {
       const targetState = enable !== undefined ? enable : !this.currentTransport.isVamping;
       const res = await invoke<boolean>('audio_toggle_vamp', { enable: targetState });
+      this.refreshStateNow();
       return res;
     } catch (err: any) {
       console.warn('[NativeAudioEngine] Error alternando vamp:', err);
@@ -608,6 +640,7 @@ export class NativeAudioEngine {
     this.currentProject = project;
     if (prevId && prevId !== project.id) {
       this.loadedProjectId = null;
+      this.poller?.invalidate();
       void this.stop();
     }
   }
@@ -942,6 +975,7 @@ export class NativeAudioEngine {
         });
 
         this.loadedProjectId = project.id;
+        this.poller?.invalidate();
         this.lastDurationSec = loadRes?.durationSec || project.durationSec || 0;
 
         const sr = loadRes?.sampleRate || 48000;
