@@ -153,4 +153,4 @@ Puentes con el escritorio en `desktop/frontend/`: `RemoteConnectionBridge.tsx` m
 1. **`handleRelinkProject` en `src/App.tsx`**:
    - Se mantuvo directamente en `App.tsx` para respetar el orden de declaración y evitar errores de hoisting temporal (`TS2448`) con `activateProject` y `handleSelectView`.
    - *Acción recomendada*: Pasar las dependencias como callbacks a un submódulo específico durante una próxima fase de refactorización de vistas.
-2. **Archivos grandes**: `App.tsx` (~1700), `LibraryAndModals.tsx` (~1550).
+2. **Archivos grandes**: `App.tsx` (~1490), `LibraryAndModals.tsx` (~1550).

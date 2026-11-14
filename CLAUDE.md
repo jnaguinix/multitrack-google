@@ -9,7 +9,8 @@ Reproductor de multitracks optimizado para cultos y música en vivo. Dispone de 
 
 ## 2. Dónde está cada cosa
 - `src/App.tsx`: Componente raíz, orquestador de vistas, modales globales, layout y referencias principales.
-- `src/hooks/*`: Custom hooks desacoplados (`useImportFlow`, `useOptimization`, `useSetlist`, `useProjectActions`, `useMixerActions`, `useDawDragDrop`).
+- `src/hooks/*`: Custom hooks desacoplados (`useImportFlow`, `useOptimization`, `useSetlist`, `useProjectActions`, `useMixerActions`, `useDawDragDrop`, `useStudioShortcuts`).
+- `src/components/AppDialogs.tsx`: Diálogos y avisos globales de `App` (eliminar de la biblioteca, carpeta no encontrada, aviso de acción).
 - `src/hooks/useSetlistMeta.ts`: Nombre y fecha del servicio (almacenamiento local de la app).
 - `src/components/SetlistStrip.tsx`: Fila de fichas del setlist con la flecha de transición por canción y el modo editar.
 - `src/utils/setlistTransition.ts` y `src/utils/sectionTemplates.ts`: Transición por canción (con respaldo en el ajuste general) y plantillas de sección (Intro, Verso 1, Coro…).
@@ -84,7 +85,7 @@ Reproductor de multitracks optimizado para cultos y música en vivo. Dispone de 
 - **Pistas más cortas que la canción tras un salto de sección**: un feeder que ya llegó al final de su archivo no evalúa saltos ni vamp; si la canción salta hacia atrás, esa pista (p. ej. una guía corta) queda en silencio hasta el siguiente seek. No medido en el motor real.
 - **Crossfade de empalme con tono**: el cruce de 8 ms de un salto o vuelta de vamp se lee del archivo sin pasar por el remuestreador; con tono distinto de cero esos 8 ms suenan sin transponer.
 - **Saltos cuantizados tardíos**: Si el compás objetivo ya cayó dentro del audio ya encolado en el ring buffer `rtrb`, el salto se pospone al siguiente compás. Cifras reales (`playback/mod.rs`): el ring buffer tiene 500 ms de *capacidad*, el feeder lo mantiene en ~350 ms y el callback sale de buffering a partir de 150 ms disponibles por pista; no son equivalentes.
-- **Archivos grandes**: `src/App.tsx` (~1700), `src/components/LibraryAndModals.tsx` (~1550).
+- **Archivos grandes**: `src/App.tsx` (~1490), `src/components/LibraryAndModals.tsx` (~1550).
 - **Ramas sin fusionar**: `diag/medidores-reales` y `diag/tiempo-cache` (trabajo ya incorporado por otra vía; sin revisar si conservan algo propio).
 - **Fase 5 diferida**: Ruteo libre multicanal a más de 2 salidas físicas independientes de la tarjeta.
 - **Fase 7 diferida**: Soporte de drivers de audio ASIO (diferido, sin decidir: depende de la licencia del SDK de Steinberg y de la decisión del dueño).
