@@ -6,6 +6,46 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use crate::audio::playback::PlaybackEngine;
 
+/// Elige la configuración de salida del dispositivo.
+///
+/// La caché PCM de un proyecto está a una frecuencia concreta (`required_rate`) y los feeders producen
+/// audio a esa frecuencia: si la salida abre a otra, todo suena con otra velocidad y tono. Por eso, con un
+/// proyecto cargado, la salida debe abrirse exactamente a esa frecuencia; si el dispositivo no la admite
+/// se devuelve un error explícito en lugar de reproducir mal (A08). Sin proyecto cargado
+/// (`required_rate == None`) vale la configuración por defecto del dispositivo.
+pub fn resolve_output_config(
+    default: cpal::SupportedStreamConfig,
+    ranges: &[cpal::SupportedStreamConfigRange],
+    required_rate: Option<u32>,
+) -> Result<cpal::SupportedStreamConfig, String> {
+    let Some(required) = required_rate else {
+        return Ok(default);
+    };
+    if default.sample_rate() == required {
+        return Ok(default);
+    }
+    // Primero una configuración con el mismo número de canales y formato que la predeterminada.
+    let same_shape = ranges
+        .iter()
+        .filter(|r| r.channels() == default.channels() && r.sample_format() == default.sample_format())
+        .find_map(|r| r.clone().try_with_sample_rate(required));
+    if let Some(cfg) = same_shape {
+        return Ok(cfg);
+    }
+    if let Some(cfg) = ranges
+        .iter()
+        .filter(|r| r.channels() == default.channels())
+        .find_map(|r| r.clone().try_with_sample_rate(required))
+    {
+        return Ok(cfg);
+    }
+    Err(format!(
+        "La caché del proyecto está a {required} Hz pero el dispositivo de salida opera a {} Hz y no admite {required} Hz. \
+         Cambia la frecuencia en Ajustes de audio y regenera la caché nativa, o elige otro dispositivo.",
+        default.sample_rate()
+    ))
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct AudioSettings {
@@ -473,6 +513,39 @@ pub fn play_test_tone(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn cfg(rate: u32) -> cpal::SupportedStreamConfig {
+        cpal::SupportedStreamConfig::new(2, rate, cpal::SupportedBufferSize::Unknown, cpal::SampleFormat::F32)
+    }
+
+    fn rango(min: u32, max: u32) -> cpal::SupportedStreamConfigRange {
+        cpal::SupportedStreamConfigRange::new(2, min, max, cpal::SupportedBufferSize::Unknown, cpal::SampleFormat::F32)
+    }
+
+    #[test]
+    fn test_a08_sin_proyecto_cargado_vale_la_configuracion_por_defecto() {
+        let c = resolve_output_config(cfg(44_100), &[rango(44_100, 44_100)], None).unwrap();
+        assert_eq!(c.sample_rate(), 44_100);
+    }
+
+    #[test]
+    fn test_a08_misma_frecuencia_que_la_cache_usa_la_por_defecto() {
+        let c = resolve_output_config(cfg(48_000), &[], Some(48_000)).unwrap();
+        assert_eq!(c.sample_rate(), 48_000);
+    }
+
+    #[test]
+    fn test_a08_abre_la_salida_a_la_frecuencia_de_la_cache_si_el_dispositivo_la_admite() {
+        let c = resolve_output_config(cfg(44_100), &[rango(44_100, 96_000)], Some(48_000)).unwrap();
+        assert_eq!(c.sample_rate(), 48_000, "la salida debe abrirse a la frecuencia de la caché");
+        assert_eq!(c.channels(), 2);
+    }
+
+    #[test]
+    fn test_a08_error_explicito_si_el_dispositivo_no_admite_la_frecuencia_de_la_cache() {
+        let e = resolve_output_config(cfg(44_100), &[rango(44_100, 44_100)], Some(48_000)).unwrap_err();
+        assert!(e.contains("48000") && e.contains("44100"), "el mensaje debe nombrar ambas frecuencias: {e}");
+    }
 
     #[test]
     fn test_audio_settings_default_and_serialization() {

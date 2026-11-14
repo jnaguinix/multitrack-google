@@ -10,7 +10,7 @@ use tokio::sync::Mutex as TokioMutex;
 
 use crate::audio::cache::{get_project_cache_dir, read_track_metadata};
 use crate::audio::metronome::{MetronomeConfig, MetronomeEngine};
-use crate::audio::output::{get_device_name, AudioEngineState, AudioStreamStats};
+use crate::audio::output::{get_device_name, resolve_output_config, AudioEngineState, AudioStreamStats};
 use crate::audio::resampler::TrackResampler;
 
 pub mod fade;
@@ -789,6 +789,19 @@ impl PlaybackEngine {
         let default_config = device
             .default_output_config()
             .map_err(|e| format!("Error en configuración de salida: {e}"))?;
+
+        // Con un proyecto cargado la salida debe abrirse a la frecuencia de su caché PCM (A08): los
+        // feeders producen audio a esa frecuencia y `self.sample_rate` la guarda desde `load_project`.
+        let cache_rate = if self.loaded_project_id.lock().await.is_some() {
+            Some(self.sample_rate.load(Ordering::SeqCst))
+        } else {
+            None
+        };
+        let supported_ranges: Vec<cpal::SupportedStreamConfigRange> = device
+            .supported_output_configs()
+            .map(|it| it.collect())
+            .unwrap_or_default();
+        let default_config = resolve_output_config(default_config, &supported_ranges, cache_rate)?;
 
         let sample_rate_u32 = default_config.sample_rate();
         self.sample_rate.store(sample_rate_u32, Ordering::SeqCst);
