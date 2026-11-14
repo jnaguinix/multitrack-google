@@ -1428,3 +1428,33 @@
         assert!(engine.is_playing.load(Ordering::SeqCst));
     }
 
+    // ---------------------------------------------------------------------
+    // Fase 1 de la auditoría: reloj, fin de pista, seek y recuperación (A01–A04, A15)
+    // ---------------------------------------------------------------------
+
+    #[test]
+    fn test_a15_el_vaciado_parcial_no_añade_relleno_de_silencio() {
+        // Tramo de 320 fotogramas de señal (menos que un bloque de 1024). Antes de la corrección, rubato
+        // devolvía un bloque entero de salida (958 fotogramas) y el empalme insertaba ~640 de relleno.
+        for (n, ya_compensado) in [(320usize, false), (320, true), (1000, true), (5, true)] {
+            let mut r = TrackResampler::new(48000, 48000, 0, 1024, 2).unwrap();
+            let mut compensado = ya_compensado;
+            let mut input: Vec<Vec<f32>> = vec![vec![0.5; n]; 2];
+            let mut out = Vec::new();
+            drain_staging_through_resampler(&mut r, false, &mut input, &mut out, &mut compensado, true);
+            let fotogramas = out.len() / 2;
+            let esperado = n + if ya_compensado { r.output_delay() } else { 0 };
+            assert_eq!(fotogramas, esperado, "n={n}, compensado={ya_compensado}");
+        }
+    }
+
+    #[test]
+    fn test_a15_tras_un_empalme_el_remuestreador_empieza_un_tramo_nuevo() {
+        let mut r = TrackResampler::new(48000, 48000, 0, 1024, 2).unwrap();
+        let mut compensado = true;
+        begin_new_segment(&mut r, &mut compensado, 0);
+        assert!(!compensado, "el retardo del filtro debe volver a compensarse");
+        assert_eq!(r.resample_ratio(), 1.0);
+        begin_new_segment(&mut r, &mut compensado, 12);
+        assert!((r.resample_ratio() - 0.5).abs() < 1e-9, "una octava arriba reduce a la mitad los fotogramas de salida");
+    }

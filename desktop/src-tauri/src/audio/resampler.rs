@@ -8,6 +8,9 @@ pub struct TrackResampler {
     pub chunk_size: usize,
     channels: usize,
     output_delay_frames: usize,
+    base_ratio: f64,
+    /// Relación salida/entrada vigente (la base por el factor de tono).
+    current_ratio: f64,
 }
 
 impl TrackResampler {
@@ -38,11 +41,13 @@ impl TrackResampler {
         )
         .map_err(|e| format!("Error creando resampler rubato: {e}"))?;
 
+        let mut current_ratio = base_ratio;
         if initial_pitch_semitones != 0 {
             let pitch_factor = 2.0f64.powf(-(initial_pitch_semitones as f64) / 12.0);
             resampler
                 .set_resample_ratio(base_ratio * pitch_factor, false)
                 .map_err(|e| format!("Error estableciendo tono inicial: {e}"))?;
+            current_ratio = base_ratio * pitch_factor;
         }
 
         let output_delay_frames = resampler.output_delay();
@@ -52,7 +57,14 @@ impl TrackResampler {
             chunk_size,
             channels,
             output_delay_frames,
+            base_ratio,
+            current_ratio,
         })
+    }
+
+    /// Relación salida/entrada vigente: fotogramas de salida por cada fotograma de entrada.
+    pub fn resample_ratio(&self) -> f64 {
+        self.current_ratio
     }
 
     pub fn output_delay(&self) -> usize {
@@ -76,7 +88,9 @@ impl TrackResampler {
         let pitch_factor = 2.0f64.powf(-(semitones as f64) / 12.0);
         self.resampler
             .set_resample_ratio_relative(pitch_factor, ramp)
-            .map_err(|e| format!("Error cambiando ratio relativo en rubato: {e}"))
+            .map_err(|e| format!("Error cambiando ratio relativo en rubato: {e}"))?;
+        self.current_ratio = self.base_ratio * pitch_factor;
+        Ok(())
     }
 
     /// Resamples a chunk of multi-channel audio data.

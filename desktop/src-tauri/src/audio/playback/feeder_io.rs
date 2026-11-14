@@ -103,27 +103,61 @@ pub fn drain_staging_through_resampler(
     }
 
     if allow_partial && !input_staging[0].is_empty() {
-        let partial_in: Vec<Vec<f32>> = input_staging.iter_mut().map(|ch| ch.drain(..).collect()).collect();
-        if let Ok(processed) = resampler.process_partial(Some(&partial_in)) {
-            if !processed.is_empty() {
-                let out_frames = processed[0].len();
-                let start_frame = if !*delay_compensated {
-                    *delay_compensated = true;
-                    resampler.output_delay().min(out_frames)
+        let partial_len = input_staging[0].len();
+        let was_compensated = *delay_compensated;
+        let delay = resampler.output_delay();
+        // Fotogramas de salida que corresponden a lo que entró: n por la relación de remuestreo, más el
+        // retardo del filtro, que quedó pendiente en los bloques anteriores. Si el retardo aún no se
+        // había compensado, los primeros `delay` fotogramas de la salida se descartan y no cuentan.
+        let mut needed = (partial_len as f64 * resampler.resample_ratio()).round() as usize
+            + if was_compensated { delay } else { 0 };
+        let mut to_skip = if was_compensated { 0 } else { delay };
+        *delay_compensated = true;
+
+        // El bloque parcial se completa con ceros. No se usa `process_partial` de rubato: devuelve
+        // siempre un bloque entero de salida (con relleno), y empalmar ese relleno insertaría silencio y
+        // retrasaría el audio en cada salto de sección o vuelta de vamp.
+        let mut chunk_in: Vec<Vec<f32>> = input_staging
+            .iter_mut()
+            .map(|ch| {
+                let mut v: Vec<f32> = ch.drain(..).collect();
+                v.resize(chunk_size, 0.0);
+                v
+            })
+            .collect();
+        // Con n cercano al tamaño del bloque hacen falta uno o dos bloques más de ceros para sacar todo.
+        for _ in 0..4 {
+            let Ok(processed) = resampler.process(&chunk_in) else { break };
+            let out_frames = processed[0].len();
+            let from = to_skip.min(out_frames);
+            to_skip -= from;
+            let take = needed.min(out_frames - from);
+            for i in from..from + take {
+                if is_mono {
+                    let s = processed[0][i];
+                    output_staging.push(s);
+                    output_staging.push(s);
                 } else {
-                    0
-                };
-                for i in start_frame..out_frames {
-                    if is_mono {
-                        let s = processed[0][i];
-                        output_staging.push(s);
-                        output_staging.push(s);
-                    } else {
-                        output_staging.push(processed[0][i]);
-                        output_staging.push(processed[1][i]);
-                    }
+                    output_staging.push(processed[0][i]);
+                    output_staging.push(processed[1][i]);
                 }
+            }
+            needed -= take;
+            if needed == 0 {
+                break;
+            }
+            for ch in chunk_in.iter_mut() {
+                ch.fill(0.0);
             }
         }
     }
+}
+
+/// Prepara el remuestreador para un tramo nuevo del archivo tras un empalme (salto de sección o
+/// vuelta de vamp): descarta el estado del tramo anterior y vuelve a compensar el retardo del filtro,
+/// igual que tras un seek.
+pub fn begin_new_segment(resampler: &mut TrackResampler, delay_compensated: &mut bool, pitch_semitones: i32) {
+    resampler.reset();
+    let _ = resampler.set_pitch(pitch_semitones, false);
+    *delay_compensated = false;
 }

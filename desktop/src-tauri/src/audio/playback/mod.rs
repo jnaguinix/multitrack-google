@@ -344,6 +344,7 @@ impl PlaybackEngine {
                                 current_frame = jump.target_frame + m as u64;
                                 let next_offset = current_frame * bytes_per_frame as u64;
                                 let _ = file.seek(SeekFrom::Start(next_offset));
+                                begin_new_segment(&mut resampler, &mut delay_compensated, thread_pitch.load(Ordering::Relaxed));
                                 *thread_jump.lock().unwrap() = None;
                                 continue;
                             }
@@ -397,6 +398,7 @@ impl PlaybackEngine {
                                     current_frame = loop_start + m as u64;
                                     let next_offset = current_frame * bytes_per_frame as u64;
                                     let _ = file.seek(SeekFrom::Start(next_offset));
+                                    begin_new_segment(&mut resampler, &mut delay_compensated, thread_pitch.load(Ordering::Relaxed));
                                     continue;
                                 }
                             }
