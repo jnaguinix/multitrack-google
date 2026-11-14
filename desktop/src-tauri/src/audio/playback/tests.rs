@@ -1412,3 +1412,19 @@
             .render_block(48_000, 48_480, 480, 48000, &mut buf);
         assert!(buf[..40].iter().any(|s| s.abs() > 1e-6), "tras un seek atrás debe sonar el pulso de la nueva posición");
     }
+
+    #[tokio::test]
+    async fn test_a14_si_falla_abrir_la_salida_no_queda_reproduciendo() {
+        let engine = PlaybackEngine::new(Arc::new(AudioStreamStats::default()));
+        let resultado = engine
+            .begin_playback(|| async { Err::<(), String>("sin dispositivo".to_string()) })
+            .await;
+        assert_eq!(resultado, Err("sin dispositivo".to_string()));
+        assert!(!engine.is_playing.load(Ordering::SeqCst), "is_playing debe volver a false");
+
+        // Con la salida disponible, el siguiente intento sí deja el motor reproduciendo.
+        let resultado = engine.begin_playback(|| async { Ok::<(), String>(()) }).await;
+        assert_eq!(resultado, Ok(()));
+        assert!(engine.is_playing.load(Ordering::SeqCst));
+    }
+

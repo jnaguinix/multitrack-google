@@ -42,12 +42,26 @@ impl PlaybackEngine {
             self.seek(0.0).await;
         }
 
+        self.begin_playback(|| self.ensure_stream(state)).await
+    }
+
+    /// Marca el motor como reproduciendo y abre la salida de audio con `open_output`. Si abrirla falla,
+    /// deshace el estado: de lo contrario el motor quedaría «reproduciendo» sin salida y los siguientes
+    /// Play devolverían Ok sin reintentar abrir el dispositivo.
+    pub(super) async fn begin_playback<F, Fut>(&self, open_output: F) -> Result<(), String>
+    where
+        F: FnOnce() -> Fut,
+        Fut: std::future::Future<Output = Result<(), String>>,
+    {
         // Start 8 ms fade-in
         self.fade.lock().unwrap().start_fade_in();
         self.is_playing.store(true, Ordering::SeqCst);
 
         // Ensure CPAL output stream is active
-        self.ensure_stream(state).await?;
+        if let Err(error) = open_output().await {
+            self.is_playing.store(false, Ordering::SeqCst);
+            return Err(error);
+        }
         Ok(())
     }
 
