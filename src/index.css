@@ -567,7 +567,7 @@
   font-family: var(--font-sans);
   font-variant-numeric: tabular-nums;
   font-weight: 750;
-  font-size: clamp(3.4rem, 7.5vw, 6.5rem);
+  font-size: clamp(2.6rem, 5.4vw, 4.6rem);
   line-height: 1;
   letter-spacing: -0.045em;
   color: var(--lt-text);
@@ -631,7 +631,8 @@
   background: var(--sec);
 }
 
-.lt-live-block:hover {
+.lt-live-block:disabled { cursor: not-allowed; }
+.lt-live-block:hover:not(:disabled) {
   background: color-mix(in srgb, var(--sec) 30%, transparent);
 }
 
@@ -705,6 +706,47 @@
 .lt-live-section-detail { margin-top: 5px; overflow-wrap: anywhere; }
 .lt-live-cues .lt-live-queued { max-width: 100%; margin-top: 9px; }
 .lt-live-jump > p { text-align: end; }
+.lt-live-jump-head {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 14px;
+  margin-bottom: 6px;
+}
+.lt-live-jump-head p { text-align: end; }
+.lt-live-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+  padding: 2px 4px;
+  border-radius: 6px;
+  color: var(--lt-text);
+  font-size: 13px;
+  font-weight: 550;
+  cursor: pointer;
+}
+.lt-live-switch-track {
+  position: relative;
+  width: 36px;
+  height: 20px;
+  border-radius: 999px;
+  background: var(--lt-raised);
+  box-shadow: inset 0 0 0 1px var(--lt-mut);
+  transition: background .15s;
+}
+.lt-live-switch-track i {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--lt-mut);
+  transition: transform .15s, background .15s;
+}
+.lt-live-switch[aria-checked="true"] .lt-live-switch-track { background: var(--lt-accent); box-shadow: none; }
+.lt-live-switch[aria-checked="true"] .lt-live-switch-track i { transform: translateX(16px); background: #0b2b27; }
 .lt-live-jump-tabs {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
@@ -721,6 +763,9 @@
   cursor: pointer;
 }
 .lt-live-jump-tabs button:hover { background: var(--lt-raised); }
+.lt-live-jump-tabs button:disabled { opacity: .4; cursor: not-allowed; }
+.lt-live-jump-tabs button:disabled:hover { background: var(--lt-strip); }
+.lt-live-section-picker:disabled { opacity: .4; cursor: not-allowed; }
 .lt-live-jump-tabs button[aria-pressed="true"] { background: var(--lt-accent); color: #0b2b27; }
 .lt-live-jump-tabs button[aria-pressed="true"]:hover { background: #a6e3db; }
 .lt-live-section-picker { display: none; margin-top: 8px; }

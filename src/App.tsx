@@ -129,6 +129,13 @@ export default function App() {
   }, []);
 
   const [activeView, setActiveView] = useState<WorkspaceView>(getInitialViewFromHash);
+  // En vivo: los saltos de sección arrancan bloqueados y se vuelven a bloquear al salir de la página.
+  const [liveJumpsEnabled, setLiveJumpsEnabled] = useState(false);
+  const liveJumpsLockedRef = useRef(true);
+  liveJumpsLockedRef.current = activeView === 'live' && !liveJumpsEnabled;
+  useEffect(() => {
+    if (activeView !== 'live') setLiveJumpsEnabled(false);
+  }, [activeView]);
   const [isDockedMixerOpen, setIsDockedMixerOpen] = useState<boolean>(false);
   const [projects, setProjects] = useState<SongProject[]>([]);
   const [currentProject, setCurrentProject] = useState<SongProject | null>(null);
@@ -771,6 +778,8 @@ export default function App() {
         e.preventDefault();
         audioEngine.toggleVamp();
       } else if (e.key >= '1' && e.key <= '9') {
+        // En vivo con los saltos bloqueados, las teclas 1-9 no hacen nada.
+        if (liveJumpsLockedRef.current) return;
         const idx = Number(e.key) - 1;
         const sec = currentProjectRef.current.sections[idx];
         if (sec) {
@@ -1287,6 +1296,8 @@ export default function App() {
               onCancelQueuedJump={handleCancelQueuedJump}
               onToggleVamp={handleToggleVamp}
               onChangeQuantize={handleChangeQuantize}
+              jumpsEnabled={liveJumpsEnabled}
+              onToggleJumps={setLiveJumpsEnabled}
               onChangeTransitionMode={setSetlistTransitionMode}
               onGoToSetlist={() => handleSelectView('setlist')}
             />

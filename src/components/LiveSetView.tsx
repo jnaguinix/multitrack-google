@@ -39,6 +39,9 @@ interface LiveSetViewProps {
   onCancelQueuedJump: () => void;
   onToggleVamp: () => void;
   onChangeQuantize: (mode: QuantizeMode) => void;
+  /** Los saltos de sección están bloqueados por defecto para evitar un clic accidental en directo. */
+  jumpsEnabled: boolean;
+  onToggleJumps: (enabled: boolean) => void;
   onChangeTransitionMode: (mode: SetlistTransitionMode) => void;
   onGoToSetlist: () => void;
 }
@@ -112,6 +115,8 @@ export const LiveSetView: React.FC<LiveSetViewProps> = ({
   onCancelQueuedJump,
   onToggleVamp,
   onChangeQuantize,
+  jumpsEnabled,
+  onToggleJumps,
   onChangeTransitionMode,
   onGoToSetlist,
 }) => {
@@ -215,7 +220,8 @@ export const LiveSetView: React.FC<LiveSetViewProps> = ({
                       data-active={isActive || undefined}
                       data-queued={isQueued || undefined}
                       aria-pressed={isActive}
-                      aria-keyshortcuts={shortcut <= 9 ? String(shortcut) : undefined}
+                      disabled={!jumpsEnabled}
+                      aria-keyshortcuts={jumpsEnabled && shortcut <= 9 ? String(shortcut) : undefined}
                       aria-label={section.name + ', ' + duration + (isQueued ? ', en cola' : '')}
                       title={section.name + ' · ' + mmss(start) + '–' + mmss(end)}
                       onClick={() => onJumpSection(section.id)}
@@ -262,13 +268,28 @@ export const LiveSetView: React.FC<LiveSetViewProps> = ({
                     )}
                   </div>
                   <div className="lt-live-jump">
-                    <p className="lt-live-secondary" id="live-jump-label">Al saltar de sección</p>
+                    <div className="lt-live-jump-head">
+                      <p className="lt-live-secondary" id="live-jump-label">Al saltar de sección</p>
+                      <button
+                        type="button"
+                        role="switch"
+                        aria-checked={jumpsEnabled}
+                        aria-label="Permitir saltos de sección"
+                        className="lt-live-switch"
+                        onClick={() => onToggleJumps(!jumpsEnabled)}
+                        title={jumpsEnabled ? 'Bloquear los saltos de sección' : 'Permitir saltos de sección'}
+                      >
+                        <span className="lt-live-switch-track" aria-hidden="true"><i /></span>
+                        <span>{jumpsEnabled ? 'Saltos activos' : 'Saltos bloqueados'}</span>
+                      </button>
+                    </div>
                     <div className="lt-live-jump-tabs" role="group" aria-labelledby="live-jump-label">
                       {QUANTIZE_OPTIONS.map((option) => (
                         <button
                           key={option.value}
                           type="button"
                           aria-pressed={project.quantizeMode === option.value}
+                          disabled={!jumpsEnabled}
                           title={option.hint}
                           onClick={() => onChangeQuantize(option.value)}
                         >
@@ -280,6 +301,7 @@ export const LiveSetView: React.FC<LiveSetViewProps> = ({
                       className="lt-live-select lt-live-section-picker"
                       data-needed={hasShortSections || undefined}
                       aria-label="Ir a una sección"
+                      disabled={!jumpsEnabled}
                       value=""
                       onChange={(event) => onJumpSection(event.target.value)}
                     >
