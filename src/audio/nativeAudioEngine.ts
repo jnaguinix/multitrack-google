@@ -7,7 +7,7 @@
 // =============================================================================
 
 import { logAsyncError } from '../utils/asyncErrors';
-import { SongProject, TrackChannel, TransportState, MetersSnapshot } from '../types/project';
+import { AudioEngineMode, SongProject, TrackChannel, TransportState, MetersSnapshot } from '../types/project';
 import { MeterBallistics, NativeMetersSnapshot } from './meterBallistics';
 import { StatePoller } from './statePoller';
 import { loadProjectStemsFromDb, extractStemArrayBuffer } from '../storage/projectDb';
@@ -1097,7 +1097,7 @@ export class NativeAudioEngine {
     };
   }
 
-  public getEffectiveEngineModeForProject(_song: SongProject): string {
+  public getEffectiveEngineModeForProject(_song: SongProject): AudioEngineMode {
     return 'stream';
   }
 
@@ -1106,11 +1106,11 @@ export class NativeAudioEngine {
     return Math.round((frames * 2) / (1024 * 1024));
   }
 
-  public getEngineMode(): string {
+  public getEngineMode(): AudioEngineMode {
     return 'stream';
   }
 
-  public setEngineMode(_mode: string): void {}
+  public setEngineMode(_mode: AudioEngineMode): void {}
 
   public getRamBudgetMB(): number {
     return 1024;

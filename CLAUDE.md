@@ -2,7 +2,7 @@
 
 ## 1. Qué es OmniTracks
 Reproductor de multitracks optimizado para cultos y música en vivo. Dispone de dos entornos:
-- **Web**: React 19 (^19.0.1), TypeScript, Tailwind CSS 4 (^4.3.3) y Vite, con motor Web Audio API / AudioContext y almacenamiento en OPFS / IndexedDB.
+- **Web (interfaz)**: React 19 (^19.0.1), TypeScript, Tailwind CSS 4 (^4.3.3) y Vite, con almacenamiento en OPFS / IndexedDB. El motor Web Audio se retiró: el audio solo suena en la app de escritorio.
 - **Escritorio**: Tauri v2 para Windows x64 con WebView2 Evergreen y motor de audio nativo multihilo de alto rendimiento implementado en Rust (CPAL, Symphonia, rubato y rtrb).
 
 ---
@@ -23,7 +23,7 @@ Reproductor de multitracks optimizado para cultos y música en vivo. Dispone de 
 - `src/audio/statePoller.ts`: Sondeo del estado nativo con una sola petición pendiente, respuestas obsoletas descartadas por generación y errores sin silenciar (lo usa `nativeAudioEngine.ts`).
 - `src/audio/meterFeed.ts` y `src/audio/liveMeters.ts`: Ciclo único de lectura de medidores (20 fps, solo mientras haya medidores suscritos) y el hook `useLiveMeters`; `src/utils/mixerLevels.ts` calcula los niveles de pista y de bus. Los medidores son componentes hoja: no re-renderizan la consola.
 - `src/audio/meterBallistics.ts`: Balística (caída ~20 dB/s, retención de recorte) de los picos reales que mide el motor nativo para los medidores de Arreglo y Mezcla.
-- `src/audio/audioEngine.ts`: Motor de audio Web (Web Audio API / OPFS). La versión web ya no se usa ni se mantiene; el archivo sigue porque el escritorio aún depende de partes de él (retiro pendiente).
+- `src/audio/audioEngine.ts`: Fachada de 17 líneas: exporta `audioEngine` (el adaptador `nativeAudioEngine`) y el tipo `AudioEngine`. El motor Web Audio y `streamingTrack.ts` (≈3 100 líneas) se retiraron; siguen en la etiqueta `main-web-final`. Sin Tauri (navegador) el adaptador no tiene `invoke` y las acciones de audio no hacen nada.
 - `src/storage/*`: Persistencia en IndexedDB (`projectDb.ts`), OPFS (`opfsStorage.ts`), File System Access (`sourceFiles.ts`) y puente desktop (`desktopLibrary.ts`).
 - `desktop/src-tauri/src/audio/*`: Motor nativo: `playback/` (transporte, buffers `rtrb`, callback CPAL, reloj `clock.rs`, lógica por bloque `block.rs`), `cache.rs` (caché PCM i16 y picos), `import.rs` (decodificación Symphonia/Hound), `output.rs` (dispositivos WASAPI y `resolve_output_config`), `track_ids.rs` (IDs únicos de pista al escanear o importar), `resampler.rs` (remuestreo `rubato`), `metronome.rs` (click sintético), `mod.rs` (comandos `audio_*`).
 - `desktop/src-tauri/src/library/`: Gestión de `library.json`, persistencia atómica y sidecars `omnitracks.project.json` (comandos `library_*`).
@@ -84,10 +84,10 @@ Reproductor de multitracks optimizado para cultos y música en vivo. Dispone de 
 - **Pistas más cortas que la canción tras un salto de sección**: un feeder que ya llegó al final de su archivo no evalúa saltos ni vamp; si la canción salta hacia atrás, esa pista (p. ej. una guía corta) queda en silencio hasta el siguiente seek. No medido en el motor real.
 - **Crossfade de empalme con tono**: el cruce de 8 ms de un salto o vuelta de vamp se lee del archivo sin pasar por el remuestreador; con tono distinto de cero esos 8 ms suenan sin transponer.
 - **Saltos cuantizados tardíos**: Si el compás objetivo ya cayó dentro del audio ya encolado en el ring buffer `rtrb`, el salto se pospone al siguiente compás. Cifras reales (`playback/mod.rs`): el ring buffer tiene 500 ms de *capacidad*, el feeder lo mantiene en ~350 ms y el callback sale de buffering a partir de 150 ms disponibles por pista; no son equivalentes.
-- **Archivos grandes**: `src/audio/audioEngine.ts` (~2600 líneas), `src/App.tsx` (~1700), `src/components/LibraryAndModals.tsx` (~1550).
+- **Archivos grandes**: `src/App.tsx` (~1700), `src/components/LibraryAndModals.tsx` (~1550).
 - **Ramas sin fusionar**: `diag/medidores-reales` y `diag/tiempo-cache` (trabajo ya incorporado por otra vía; sin revisar si conservan algo propio).
 - **Fase 5 diferida**: Ruteo libre multicanal a más de 2 salidas físicas independientes de la tarjeta.
 - **Fase 7 diferida**: Soporte de drivers de audio ASIO (diferido, sin decidir: depende de la licencia del SDK de Steinberg y de la decisión del dueño).
-- **Retiro del motor web**: Desacoplar definitivamente `audioEngine.ts` de la aplicación de escritorio.
+- **Capa de almacenamiento web (OPFS)**: `opfsStorage.ts`, `pcmOptimizer.ts`, `pcmReaderClient.ts`, `pcmReader.worker.ts` y `demoSynthesizer.ts` (~1 500 líneas) siguen alcanzables desde los hooks (importación por selector HTML o arrastre, optimización). Retirarlos exige decidir antes qué rutas de importación se conservan.
 - **`handleRelinkProject` en `App.tsx`**: Retenido en el componente raíz para evitar referencias circulares / hoisting temporal (`TS2448`).
 - **Riesgo de contención en `try_lock`**: En callbacks bajo alta carga, si `try_lock()` sobre los consumidores falla, se emite silencio en ese bloque.
