@@ -22,7 +22,7 @@ Reproductor de multitracks optimizado para cultos y música en vivo. Dispone de 
 - `src/audio/meterBallistics.ts`: Balística (caída ~20 dB/s, retención de recorte) de los picos reales que mide el motor nativo para los medidores de Arreglo y Mezcla.
 - `src/audio/audioEngine.ts`: Motor de audio Web (Web Audio API / OPFS). La versión web ya no se usa ni se mantiene; el archivo sigue porque el escritorio aún depende de partes de él (retiro pendiente).
 - `src/storage/*`: Persistencia en IndexedDB (`projectDb.ts`), OPFS (`opfsStorage.ts`), File System Access (`sourceFiles.ts`) y puente desktop (`desktopLibrary.ts`).
-- `desktop/src-tauri/src/audio/*`: Motor nativo: `playback/` (transporte, buffers `rtrb`, callback CPAL, reloj `clock.rs`, lógica por bloque `block.rs`), `cache.rs` (caché PCM i16 y picos), `import.rs` (decodificación Symphonia/Hound), `output.rs` (dispositivos WASAPI), `resampler.rs` (remuestreo `rubato`), `metronome.rs` (click sintético), `mod.rs` (comandos `audio_*`).
+- `desktop/src-tauri/src/audio/*`: Motor nativo: `playback/` (transporte, buffers `rtrb`, callback CPAL, reloj `clock.rs`, lógica por bloque `block.rs`), `cache.rs` (caché PCM i16 y picos), `import.rs` (decodificación Symphonia/Hound), `output.rs` (dispositivos WASAPI y `resolve_output_config`), `track_ids.rs` (IDs únicos de pista al escanear o importar), `resampler.rs` (remuestreo `rubato`), `metronome.rs` (click sintético), `mod.rs` (comandos `audio_*`).
 - `desktop/src-tauri/src/library/`: Gestión de `library.json`, persistencia atómica y sidecars `omnitracks.project.json` (comandos `library_*`).
 - `desktop/src-tauri/src/lan.rs`: Servidor HTTP/WebSocket local para control remoto desde móviles (músicos y sonidistas) en la LAN (puerto 8765 definido como `const PORT` en `desktop/src-tauri/src/main.rs:14`).
 - `desktop/src-tauri/tests/`: Pruebas de integración de Rust (`lan_protocol.rs`, `verify_manual_flow.rs`, `import_flow.rs`, `benchmark_import.rs`).
@@ -48,6 +48,8 @@ Reproductor de multitracks optimizado para cultos y música en vivo. Dispone de 
 ## 4. Decisiones cerradas
 - **WASAPI en modo compartido**: Salida estándar por defecto en Windows.
 - **ASIO diferido, sin decidir**: Depende de la licencia del SDK de Steinberg y de la decisión del dueño.
+- **Orden de los mutex de proyecto**: `loaded_project_id` primero y `tracks` después, en `load_project` y en `unload_project_if_matches`. Cualquier código nuevo que tome ambos debe respetarlo (el orden inverso produce deadlock).
+- **Salida a la frecuencia de la caché**: con un proyecto cargado, `ensure_stream` abre la salida a la frecuencia de su caché (`resolve_output_config`); si el dispositivo no la admite devuelve un error explícito en lugar de reproducir a otra velocidad. La apertura real con WASAPI no está medida.
 - **Caché PCM al sample rate del dispositivo**: Al decodificar pistas con `import.rs`, el audio se remuestrea a la frecuencia nativa del hardware (`target_sample_rate`) para evitar convertir de frecuencia durante la reproducción. Matiz: cada feeder pasa siempre por `TrackResampler` (rubato) aunque la frecuencia origen y destino coincidan y el pitch sea cero, con coste no medido.
 - **Biblioteca como índice ligero**: `library.json` contiene únicamente metadatos. Las carpetas de caché PCM (`pcm/<id>/`) solo existen para canciones que forman parte del setlist o están activas en consola.
 - **Páginas de la app**: Setlist, En vivo, Arreglo, Mezcla y Biblioteca. La página «Control rápido» y el panel lateral de la Biblioteca se eliminaron el 2026-11-13.
