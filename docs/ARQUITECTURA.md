@@ -37,15 +37,24 @@ El archivo monolítico original fue dividido en el módulo modular `playback/`, 
 ```
 desktop/src-tauri/src/audio/playback/
 ├── mod.rs          # PlaybackEngine: estructura central, ciclo de vida, buffers y callback CPAL (ensure_stream)
+├── block.rs        # Lógica por bloque compartida por el callback real y su simulación en pruebas: buffering_ready (salida de buffering), consume_track_block (lectura de un anillo con resincronía tras underrun)
 ├── bus.rs          # TrackBus: tipos y conversión de buses de salida (main, cue, both)
+├── clock.rs        # ClockJumps y advance_clock: saltos de sección y vueltas de vamp aplicados al reloj current_frame desde el callback
 ├── fade.rs         # FadeEnvelope, FadeType y constantes (FADE_MS = 8.0): micro-fundidos
-├── feeder_io.rs    # Lectura de frames PCM desde disco, staging y drenaje con remuestreo
+├── feeder_io.rs    # Lectura de frames PCM desde disco, staging, drenaje con remuestreo, begin_new_segment (tras empalmes) y FeederAliveGuard
 ├── guide.rs        # GuideCueEngine: síntesis y renderizado de cues vocales de guía para saltos de sección
 ├── jumps.rs        # queue_section_jump, cancel_queued_jump, toggle_vamp (impl PlaybackEngine)
-├── transport.rs    # play, pause, stop, seek, get_playback_state, reopen_stream (impl PlaybackEngine)
+├── transport.rs    # play, pause, stop, seek (con rewind_tracks: handshake con los feeders), get_playback_state, reopen_stream (impl PlaybackEngine)
 ├── types.rs        # NativeSongSection, QueuedJumpInfo, ActiveTrack, PlaybackStateSnapshot, PeakMeter/BusMeters (medidores), etc.
-└── tests.rs        # Suite completa de pruebas unitarias y benchmarks de audio
+└── tests.rs        # Suite completa de pruebas unitarias y benchmarks de audio (incluye pruebas con el motor real sobre una caché PCM sintética de rampas)
 ```
+
+**Coherencia del transporte (Fase 1 de la auditoría)**
+- **Reloj y discontinuidades**: el reloj `current_frame` solo lo avanza el callback. Al programar un salto cuantizado (`queue_section_jump`) o activar un vamp (`toggle_vamp`) se guardan en `ClockJumps` (atómicos); el callback los aplica con `advance_clock` en el instante exacto en que el feeder corta el audio. Un seek concurrente manda sobre el salto. El metrónomo se recoloca cuando un bloque no empieza donde terminó el anterior.
+- **Seek con handshake por generación** (`rewind_tracks`): el transporte sube `seek_generation`, activa buffering, pide el seek a cada feeder, espera su `seek_ack`, vacía el anillo y publica `flush_done`. El feeder no empuja audio nuevo hasta ese momento y el callback no sale de buffering sin `flush_done` de la generación vigente. Si un feeder murió o no responde en 5 s, la pista se da por terminada y se registra un aviso.
+- **Fin de pista**: cada feeder marca `eof` cuando ya empujó todo lo que le quedaba; esa pista no cuenta para salir de buffering ni para el contador de underruns.
+- **Underrun**: `consume_track_block` lee solo fotogramas completos, anota los que faltaron en `skip_frames` y descarta esa cantidad cuando el audio vuelve, para que la pista siga alineada con el reloj.
+- **Empalmes**: el tramo parcial previo a un salto o vuelta de vamp se completa con ceros y solo se emiten los fotogramas con señal (no el bloque entero que devuelve `process_partial` de rubato); tras el empalme el remuestreador empieza un tramo nuevo (`begin_new_segment`).
 
 ---
 

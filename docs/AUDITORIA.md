@@ -9,7 +9,7 @@ Pila: escritorio Windows con Tauri v2; motor de audio en Rust (CPAL/WASAPI, Symp
 
 ## 2. Orden de la auditoría (de más a menos crítico)
 1. **Callback de audio en tiempo real**: `desktop/src-tauri/src/audio/playback/mod.rs` (función `ensure_stream`), `bus.rs`, `fade.rs`, `guide.rs`, `types.rs`.
-2. **Transporte, saltos de sección y buffers**: `playback/transport.rs`, `playback/jumps.rs`, `playback/feeder_io.rs`, `playback/mod.rs`.
+2. **Transporte, saltos de sección y buffers**: `playback/transport.rs`, `playback/jumps.rs`, `playback/clock.rs`, `playback/block.rs`, `playback/feeder_io.rs`, `playback/mod.rs`.
 3. **Importación y caché PCM**: `audio/import.rs`, `audio/cache.rs`, `audio/resampler.rs`, `audio/mod.rs` (comandos `audio_*`).
 4. **Biblioteca y persistencia**: `desktop/src-tauri/src/library/mod.rs` (`library.json`, escritura atómica, sidecars).
 5. **Servidor LAN y protocolo**: `desktop/src-tauri/src/lan.rs`, `protocol.rs`, `main.rs`; puente de la UI en `desktop/frontend/RemoteConnectionBridge.tsx` y `remoteState.ts`. Es una superficie de red: busca falta de autenticación, validación de entradas y exposición fuera de la red local.
