@@ -5,9 +5,11 @@ pub mod metronome;
 pub mod output;
 pub mod playback;
 pub mod resampler;
+pub mod track_ids;
 
 use cache::{read_track_metadata, ImportProgressEvent, ProjectCacheStatus};
 use import::{ImportResult, ImportTrackFile};
+use track_ids::assign_track_ids;
 use output::{
     AudioDeviceInfo, AudioEngineState, AudioSettings, AudioStreamStatsSnapshot, TestToneResult,
 };
@@ -336,30 +338,30 @@ pub async fn audio_import_folder(
         }
     }
 
-    let mut idx = 0;
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_file() {
-            if let Some(ext) = path.extension().and_then(|s| s.to_str()).map(|s| s.to_lowercase()) {
-                if audio_extensions.contains(&ext.as_str()) {
-                    let file_stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("track");
-                    let file_stem_lower = file_stem.to_lowercase();
-                    
-                    // Match track ID from sidecar if possible, else generate stable stem ID
-                    let track_id = if let Some(matched_id) = sidecar_map.get(&file_stem_lower) {
-                        matched_id.clone()
-                    } else {
-                        format!("stem-{:02}", idx)
-                    };
-                    idx += 1;
-
-                    files_to_import.push(ImportTrackFile {
-                        file_path: path.to_string_lossy().to_string(),
-                        track_id,
-                    });
-                }
-            }
-        }
+    // Orden por nombre de archivo (read_dir no garantiza ninguno) para que los IDs nuevos sean estables.
+    let mut audio_paths: Vec<PathBuf> = entries
+        .flatten()
+        .map(|e| e.path())
+        .filter(|path| {
+            path.is_file()
+                && path
+                    .extension()
+                    .and_then(|s| s.to_str())
+                    .map(|s| audio_extensions.contains(&s.to_lowercase().as_str()))
+                    .unwrap_or(false)
+        })
+        .collect();
+    audio_paths.sort();
+    let matched_ids: Vec<Option<String>> = audio_paths
+        .iter()
+        .map(|path| {
+            let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("track").to_lowercase();
+            sidecar_map.get(&stem).cloned()
+        })
+        .collect();
+    let track_ids = assign_track_ids(&matched_ids);
+    for (path, track_id) in audio_paths.into_iter().zip(track_ids) {
+        files_to_import.push(ImportTrackFile { file_path: path.to_string_lossy().to_string(), track_id });
     }
 
     if files_to_import.is_empty() {
@@ -772,37 +774,41 @@ pub async fn audio_scan_folder(
     let mut files = Vec::new();
     let entries = std::fs::read_dir(p).map_err(|e| format!("Error leyendo carpeta: {e}"))?;
 
-    let mut auto_idx = 0;
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_file() {
-            if let Some(ext) = path.extension().and_then(|s| s.to_str()).map(|s| s.to_lowercase()) {
-                if audio_extensions.contains(&ext.as_str()) {
-                    let file_name = path.file_name().and_then(|s| s.to_str()).unwrap_or("").to_string();
-                    let file_stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("Pista").to_string();
-                    let file_stem_lower = file_stem.to_lowercase();
+    let mut audio_paths: Vec<PathBuf> = entries
+        .flatten()
+        .map(|e| e.path())
+        .filter(|path| {
+            path.is_file()
+                && path
+                    .extension()
+                    .and_then(|s| s.to_str())
+                    .map(|s| audio_extensions.contains(&s.to_lowercase().as_str()))
+                    .unwrap_or(false)
+        })
+        .collect();
+    audio_paths.sort();
+    let matched_ids: Vec<Option<String>> = audio_paths
+        .iter()
+        .map(|path| {
+            let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("Pista").to_lowercase();
+            sidecar_track_ids.get(&stem).cloned()
+        })
+        .collect();
+    let track_ids = assign_track_ids(&matched_ids);
+    for (path, track_id) in audio_paths.into_iter().zip(track_ids) {
+        let file_name = path.file_name().and_then(|s| s.to_str()).unwrap_or("").to_string();
+        let file_stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("Pista").to_string();
+        let est_duration_sec = probe_audio_duration(&path);
+        let file_size = path.metadata().ok().map(|m| m.len());
 
-                    let track_id = if let Some(matched_id) = sidecar_track_ids.get(&file_stem_lower) {
-                        matched_id.clone()
-                    } else {
-                        auto_idx += 1;
-                        format!("stem-{:02}", auto_idx)
-                    };
-
-                    let est_duration_sec = probe_audio_duration(&path);
-                    let file_size = path.metadata().ok().map(|m| m.len());
-
-                    files.push(ScannedAudioFile {
-                        file_path: path.to_string_lossy().to_string(),
-                        file_name,
-                        track_name: file_stem,
-                        track_id,
-                        est_duration_sec,
-                        file_size,
-                    });
-                }
-            }
-        }
+        files.push(ScannedAudioFile {
+            file_path: path.to_string_lossy().to_string(),
+            file_name,
+            track_name: file_stem,
+            track_id,
+            est_duration_sec,
+            file_size,
+        });
     }
 
     files.sort_by(|a, b| a.track_name.cmp(&b.track_name));
