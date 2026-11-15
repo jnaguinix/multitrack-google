@@ -2,7 +2,6 @@ import { logAsyncError } from '../utils/asyncErrors';
 import { SongProject } from '../types/project';
 import { WorkspaceView } from '../components/TopBar';
 import { audioEngine } from '../audio/audioEngine';
-import { isOpfsSupported, isProjectPcmComplete } from '../storage/opfsStorage';
 import { saveProjectToDb } from '../storage/projectDb';
 
 interface UseProjectActionsDeps {
@@ -14,9 +13,6 @@ interface UseProjectActionsDeps {
   setCurrentProject: React.Dispatch<React.SetStateAction<SongProject | null>>;
   showToast: (msg: string) => void;
   isDesktopApp: boolean;
-  queuedOptimizeIdsRef: React.MutableRefObject<Set<string>>;
-  ensureSourceAccess: (projectId: string) => Promise<void>;
-  runAutoOptimize: (projectId: string) => void;
   activateProject: (
     projectToLoad: SongProject,
     predecodedBuffers?: Map<string, AudioBuffer>,
@@ -35,9 +31,6 @@ export function useProjectActions({
   setCurrentProject,
   showToast,
   isDesktopApp,
-  queuedOptimizeIdsRef,
-  ensureSourceAccess,
-  runAutoOptimize,
   activateProject,
   activeView,
   handleSelectView,
@@ -49,18 +42,6 @@ export function useProjectActions({
       projectsRef.current.find((p) => p.id === projectId) ||
       projects.find((p) => p.id === projectId);
     if (!found) return;
-    if (!isDesktopApp) {
-      if (isOpfsSupported() && queuedOptimizeIdsRef.current.has(projectId)) {
-        showToast(`"${found.title}" se está preparando en segundo plano; espera a que termine.`);
-        return;
-      }
-      // Songs already cached in OPFS don't need the original files; others do
-      const isOpfsReady = await isProjectPcmComplete(found);
-      if (!isOpfsReady) {
-        await ensureSourceAccess(projectId);
-        runAutoOptimize(projectId);
-      }
-    }
     await activateProject(found, undefined, autoPlay);
     if (activeView === 'library') {
       handleSelectView('setlist');

@@ -2,7 +2,6 @@ import { logAsyncError } from '../utils/asyncErrors';
 import { SongProject, TransportState } from '../types/project';
 import { nativeAudioEngine } from '../audio/nativeAudioEngine';
 import { audioEngine } from '../audio/audioEngine';
-import { isProjectPcmComplete } from '../storage/opfsStorage';
 import { saveProjectToDb } from '../storage/projectDb';
 import { deleteProjectNativeCache } from '../utils/nativeDialog';
 import { loadDesktopLibrary, saveDesktopLibrary } from '../storage/desktopLibrary';
@@ -16,8 +15,6 @@ interface UseSetlistDeps {
   showToast: (msg: string) => void;
   isDesktopApp: boolean;
   setMissingNativeCache: React.Dispatch<React.SetStateAction<boolean>>;
-  ensureSourceAccess: (projectId: string) => Promise<void>;
-  runAutoOptimize: (projectId: string) => void;
   setMissingFolderSong: React.Dispatch<React.SetStateAction<SongProject | null>>;
   transport: TransportState;
   setlistQueue: SongProject[];
@@ -33,8 +30,6 @@ export function useSetlist({
   showToast,
   isDesktopApp,
   setMissingNativeCache,
-  ensureSourceAccess,
-  runAutoOptimize,
   setMissingFolderSong,
   transport,
   setlistQueue,
@@ -74,12 +69,6 @@ export function useSetlist({
               showToast(`Error al generar la caché de "${song.title}": ${err?.message || err}`);
             });
         }
-      } else {
-        isProjectPcmComplete(song).then((complete) => {
-          if (!complete) {
-            ensureSourceAccess(projectId).then(() => runAutoOptimize(projectId));
-          }
-        });
       }
 
       setProjects((prev) => {

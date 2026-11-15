@@ -2,7 +2,7 @@
 
 ## 1. Qué es OmniTracks
 Reproductor de multitracks optimizado para cultos y música en vivo. Dispone de dos entornos:
-- **Web (interfaz)**: React 19 (^19.0.1), TypeScript, Tailwind CSS 4 (^4.3.3) y Vite, con almacenamiento en OPFS / IndexedDB. El motor Web Audio se retiró: el audio solo suena en la app de escritorio.
+- **Web (interfaz)**: React 19 (^19.0.1), TypeScript, Tailwind CSS 4 (^4.3.3) y Vite, con almacenamiento en IndexedDB. El motor Web Audio se retiró: el audio solo suena en la app de escritorio.
 - **Escritorio**: Tauri v2 para Windows x64 con WebView2 Evergreen y motor de audio nativo multihilo de alto rendimiento implementado en Rust (CPAL, Symphonia, rubato y rtrb).
 
 ---
@@ -21,12 +21,13 @@ Reproductor de multitracks optimizado para cultos y música en vivo. Dispone de 
 - `src/utils/songSearch.ts` y `src/hooks/useProgressiveList.ts`: Búsqueda sin acentos ni mayúsculas (título, artista, tono, BPM) y render de listas largas por tandas, compartidos por la Biblioteca y el explorador del Setlist.
 - `desktop/frontend/*`: Puentes de la UI con Tauri: `RemoteConnectionBridge.tsx` (diálogo «Conexión remota», botón fijo en la barra superior), `DesktopAudioSettings.tsx`, `DesktopUpdates.tsx` y `previewInvoke.ts` (simulación del servidor LAN solo en `npm run dev`, excluida de producción).
 - `src/audio/nativeAudioEngine.ts`: Adaptador puente TypeScript para invocar los comandos Tauri del motor nativo en Rust (`audio_*`).
+- `src/utils/storagePersist.ts`: `ensureStoragePersist` (pide almacenamiento persistente para IndexedDB). La copia de audio a OPFS, su optimizador y el lector PCM del navegador se retiraron.
 - `src/utils/asyncErrors.ts`: `logAsyncError(contexto)`, el manejador de las promesas lanzadas sin esperar (guardar, sincronizar, controles al motor). Sustituye a `.catch(() => {})`: registra el fallo con su contexto, como mucho un aviso cada 5 s por contexto. `src/utils/markerPalette.ts`: paleta de colores de secciones.
 - `src/audio/statePoller.ts`: Sondeo del estado nativo con una sola petición pendiente, respuestas obsoletas descartadas por generación y errores sin silenciar (lo usa `nativeAudioEngine.ts`).
 - `src/audio/meterFeed.ts` y `src/audio/liveMeters.ts`: Ciclo único de lectura de medidores (20 fps, solo mientras haya medidores suscritos) y el hook `useLiveMeters`; `src/utils/mixerLevels.ts` calcula los niveles de pista y de bus. Los medidores son componentes hoja: no re-renderizan la consola.
 - `src/audio/meterBallistics.ts`: Balística (caída ~20 dB/s, retención de recorte) de los picos reales que mide el motor nativo para los medidores de Arreglo y Mezcla.
 - `src/audio/audioEngine.ts`: Fachada de 17 líneas: exporta `audioEngine` (el adaptador `nativeAudioEngine`) y el tipo `AudioEngine`. El motor Web Audio y `streamingTrack.ts` (≈3 100 líneas) se retiraron; siguen en la etiqueta `main-web-final`. Sin Tauri (navegador) el adaptador no tiene `invoke` y las acciones de audio no hacen nada.
-- `src/storage/*`: Persistencia en IndexedDB (`projectDb.ts`), OPFS (`opfsStorage.ts`), File System Access (`sourceFiles.ts`) y puente desktop (`desktopLibrary.ts`).
+- `src/storage/*`: Persistencia en IndexedDB (`projectDb.ts`), File System Access (`sourceFiles.ts`) y puente desktop (`desktopLibrary.ts`).
 - `desktop/src-tauri/src/audio/*`: Motor nativo: `playback/` (transporte, buffers `rtrb`, callback CPAL, reloj `clock.rs`, lógica por bloque `block.rs`), `cache.rs` (caché PCM i16 y picos), `import.rs` (decodificación Symphonia/Hound), `output.rs` (dispositivos WASAPI y `resolve_output_config`), `track_ids.rs` (IDs únicos de pista al escanear o importar), `resampler.rs` (remuestreo `rubato`), `metronome.rs` (click sintético), `mod.rs` (comandos `audio_*`).
 - `desktop/src-tauri/src/library/`: Gestión de `library.json`, persistencia atómica y sidecars `omnitracks.project.json` (comandos `library_*`).
 - `desktop/src-tauri/src/lan.rs`: Servidor HTTP/WebSocket local para control remoto desde móviles (músicos y sonidistas) en la LAN (puerto 8765 definido como `const PORT` en `desktop/src-tauri/src/main.rs:14`).
@@ -90,6 +91,6 @@ Reproductor de multitracks optimizado para cultos y música en vivo. Dispone de 
 - **Ramas sin fusionar**: `diag/medidores-reales` y `diag/tiempo-cache` (trabajo ya incorporado por otra vía; sin revisar si conservan algo propio).
 - **Fase 5 diferida**: Ruteo libre multicanal a más de 2 salidas físicas independientes de la tarjeta.
 - **Fase 7 diferida**: Soporte de drivers de audio ASIO (diferido, sin decidir: depende de la licencia del SDK de Steinberg y de la decisión del dueño).
-- **Capa de almacenamiento web (OPFS)**: `opfsStorage.ts`, `pcmOptimizer.ts`, `pcmReaderClient.ts`, `pcmReader.worker.ts` y `demoSynthesizer.ts` (~1 500 líneas) siguen alcanzables desde los hooks (importación por selector HTML o arrastre, optimización). Retirarlos exige decidir antes qué rutas de importación se conservan.
+- **Capa web de archivos fuente**: `sourceFiles.ts` y los campos `fileHandle`/`dirHandle` de `projectDb.ts` (File System Access) siguen presentes para la importación por selector HTML. En escritorio la importación usa los diálogos nativos; retirarla exige decidir antes qué se conserva de la importación por arrastre.
 - **`handleRelinkProject` en `App.tsx`**: Retenido en el componente raíz para evitar referencias circulares / hoisting temporal (`TS2448`).
 - **Riesgo de contención en `try_lock`**: En callbacks bajo alta carga, si `try_lock()` sobre los consumidores falla, se emite silencio en ese bloque.

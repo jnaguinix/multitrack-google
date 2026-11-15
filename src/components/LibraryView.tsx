@@ -132,10 +132,10 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                             <CheckCircle2 className="w-3.5 h-3.5" /> Activa
                           </span>
                         )}
-                        {/* OPFS Streaming PCM Status Badge */}
+                        {/* Estado de la caché PCM nativa */}
                         {isPcmReady ? (
                           <span
-                            title={`Audio PCM Int16 optimizado en OPFS (~${pcmMB} MB en disco). Carga rápida y streaming por ventanas.`}
+                            title={`Caché PCM nativa lista (~${pcmMB} MB en disco). Carga rápida.`}
                             className="px-2 py-0.5 rounded text-xs font-bold bg-studio-strip text-studio-ink border border-studio-line flex items-center gap-1"
                           >
                             <HardDrive className="w-3 h-3" />
@@ -143,7 +143,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                           </span>
                         ) : (
                           <span
-                            title="Esta canción aún no tiene archivos PCM generados en OPFS. Pulsa 'Optimizar' para generar PCM en disco."
+                            title="Esta canción aún no tiene caché PCM nativa. Pulsa 'Optimizar para streaming' para generarla en disco."
                             className="px-2 py-0.5 rounded text-xs text-studio-muted flex items-center gap-1"
                           >
                             <span>Sin optimizar</span>
@@ -200,7 +200,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                               event.currentTarget.closest<HTMLElement>('[popover]')?.hidePopover();
                               onOptimizeProject(proj);
                             }}
-                            title="Convertir stems a PCM estéreo Int16 en OPFS para streaming estilo REAPER"
+                            title="Generar la caché PCM nativa de esta canción"
                             className="px-3 py-2 rounded-lg bg-studio-strip hover:bg-neutral-700 text-studio-ink border border-studio-line text-xs font-semibold flex items-center gap-1.5 cursor-pointer transition-colors"
                           >
                             <Zap className="w-3.5 h-3.5 text-studio-ink" />

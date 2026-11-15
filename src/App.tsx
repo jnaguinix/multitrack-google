@@ -20,7 +20,6 @@ import { useDawDragDrop } from './hooks/useDawDragDrop';
 import {
   deleteProjectFromDb,
   loadAllProjectsFromDb,
-  relinkProjectSources,
   normalizeProjectSectionsToTime,
   saveProjectToDb,
   StoredAudioStem,
@@ -53,20 +52,10 @@ import {
   updateDesktopSongFolder,
 } from './storage/desktopLibrary';
 import {
-  cleanOrphanPcmDirectories,
-  isOpfsSupported,
-  isProjectPcmComplete,
-} from './storage/opfsStorage';
-import {
   getRegisteredHandle,
-  isFsAccessSupported,
 } from './storage/sourceFiles';
-import {
-  PcmOptimizationProgress,
-} from './storage/pcmOptimizer';
 import { LibraryView } from './components/LibraryView';
 import { ConfirmSongActionModal } from './components/modals/ConfirmSongActionModal';
-import { OptimizationProgressModal } from './components/modals/OptimizationProgressModal';
 import { SectionEditorModal } from './components/modals/SectionEditorModal';
 import { SongFingerprintPromptModal } from './components/modals/SongFingerprintPromptModal';
 import { StemImporterModal } from './components/modals/StemImporterModal';
@@ -146,18 +135,9 @@ export default function App() {
   const [confirmSongCandidate, setConfirmSongCandidate] = useState<SongProject | null>(
     null
   );
-  const [optimizingProject, setOptimizingProject] = useState<SongProject | null>(null);
-  const [optimizationProgress, setOptimizationProgress] =
-    useState<PcmOptimizationProgress | null>(null);
   // Counts in-flight activateProject() calls so next-song preload waits for the active song to finish decoding
   const activationCountRef = useRef(0);
-  const runAutoOptimizeRef = useRef<(projectId: string) => void>(() => {});
-  const applyPruneRef = useRef<() => void>(() => {});
   const activateProjectRef = useRef<(p: SongProject) => void>(() => {});
-  const modalProjectIdRef = useRef<string | null>(null);
-  const queuedOptimizeIdsRef = useRef<Set<string>>(new Set());
-  // Same set as state so the UI can show which songs are being prepared
-  const [preparingIds, setPreparingIds] = useState<Set<string>>(new Set());
   const [isActivatingProject, setIsActivatingProject] = useState(false);
 
   const [songToDeleteFromLibrary, setSongToDeleteFromLibrary] = useState<SongProject | null>(null);
@@ -278,8 +258,6 @@ export default function App() {
         : null;
 
     if (!nextSong || nextSong.id === activeId) return;
-    // Don't decode the next song into RAM while it is still being converted into the OPFS cache
-    if (isOpfsSupported() && queuedOptimizeIdsRef.current.has(nextSong.id)) return;
 
     const timerId = window.setTimeout(() => {
       audioEngine.preloadProject(nextSong).catch((err) => {
@@ -314,40 +292,13 @@ export default function App() {
 
   // The manual "Optimizar" button and the automatic background cache are ONE job:
   // pressing the button while the song is already being prepared just shows its progress.
-  const {
-    handleStartOptimizeProject,
-    handleCancelOptimization,
-    applyPrune,
-    runAutoOptimize,
-    ensureSourceAccess,
-  } = useOptimization({
-    isDesktopApp,
+  const { handleStartOptimizeProject } = useOptimization({
     showToast,
-    projectsRef,
     currentProjectRef,
-    activateProjectRef,
-    setProjects,
-    setCurrentProject,
     setIsGeneratingNativeCache,
     setNativeCacheProgress,
     setMissingNativeCache,
-    setOptimizingProject,
-    setOptimizationProgress,
-    setPreparingIds,
-    setImportStatusText,
-    runAutoOptimizeRef,
-    applyPruneRef,
-    queuedOptimizeIdsRef,
-    modalProjectIdRef,
   });
-
-  useEffect(() => {
-    applyPruneRef.current = applyPrune;
-  }, [applyPrune]);
-
-  useEffect(() => {
-    runAutoOptimizeRef.current = runAutoOptimize;
-  }, [runAutoOptimize]);
 
   const handleRelinkProject = useCallback(
     async (proj: SongProject) => {
@@ -411,34 +362,9 @@ export default function App() {
         return;
       }
 
-      if (!isFsAccessSupported()) {
-        showToast('Tu navegador no permite reubicar carpetas (usa Chrome o Edge).');
-        return;
-      }
-      try {
-        let dir: any;
-        try {
-          dir = await (window as any).showDirectoryPicker({ mode: 'readwrite' });
-        } catch (err) {
-          if ((err as { name?: string })?.name === 'AbortError') throw err;
-          dir = await (window as any).showDirectoryPicker({ mode: 'read' });
-        }
-        const { relinked, total } = await relinkProjectSources(proj.id, dir);
-        if (relinked === 0) {
-          showToast(`No se encontró ningún stem de "${proj.title}" en esa carpeta.`);
-          return;
-        }
-        syncProjectSidecarNow(proj, true).catch(logAsyncError('sincronizar el archivo de la canción'));
-        showToast(`Reubicados ${relinked}/${total} stems de "${proj.title}"`);
-        runAutoOptimize(proj.id);
-      } catch (err) {
-        if ((err as { name?: string })?.name !== 'AbortError') {
-          console.warn('[Relink] Error reubicando archivos:', err);
-          showToast('No se pudo reubicar la carpeta');
-        }
-      }
+      showToast('Reubicar carpetas solo está disponible en la app de escritorio.');
     },
-    [isDesktopApp, runAutoOptimize, showToast]
+    [isDesktopApp, showToast]
   );
 
   const handleChangeEngineMode = useCallback(
@@ -559,11 +485,7 @@ export default function App() {
         const saved = await loadAllProjectsFromDb();
         if (!mounted) return;
         setProjects(saved);
-        // Clean up orphan OPFS directories from projects that were previously deleted
-        const validIds = new Set(saved.map((p) => p.id));
-        cleanOrphanPcmDirectories(validIds).catch(logAsyncError('limpiar cachés PCM huérfanas'));
         projectsRef.current = saved;
-        applyPruneRef.current();
       } catch {
         // Keep empty repertoire if IndexedDB unavailable
       }
@@ -727,7 +649,6 @@ export default function App() {
     setImportStatusText,
     setFingerprintPrompt,
     setMissingNativeCache,
-    runAutoOptimizeRef,
   });
 
 
@@ -825,9 +746,6 @@ export default function App() {
     setCurrentProject,
     showToast,
     isDesktopApp,
-    queuedOptimizeIdsRef,
-    ensureSourceAccess,
-    runAutoOptimize,
     activateProject,
     activeView,
     handleSelectView,
@@ -850,8 +768,6 @@ export default function App() {
     showToast,
     isDesktopApp,
     setMissingNativeCache,
-    ensureSourceAccess,
-    runAutoOptimize,
     setMissingFolderSong,
     transport,
     setlistQueue,
@@ -1137,7 +1053,6 @@ export default function App() {
               transport={transport}
               setlistQueue={setlistQueue}
               setlistTransitionMode={setlistTransitionMode}
-              preparingIds={preparingIds}
               onPlayPause={handlePlayPause}
               onStop={handleStop}
               onPrevSong={handlePrevSetlistSong}
@@ -1403,19 +1318,6 @@ export default function App() {
           onSaveSections={handleSaveSections}
         />
       )}
-
-      {/* OPFS Streaming PCM Optimization Progress Modal */}
-      <OptimizationProgressModal
-        isOpen={Boolean(optimizingProject)}
-        songTitle={optimizingProject?.title || ''}
-        progress={optimizationProgress}
-        onCancel={handleCancelOptimization}
-        onHide={() => {
-          modalProjectIdRef.current = null;
-          setOptimizingProject(null);
-          setOptimizationProgress(null);
-        }}
-      />
 
       {/* Delete From Library Confirmation Modal */}
       {songToDeleteFromLibrary && (

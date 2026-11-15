@@ -1,13 +1,11 @@
 import { logAsyncError } from '../utils/asyncErrors';
 import { SongProject, SongSection, TrackChannel } from '../types/project';
-import { deleteProjectPcm } from './opfsStorage';
 import { isDesktopApp } from '../utils/nativeDialog';
 import { deleteDesktopSong, loadDesktopLibrary, saveDesktopSong } from './desktopLibrary';
 import {
   collectAudioFromDirectory,
   getRegisteredHandle,
   queryReadPermission,
-  requestReadPermission,
   writeProjectSidecarToDirectory,
 } from './sourceFiles';
 
@@ -556,9 +554,6 @@ export async function deleteProjectFromDb(projectId: string): Promise<void> {
     };
 
     tx.oncomplete = () => {
-      deleteProjectPcm(projectId).catch((err) =>
-        console.warn('[OPFS] Error deleting project PCM files:', err)
-      );
       resolve();
     };
     tx.onerror = () => reject(tx.error);
@@ -660,75 +655,6 @@ export interface SourceAccessResult {
   /** Stems still blocked by a denied permission */
   denied: string[];
   total: number;
-}
-
-/**
- * Makes a project's referenced files readable. Call from a user gesture (click):
- * asks for permission once per source folder, then verifies every file.
- */
-export async function requestProjectSourceAccess(projectId: string): Promise<SourceAccessResult> {
-  const raw = await loadRawStemsFromDb(projectId);
-  const refs = raw.filter((s) => s.fileHandle && !s.blob && !s.arrayBuffer);
-
-  if (refs.length > 0) {
-    const askedDirs: any[] = [];
-    for (const stem of refs) {
-      if ((await queryReadPermission(stem.fileHandle)) === 'granted') continue;
-      if (stem.dirHandle && !askedDirs.includes(stem.dirHandle)) {
-        askedDirs.push(stem.dirHandle);
-        await requestReadPermission(stem.dirHandle);
-        if ((await queryReadPermission(stem.fileHandle)) === 'granted') continue;
-      }
-      await requestReadPermission(stem.fileHandle);
-    }
-  }
-
-  const hydrated = await Promise.all(raw.map(hydrateStem));
-  return {
-    available: hydrated.filter((s) => !s.unavailable).length,
-    missing: hydrated.filter((s) => s.unavailable === 'missing').map((s) => s.fileName),
-    denied: hydrated.filter((s) => s.unavailable === 'permission').map((s) => s.fileName),
-    total: hydrated.length,
-  };
-}
-
-/** True when the project's audio can be read only through handles (no copied Blobs). */
-export async function projectHasHandleSources(projectId: string): Promise<boolean> {
-  const raw = await loadRawStemsFromDb(projectId);
-  return raw.some((s) => s.fileHandle && !s.blob && !s.arrayBuffer);
-}
-
-/**
- * Relinks a project's stems to a new folder: matches files by name (case-insensitive,
- * searching subfolders) and replaces the stored handles. Returns how many stems were relinked.
- */
-export async function relinkProjectSources(
-  projectId: string,
-  dirHandle: any
-): Promise<{ relinked: number; total: number }> {
-  const raw = await loadRawStemsFromDb(projectId);
-  const found = await collectAudioFromDirectory(dirHandle);
-  const byName = new Map<string, any>();
-  for (const f of found) {
-    const info = getRegisteredHandle(f);
-    if (info) byName.set(f.name.toLowerCase(), info.file);
-  }
-
-  const updated: StoredAudioStem[] = [];
-  for (const stem of raw) {
-    const match = byName.get(stem.fileName.toLowerCase());
-    if (!match) continue;
-    updated.push({
-      ...stem,
-      blob: undefined,
-      arrayBuffer: undefined,
-      fileHandle: match,
-      dirHandle,
-      unavailable: undefined,
-    });
-  }
-  if (updated.length > 0) await saveStemsBatchToDb(updated);
-  return { relinked: updated.length, total: raw.length };
 }
 
 export async function extractStemArrayBuffer(stem: StoredAudioStem): Promise<ArrayBuffer | null> {

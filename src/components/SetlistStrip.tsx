@@ -255,7 +255,7 @@ export const SetlistStrip: React.FC<SetlistStripProps> = ({
                     }}
                     className="w-full px-2.5 py-1.5 text-left rounded-lg hover:bg-neutral-800 text-amber-300 flex items-center gap-1.5 cursor-pointer font-medium"
                   >
-                    <Zap className="w-3.5 h-3.5 text-amber-400" /> Optimizar (OPFS)
+                    <Zap className="w-3.5 h-3.5 text-amber-400" /> Generar caché
                   </button>
                 )}
                 <button

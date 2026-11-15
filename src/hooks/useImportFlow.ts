@@ -16,7 +16,7 @@ import {
   saveStemsBatchToDb,
   StoredAudioStem,
 } from '../storage/projectDb';
-import { ensureStoragePersist, isOpfsSupported } from '../storage/opfsStorage';
+import { ensureStoragePersist } from '../utils/storagePersist';
 import {
   extractAudioFilesFromFileList,
   extractSidecarFromFileList,
@@ -55,7 +55,6 @@ interface UseImportFlowDeps {
     } | null>
   >;
   setMissingNativeCache: React.Dispatch<React.SetStateAction<boolean>>;
-  runAutoOptimizeRef: React.MutableRefObject<(projectId: string) => void>;
 }
 
 export function useImportFlow({
@@ -68,7 +67,6 @@ export function useImportFlow({
   setImportStatusText,
   setFingerprintPrompt,
   setMissingNativeCache,
-  runAutoOptimizeRef,
 }: UseImportFlowDeps) {
   /**
    * INSTANT NON-BLOCKING STEM & FOLDER IMPORT PIPELINE
@@ -421,17 +419,6 @@ export function useImportFlow({
         return;
       }
 
-      if (effectiveMode === 'new-song' && isOpfsSupported()) {
-        showToast(
-          restoredSectionsCount > 0
-            ? `"${effectiveSongTitle}" importada (${initialTracks.length} pistas · ${restoredSectionsCount} marcadores restaurados). Preparando audio…`
-            : `"${effectiveSongTitle}" importada (${initialTracks.length} pistas). Preparando el audio en segundo plano…`
-        );
-        await stemsSavePromise;
-        runAutoOptimizeRef.current(targetProjectId);
-        return;
-      }
-
       showToast(
         effectiveMode === 'new-song'
           ? restoredSectionsCount > 0
@@ -546,9 +533,7 @@ export function useImportFlow({
         saveProjectToDb(currentProjectRef.current).catch(logAsyncError('guardar la canción'));
       }
 
-      // One-time background copy into the OPFS cache (the song is in the setlist from import)
       await stemsSavePromise;
-      runAutoOptimizeRef.current(targetProjectId);
     },
     [projects.length, showToast, setFingerprintPrompt]
   );

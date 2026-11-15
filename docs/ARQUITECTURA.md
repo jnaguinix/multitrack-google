@@ -83,7 +83,7 @@ La lógica de control de `src/App.tsx` se encuentra desacoplada en custom hooks 
 
 ```
 src/hooks/
-├── useOptimization.ts     # Poda y optimización PCM en navegador / OPFS (Web Audio)
+├── useOptimization.ts     # Generación de la caché PCM nativa de una canción (botón «Generar caché»)
 ├── useProjectActions.ts   # Carga inmediata, creación, edición de metadatos, borrado y JSON export/import
 ├── useSetlist.ts          # Gestión de lista de canciones (setlist), reorden, precarga y expulsión de RAM
 ├── useSetlistMeta.ts      # Nombre y fecha del servicio (almacenamiento local)

@@ -57,16 +57,6 @@ const fakeInvoke = async (cmd: string, args: any = {}) => {
   }
 };
 
-// pcmReaderClient (importado por el motor) crea un Worker al cargarse: no existe en Node.
-(globalThis as any).Worker = class {
-  postMessage() {}
-  terminate() {}
-  addEventListener() {}
-  removeEventListener() {}
-  onmessage: unknown = null;
-  onerror: unknown = null;
-};
-
 (globalThis as any).window = {
   __TAURI__: {
     core: { invoke: fakeInvoke },

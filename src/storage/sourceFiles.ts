@@ -243,18 +243,6 @@ export async function queryReadPermission(handle: any): Promise<PermissionState>
   return 'granted';
 }
 
-/** Asks for read permission. Must be called from a user gesture. */
-export async function requestReadPermission(handle: any): Promise<PermissionState> {
-  try {
-    if (typeof handle?.requestPermission === 'function') {
-      return (await handle.requestPermission({ mode: 'read' })) as PermissionState;
-    }
-  } catch {
-    // ignore
-  }
-  return 'denied';
-}
-
 export async function queryWritePermission(handle: any): Promise<PermissionState> {
   try {
     if (typeof handle?.queryPermission === 'function') {

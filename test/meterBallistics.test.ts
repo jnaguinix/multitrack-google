@@ -9,15 +9,6 @@ function assert(condition: boolean, msg: string) {
 
 const close = (a: number, b: number, tol = 1e-6) => Math.abs(a - b) <= tol;
 
-// pcmReaderClient (importado por el motor) crea un Worker al cargarse: no existe en Node.
-(globalThis as any).Worker = class {
-  postMessage() {}
-  terminate() {}
-  addEventListener() {}
-  removeEventListener() {}
-  onmessage: unknown = null;
-  onerror: unknown = null;
-};
 (globalThis as any).window = {
   __TAURI__: {
     core: { invoke: async () => null },

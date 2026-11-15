@@ -28,7 +28,6 @@ interface LiveSetViewProps {
   transport: TransportState;
   setlistQueue: SongProject[];
   setlistTransitionMode: SetlistTransitionMode;
-  preparingIds: Set<string>;
   onPlayPause: () => void;
   onStop: () => void;
   onPrevSong: () => void;
@@ -70,8 +69,7 @@ function clockParts(totalSec: number): { main: string; tenths: string } {
 
 type SongStatus = 'ready' | 'preparing' | 'pending';
 
-function songStatus(song: SongProject, preparingIds: Set<string>): SongStatus {
-  if (preparingIds.has(song.id)) return 'preparing';
+function songStatus(song: SongProject): SongStatus {
   // Escritorio: el estado sale de la caché PCM nativa, no del motor web (OPFS).
   if (isDesktopApp()) {
     if (nativeAudioEngine.isProjectImporting(song.id)) return 'preparing';
@@ -104,7 +102,6 @@ export const LiveSetView: React.FC<LiveSetViewProps> = ({
   transport,
   setlistQueue,
   setlistTransitionMode,
-  preparingIds,
   onPlayPause,
   onStop,
   onPrevSong,
@@ -396,7 +393,7 @@ export const LiveSetView: React.FC<LiveSetViewProps> = ({
           {setlistQueue.map((song, idx) => {
             const isCurrent = song.id === project?.id;
             const isNext = nextSong?.id === song.id;
-            const status = songStatus(song, preparingIds);
+            const status = songStatus(song);
             const dur = song.durationSec || 0;
             return (
               <li key={song.id}>
