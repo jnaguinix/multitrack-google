@@ -68,7 +68,7 @@ Reproductor de multitracks optimizado para cultos y música en vivo. Dispone de 
 ---
 
 ## 5. Reglas de trabajo
-- **Rama principal**: `main` contiene el motor nativo de escritorio desde la versión 0.3.0 (migración del 2026-11-12). La rama `motor-nativo` quedó congelada como referencia y ya no se desarrolla. Las ramas nuevas salen de `main`.
+- **Rama principal**: `main` contiene el motor nativo de escritorio desde la versión 0.3.0 (migración del 2026-11-12). La antigua rama `motor-nativo` se conserva como la etiqueta `archivo/motor-nativo` (referencia congelada). El repositorio trabaja solo con `main` y ramas de trabajo temporales, que se borran al fusionarlas; las etiquetas `archivo/*` guardan lo que hubo en ramas antiguas. Las ramas nuevas salen de `main`.
 - **Versión web anterior**: conservada en la etiqueta `main-web-final`. Es el punto de retorno si hiciera falta.
 - Trabajar siempre en rama aparte creada a partir de la rama indicada. Nunca realizar commits ni merges directos a `main`, salvo que el dueño lo pida de forma expresa (como en la migración a 0.3.0).
 - No lanzar `verify.ps1 -Completo` por iniciativa propia: tarda cerca de una hora. Por commit basta el verify rápido; el completo lo pide el dueño.
