@@ -1110,18 +1110,6 @@ export class NativeAudioEngine {
     return Math.round((frames * 2) / (1024 * 1024));
   }
 
-  public getEngineMode(): AudioEngineMode {
-    return 'stream';
-  }
-
-  public setEngineMode(_mode: AudioEngineMode): void {}
-
-  public getRamBudgetMB(): number {
-    return 1024;
-  }
-
-  public setRamBudgetMB(_mb: number): void {}
-
   public setPriorityProjectIds(_ids: string[]): void {}
 
   public clearProjectFallback(_projectId: string): void {}

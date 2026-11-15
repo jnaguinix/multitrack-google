@@ -26,7 +26,6 @@ import {
   syncProjectSidecarNow,
 } from './storage/projectDb';
 import {
-  AudioEngineMode,
   OutputBus,
   QuantizeMode,
   SetlistTransitionMode,
@@ -123,12 +122,6 @@ export default function App() {
   const [audioTriggerHost, setAudioTriggerHost] = useState<HTMLSpanElement | null>(null);
   const [transport, setTransport] = useState<TransportState>(INITIAL_TRANSPORT);
   const [ramCacheVersion, setRamCacheVersion] = useState<number>(0);
-  const [engineMode, setEngineModeState] = useState<AudioEngineMode>(() =>
-    audioEngine.getEngineMode()
-  );
-  const [ramBudgetMB, setRamBudgetMBState] = useState<number>(() =>
-    audioEngine.getRamBudgetMB()
-  );
   // Default transition mode is 'cue-next' (mounts at 00:00 in pause) so songs never start playing on their own unexpectedly
   const [setlistTransitionMode, setSetlistTransitionMode] =
     useState<SetlistTransitionMode>('cue-next');
@@ -268,7 +261,7 @@ export default function App() {
     return () => {
       window.clearTimeout(timerId);
     };
-  }, [setlistQueue, currentProject?.id, ramBudgetMB, isActivatingProject]);
+  }, [setlistQueue, currentProject?.id, isActivatingProject]);
 
   // Surface engine notices (play blocked, still loading...) instead of failing silently
   useEffect(() => {
@@ -365,28 +358,6 @@ export default function App() {
       showToast('Reubicar carpetas solo está disponible en la app de escritorio.');
     },
     [isDesktopApp, showToast]
-  );
-
-  const handleChangeEngineMode = useCallback(
-    (mode: AudioEngineMode) => {
-      audioEngine.setEngineMode(mode);
-      setEngineModeState(audioEngine.getEngineMode());
-      showToast(
-        mode === 'stream'
-          ? 'Modo Stream seleccionado (usa Buffer como respaldo si la canción aún no tiene PCM)'
-          : 'Modo Buffer seleccionado (AudioBuffer completo en RAM con presupuesto)'
-      );
-    },
-    [showToast]
-  );
-
-  const handleChangeRamBudgetMB = useCallback(
-    (mb: number) => {
-      audioEngine.setRamBudgetMB(mb);
-      setRamBudgetMBState(audioEngine.getRamBudgetMB());
-      showToast(`Presupuesto de caché RAM ajustado a ${audioEngine.getRamBudgetMB()} MB`);
-    },
-    [showToast]
   );
 
   // 2 & 6. Activate a project using cached AudioBuffers if available and log console.info metrics
@@ -825,13 +796,8 @@ export default function App() {
       <TopBar
         activeView={activeView}
         setlistCount={setlistQueue.length}
-        engineMode={engineMode}
-        ramBudgetMB={ramBudgetMB}
-        cachedRamMB={audioEngine.getTotalCachedMB()}
         remoteTriggerRef={remoteTriggerRef}
         audioTriggerRef={audioTriggerRef}
-        onChangeEngineMode={handleChangeEngineMode}
-        onChangeRamBudgetMB={handleChangeRamBudgetMB}
         onSelectView={handleSelectView}
         onOpenImportModal={() => setIsImportModalOpen(true)}
       />
