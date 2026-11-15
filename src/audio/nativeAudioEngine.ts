@@ -10,6 +10,7 @@ import { logAsyncError } from '../utils/asyncErrors';
 import { AudioEngineMode, SongProject, TrackChannel, TransportState, MetersSnapshot } from '../types/project';
 import { MeterBallistics, NativeMetersSnapshot } from './meterBallistics';
 import { StatePoller } from './statePoller';
+import { sameTransport } from '../utils/transportEqual';
 import { loadProjectStemsFromDb, extractStemArrayBuffer } from '../storage/projectDb';
 import {
   pickNativeFolder,
@@ -387,7 +388,7 @@ export class NativeAudioEngine {
       this.wasPlayingBeforeEnd = pb.isPlaying;
     }
 
-    this.currentTransport = {
+    const nextTransport: TransportState = {
       isPlaying: pb.isPlaying,
       currentTimeSec: curSec,
       totalDurationSec: totSec,
@@ -402,6 +403,9 @@ export class NativeAudioEngine {
       lastCueMessage: null,
     };
 
+    // Si nada cambió (p. ej. en pausa) no se avisa: evita renderizar la interfaz entera con cada consulta.
+    if (sameTransport(this.currentTransport, nextTransport)) return;
+    this.currentTransport = nextTransport;
     this.notifyTransport();
   }
 
