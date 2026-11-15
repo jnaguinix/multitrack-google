@@ -253,6 +253,13 @@ export const TimelineArranger: React.FC<TimelineArrangerProps> = ({
   onOpenSectionEditor,
 }) => {
   const addStemInputRef = useRef<HTMLInputElement | null>(null);
+  // Quitar una pista exige dos clics (el segundo en 3 s): un roce junto a M/S no debe borrar un stem.
+  const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
+  useEffect(() => {
+    if (!pendingDeleteId) return;
+    const timer = window.setTimeout(() => setPendingDeleteId(null), 3000);
+    return () => window.clearTimeout(timer);
+  }, [pendingDeleteId]);
 
   const secPerBar = (60 / (project.bpm || 120)) * (project.beatsPerBar || 4);
   const totalDurationSec = Math.max(
@@ -504,11 +511,19 @@ export const TimelineArranger: React.FC<TimelineArrangerProps> = ({
                         </button>
                         <button
                           type="button"
-                          onClick={() => onDeleteTrack(track.id)}
-                          title="Quitar pista de esta canción"
-                          className="w-6 h-5.5 rounded bg-neutral-900 hover:bg-red-500/20 text-neutral-400 hover:text-red-400 flex items-center justify-center transition-colors cursor-pointer"
+                          onClick={() => {
+                            if (pendingDeleteId === track.id) {
+                              setPendingDeleteId(null);
+                              onDeleteTrack(track.id);
+                            } else {
+                              setPendingDeleteId(track.id);
+                            }
+                          }}
+                          title={pendingDeleteId === track.id ? 'Pulsa otra vez para quitar la pista' : 'Quitar pista de esta canción'}
+                          aria-label={pendingDeleteId === track.id ? 'Confirmar: quitar pista' : 'Quitar pista de esta canción'}
+                          className={`${pendingDeleteId === track.id ? 'w-auto px-1.5 bg-red-600 text-white' : 'w-6 bg-neutral-900 hover:bg-red-500/20 text-neutral-400 hover:text-red-400'} h-5.5 rounded flex items-center justify-center gap-1 text-xs font-bold transition-colors cursor-pointer`}
                         >
-                          <Trash2 className="w-3.5 h-3.5" />
+                          {pendingDeleteId === track.id ? <span>¿Quitar?</span> : <Trash2 className="w-3.5 h-3.5" />}
                         </button>
                       </div>
                     </div>
