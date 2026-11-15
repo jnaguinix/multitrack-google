@@ -27,7 +27,7 @@ pub mod types;
 pub use types::*;
 
 pub mod block;
-pub use block::{buffering_ready, consume_track_block};
+pub use block::{buffering_ready, consume_track_block, end_of_song_gain, END_FADE_GUARD_FRAMES};
 
 pub mod clock;
 pub use clock::{advance_clock, ClockJumps};
@@ -1001,6 +1001,13 @@ impl PlaybackEngine {
                     let pitch_ratio = 2.0f64.powf(pitch_st as f64 / 12.0);
                     let end_song_f = start_song_f + (frames as f64 * pitch_ratio).round() as u64;
 
+                    // Fundido de 8 ms al final natural de la canción (no en el vamp, que no termina).
+                    let total_song = total_frames.load(Ordering::Relaxed);
+                    let end_fade_frames = fade.fade_frames;
+                    let near_end = !vamping_arc.load(Ordering::Relaxed)
+                        && total_song > 0
+                        && end_song_f + END_FADE_GUARD_FRAMES + end_fade_frames as u64 >= total_song;
+
                     let mut metronome_pending_reposition = false;
                     if let Ok(mut met) = metronome_arc.try_lock() {
                         if start_song_f != expected_start_frame {
@@ -1023,7 +1030,12 @@ impl PlaybackEngine {
 
                     // Write into output buffer applying the micro-fade envelope and split-mono / stereo routing
                     for f in 0..frames {
-                        let env_gain = fade.next_gain();
+                        let end_g = if near_end {
+                            end_of_song_gain(start_song_f + (f as f64 * pitch_ratio) as u64, total_song, end_fade_frames)
+                        } else {
+                            1.0
+                        };
+                        let env_gain = fade.next_gain() * end_g;
                         clk_pk = clk_pk.max((click_buf[f] * cue_g * env_gain).abs());
 
                         if is_split {
@@ -1211,8 +1223,21 @@ impl PlaybackEngine {
         let cue_g = f32::from_bits(self.cue_master_gain.load(Ordering::Relaxed));
         let (mut mk_l, mut mk_r, mut ck_l, mut ck_r, mut ok_l, mut ok_r) =
             (0.0f32, 0.0f32, 0.0f32, 0.0f32, 0.0f32, 0.0f32);
+        let start_song_f = self.current_frame.load(Ordering::Relaxed);
+        let sim_pitch_ratio = 2.0f64.powf(self.pitch_semitones.load(Ordering::Relaxed) as f64 / 12.0);
+        let total_song = self.total_frames.load(Ordering::Relaxed);
+        let end_fade_frames = fade.fade_frames;
+        let near_end = !self.is_vamping.load(Ordering::Relaxed)
+            && total_song > 0
+            && start_song_f + (frames as f64 * sim_pitch_ratio).round() as u64 + END_FADE_GUARD_FRAMES + end_fade_frames as u64
+                >= total_song;
         for f in 0..frames {
-            let env_gain = fade.next_gain();
+            let end_g = if near_end {
+                end_of_song_gain(start_song_f + (f as f64 * sim_pitch_ratio) as u64, total_song, end_fade_frames)
+            } else {
+                1.0
+            };
+            let env_gain = fade.next_gain() * end_g;
             let bus_main_l = (main_l[f] + both_l[f]) * master_g;
             let bus_main_r = (main_r[f] + both_r[f]) * master_g;
             let bus_cue_l = (cue_l[f] + both_l[f]) * cue_g;

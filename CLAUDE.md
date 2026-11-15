@@ -39,7 +39,7 @@ Reproductor de multitracks optimizado para cultos y música en vivo. Dispone de 
 
 ## 3. Cosas que NO se pueden romper
 1. **Callback de audio en tiempo real**: Prohibido hacer logging (`println!`, `tracing`), alocaciones dinámicas (`vec![]`, `clone()`) o bloqueos `lock().unwrap()` en el hilo de audio. Implementado en la función `ensure_stream` de `desktop/src-tauri/src/audio/playback/mod.rs` con buffers preasignados.
-2. **Micro-fundidos de 8 ms**: Constante `FADE_MS = 8.0` en `desktop/src-tauri/src/audio/playback/fade.rs`. Se aplican única y exclusivamente al iniciar, pausar, detener, hacer seek, saltar de sección o alternar bucle vamp para evitar clics. El audio continuo recibe ganancia 1.0 exacta.
+2. **Micro-fundidos de 8 ms**: Constante `FADE_MS = 8.0` en `desktop/src-tauri/src/audio/playback/fade.rs`. Se aplican única y exclusivamente al iniciar, pausar, detener, hacer seek, saltar de sección, alternar bucle vamp y al llegar al final natural de la canción (`end_of_song_gain` en `playback/block.rs`: los últimos 8 ms terminan 64 fotogramas antes del final; no se aplica en el vamp) para evitar clics. El audio continuo recibe ganancia 1.0 exacta.
 3. **Drag & Drop en escritorio**: `"dragDropEnabled": false` obligatorio en `desktop/src-tauri/tauri.conf.json` para evitar que WebView2 intercepte el drop nativo de archivos en HTML5.
 4. **Declaración triple de comandos Tauri**: Todo comando Tauri debe registrarse en:
    - `tauri::generate_handler![...]` en `desktop/src-tauri/src/main.rs`.

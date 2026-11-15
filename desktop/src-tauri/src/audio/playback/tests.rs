@@ -1923,6 +1923,47 @@
         assert!(mayor < SALTO_MAX_SENO, "clic en la vuelta del vamp: salto {mayor} en la muestra {donde}");
     }
 
+    #[test]
+    fn test_fade_fin_de_cancion_ganancia_exacta_uno_antes_de_la_ventana_y_cero_al_final() {
+        let total = 100_000u64;
+        let fade = 384usize;
+        let fin = total - END_FADE_GUARD_FRAMES;
+        // Antes de la ventana: ganancia exactamente 1.0 (el audio continuo no se toca).
+        for pos in [0u64, 1, 50_000, fin - fade as u64 - 1] {
+            assert_eq!(end_of_song_gain(pos, total, fade), 1.0, "posición {pos}");
+        }
+        // Dentro: baja de forma monótona hasta 0.
+        let mut previa = 1.0f32;
+        for pos in (fin - fade as u64)..fin {
+            let g = end_of_song_gain(pos, total, fade);
+            assert!(g <= previa + 1e-6 && (0.0..=1.0).contains(&g), "pos {pos}: {g}");
+            previa = g;
+        }
+        // Al final y después: silencio.
+        assert_eq!(end_of_song_gain(fin, total, fade), 0.0);
+        assert_eq!(end_of_song_gain(total, total, fade), 0.0);
+        assert_eq!(end_of_song_gain(total + 5, total, fade), 0.0);
+        // Sin canción o sin fundido configurado: sin efecto.
+        assert_eq!(end_of_song_gain(10, 0, fade), 1.0);
+        assert_eq!(end_of_song_gain(99_999, total, 0), 1.0);
+    }
+
+    #[tokio::test]
+    async fn test_clics_el_final_de_una_cancion_que_acaba_alta_no_produce_clic() {
+        // 48 136 fotogramas: el archivo acaba cerca de un pico del seno (sin pasar por cero), como una
+        // canción masterizada que se corta de golpe.
+        let dir = escribir_cache_seno("final", &[("p", 48_136)]);
+        let engine = PlaybackEngine::new(Arc::new(AudioStreamStats::default()));
+        engine
+            .load_project(&dir, "final", SR_PRUEBA, Some(120.0), Some(4), Some(vec![seccion("a", 0.0, 1.0)]), Some("section-end".to_string()))
+            .await
+            .unwrap();
+        reproducir(&engine).await;
+        let (mayor, donde, _) = mayor_salto_entre_muestras(&engine, 3.0);
+        assert!(!engine.is_playing.load(Ordering::SeqCst), "la canción debía terminar");
+        assert!(mayor < SALTO_MAX_SENO, "clic al terminar la canción: salto {mayor} en la muestra {donde}");
+    }
+
     #[tokio::test]
     async fn test_a02_seeks_consecutivos_con_varias_pistas_nunca_suenan_audio_viejo() {
         let engine = motor_real(

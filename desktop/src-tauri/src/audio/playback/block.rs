@@ -79,3 +79,32 @@ pub fn consume_track_block<F: FnMut(usize, f32, f32)>(
     }
     missed > 0
 }
+
+/// Fotogramas de margen entre el final del fundido y el final nominal de la canción. El audio que sale del
+/// remuestreador llega unos 32 fotogramas por delante del reloj, así que el corte real del archivo ocurre
+/// antes de que el reloj llegue a `total_frames`; con este margen el fundido ya terminó cuando se corta.
+pub const END_FADE_GUARD_FRAMES: u64 = 64;
+
+/// Ganancia (0..1) del fundido de salida al final natural de la canción.
+///
+/// Una canción que termina alta (un master cortado sin fade-out) deja de golpe de sonar y la señal cae de un
+/// valor alto a cero: un chasquido. Igual que al pausar o detener, se aplican `fade_frames` (8 ms) de fundido,
+/// terminando [`END_FADE_GUARD_FRAMES`] antes del final. Antes de esa ventana la ganancia es exactamente 1.0.
+///
+/// Sin memoria dinámica ni bloqueos: es seguro en el callback de audio.
+#[inline]
+pub fn end_of_song_gain(position: u64, total_frames: u64, fade_frames: usize) -> f32 {
+    if total_frames == 0 || fade_frames == 0 {
+        return 1.0;
+    }
+    let fade = fade_frames as u64;
+    let end = total_frames.saturating_sub(END_FADE_GUARD_FRAMES);
+    let start = end.saturating_sub(fade);
+    if position < start {
+        1.0
+    } else if position >= end {
+        0.0
+    } else {
+        (end - position) as f32 / fade as f32
+    }
+}
