@@ -5,7 +5,7 @@ Este documento es para quien audite el código (persona o asistente). Léelo jun
 ## 1. Qué es y por qué importa
 OmniTracks es un reproductor de multitracks para cultos y música en vivo. **Un fallo en directo es peor que una función que falte**: un chasquido, un corte, un salto a la sección equivocada o un cuelgue durante el servicio. Prioriza lo que puede provocar eso.
 
-Pila: escritorio Windows con Tauri v2; motor de audio en Rust (CPAL/WASAPI, Symphonia, rubato, rtrb); interfaz en React 19, TypeScript, Tailwind 4 y Vite. `main` es la rama del motor nativo (versión 0.3.0). La versión web ya no se mantiene.
+Pila: escritorio Windows con Tauri v2; motor de audio en Rust (CPAL/WASAPI, Symphonia, rubato, rtrb); interfaz en React 19, TypeScript, Tailwind 4 y Vite. `main` es la rama del motor nativo (versión 0.3.0). El motor Web Audio y la capa OPFS se retiraron (siguen en la etiqueta `main-web-final`): el audio solo suena en la app de escritorio. `npm run dev` abre una vista previa con un motor simulado (`src/preview/*`) que no suena y no entra en producción.
 
 ## 2. Orden de la auditoría (de más a menos crítico)
 1. **Callback de audio en tiempo real**: `desktop/src-tauri/src/audio/playback/mod.rs` (función `ensure_stream`), `bus.rs`, `fade.rs`, `types.rs`.
@@ -19,7 +19,7 @@ Pila: escritorio Windows con Tauri v2; motor de audio en Rust (CPAL/WASAPI, Symp
 
 ## 3. Reglas que no se pueden romper (verifica que se cumplen)
 - **Callback de audio**: sin `println!`/`tracing`, sin alocaciones (`vec![]`, `clone()` de buffers), sin `lock().unwrap()` bloqueante ni E/S. Solo operaciones preasignadas y atómicas.
-- **Micro-fundidos de 8 ms** (`FADE_MS` en `fade.rs`) solo al iniciar, pausar, detener, hacer seek, saltar de sección o alternar vamp. El audio continuo lleva ganancia 1.0 exacta.
+- **Micro-fundidos de 8 ms** (`FADE_MS` en `fade.rs`) solo al iniciar, pausar, detener, hacer seek, saltar de sección, alternar vamp o llegar al final natural de la canción (`end_of_song_gain` en `playback/block.rs`). El audio continuo lleva ganancia 1.0 exacta.
 - **Comandos de Tauri declarados en tres sitios**: `tauri::generate_handler![...]` en `main.rs`, `.commands(&[...])` en `desktop/src-tauri/build.rs` y `"permissions"` en `desktop/src-tauri/capabilities/desktop-remote.json`. Comprueba que ninguno falta en ninguno de los tres.
 - **`"dragDropEnabled": false`** en `desktop/src-tauri/tauri.conf.json`.
 - **Sidecar** llamado exactamente `omnitracks.project.json` (el nombre antiguo `.omnitracks.json` solo se lee como respaldo).
@@ -35,10 +35,14 @@ Pila: escritorio Windows con Tauri v2; motor de audio en Rust (CPAL/WASAPI, Symp
 - Riesgo de contención: si `try_lock()` falla en el callback, se emite silencio en ese bloque.
 - Fase 5 (ruteo a más de 2 salidas) y Fase 7 (ASIO) están diferidas a propósito.
 - La importación por selector HTML o arrastre sigue decodificando al importar; solo la ruta nativa de carpeta no decodifica.
-- Ramas `diag/medidores-reales` y `diag/tiempo-cache` sin fusionar: ignóralas.
+- Hay un chasquido que el dueño oye a veces al pasar de canción con «Dejar lista la siguiente» tras una canción que acaba alta. El fundido de 8 ms al final de canción no lo resolvió; la causa sigue sin identificar (puede depender de una secuencia concreta). No medido con hardware real.
+- `verify_manual_flow` no se ha ejecutado desde la Fase 2 y no se ha oído audio real en una sesión completa tras las últimas fases.
+- `src/App.tsx` (~1490 líneas) sigue siendo grande; `sourceFiles.ts` y los handles de `projectDb.ts` quedan por la importación por selector HTML.
+- El estado de transporte re-renderiza la interfaz unas 40 veces por segundo al reproducir (UI01, solo medido en modo desarrollo).
+- Las ramas antiguas están como etiquetas `archivo/*`: ignóralas.
 
 ## 5. Qué ignorar
-`node_modules/`, `dist/`, `desktop/dist/`, `desktop/src-tauri/target/`, `package-lock.json`, `AGENTS.md` (copia de `CLAUDE.md`), y el estilo visual (colores, espaciado, tipografía). Tampoco propongas migrar de framework ni reescrituras amplias.
+`node_modules/`, `dist/`, `desktop/dist/`, `desktop/src-tauri/target/`, `package-lock.json`, `Manual.md` e `instrucciones.md` (obsoletos: describen el motor web y la guía hablada, ya retirados; manda el código y `CLAUDE.md`), `AGENTS.md` (copia de `CLAUDE.md`), y el estilo visual (colores, espaciado, tipografía). Tampoco propongas migrar de framework ni reescrituras amplias.
 
 ## 6. Cómo comprobar lo que afirmes
 Si puedes ejecutar comandos, usa los rápidos (el verify completo tarda cerca de una hora: no lo lances):
