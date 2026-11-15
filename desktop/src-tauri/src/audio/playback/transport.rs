@@ -106,6 +106,18 @@ impl PlaybackEngine {
             tokio::time::sleep(std::time::Duration::from_millis((FADE_MS * 1.2) as u64)).await;
         }
 
+        // Si el destino cae fuera del bucle de vamp, el bucle ya no tiene sentido: dejarlo activo devolvería
+        // el reloj al inicio de la sección anterior en cuanto pasara su final.
+        if self.is_vamping.load(Ordering::SeqCst) {
+            let outside = match self.clock_jumps.loop_range() {
+                Some((start, end)) => (target_frame as u64) < start || (target_frame as u64) >= end,
+                None => true,
+            };
+            if outside {
+                self.toggle_vamp(Some(false)).await;
+            }
+        }
+
         // Enter buffering/preparation state. La generación sube antes de activar buffering: el callback
         // no debe ver buffering activo con la generación anterior, o daría por bueno el audio viejo.
         let generation = self.seek_generation.fetch_add(1, Ordering::SeqCst) + 1;

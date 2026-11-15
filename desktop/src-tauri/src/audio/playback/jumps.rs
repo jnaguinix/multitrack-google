@@ -5,6 +5,19 @@ use super::types::{QueuedJumpInfo, QueuedJumpRequest};
 use super::PlaybackEngine;
 
 impl PlaybackEngine {
+    /// `true` si hay un salto programado cuyo audio ya empalmó algún feeder.
+    ///
+    /// Los feeders cortan el audio unos 350 ms antes de que el reloj llegue a la transición. Desde ese
+    /// momento el audio ya encolado pertenece a la sección destino: cancelar o reprogramar el salto solo
+    /// movería el reloj y dejaría el sonido y la posición en secciones distintas. Se rechaza en su lugar.
+    async fn jump_already_spliced(&self) -> bool {
+        if !self.clock_jumps.jump_pending() {
+            return false;
+        }
+        let tracks = self.tracks.lock().await;
+        tracks.iter().any(|trk| trk.jump_request.lock().unwrap().is_none())
+    }
+
     pub async fn queue_section_jump(
         &self,
         section_id: &str,
@@ -31,6 +44,16 @@ impl PlaybackEngine {
         };
 
         let target_frame = (target_sec_obj.start_sec * sr).round() as u64;
+
+        if self.jump_already_spliced().await {
+            return Err("El salto anterior ya está en curso: espera a que termine para elegir otra sección".to_string());
+        }
+
+        // Un vamp activo en la sección que se abandona devolvería el reloj al inicio de su bucle justo
+        // después del salto: se desactiva al encolar. El salto cuantizado sigue ocurriendo en su momento.
+        if self.is_vamping.load(Ordering::SeqCst) {
+            self.toggle_vamp(Some(false)).await;
+        }
 
         let mode = quantize_mode_opt
             .map(|s| s.to_string())
@@ -129,6 +152,10 @@ impl PlaybackEngine {
     }
 
     pub async fn cancel_queued_jump(&self) {
+        if self.jump_already_spliced().await {
+            tracing::warn!("[NativeEngine] cancel_queued_jump ignorado: el audio del salto ya está empalmado");
+            return;
+        }
         tracing::info!("[NativeEngine] cancel_queued_jump");
         self.clock_jumps.cancel_jump();
         *self.queued_jump.lock().unwrap() = None;

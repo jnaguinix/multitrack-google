@@ -1640,6 +1640,61 @@
         assert!(desajustes <= 4, "el reloj no sigue al audio en las vueltas del vamp ({desajustes} bloques)");
     }
 
+    // ----- Auditoría: vamp y saltos tardíos -----
+
+    #[tokio::test]
+    async fn test_encolar_un_salto_con_vamp_activo_desactiva_el_vamp() {
+        let secciones = vec![seccion("a", 0.0, 2.0), seccion("b", 2.0, 4.0), seccion("c", 4.0, 6.0)];
+        let engine = motor_real("aud_vamp_salto", &[("pista", 288_000)], secciones).await;
+        engine.seek(2.5).await;
+        assert!(engine.toggle_vamp(Some(true)).await);
+        assert!(engine.clock_jumps.loop_range().is_some());
+        engine.queue_section_jump("c", Some("section-end")).await.unwrap();
+        assert!(!engine.is_vamping.load(Ordering::SeqCst), "el vamp debe quedar desactivado al saltar");
+        assert!(engine.clock_jumps.loop_range().is_none(), "el reloj no debe conservar el bucle del vamp");
+    }
+
+    #[tokio::test]
+    async fn test_seek_fuera_del_bucle_desactiva_el_vamp_y_dentro_lo_mantiene() {
+        let secciones = vec![seccion("a", 0.0, 2.0), seccion("b", 2.0, 4.0), seccion("c", 4.0, 6.0)];
+        let engine = motor_real("aud_vamp_seek", &[("pista", 288_000)], secciones).await;
+        engine.seek(2.5).await;
+        assert!(engine.toggle_vamp(Some(true)).await);
+        engine.seek(3.0).await; // dentro de B
+        assert!(engine.is_vamping.load(Ordering::SeqCst), "un seek dentro del bucle conserva el vamp");
+        engine.seek(5.0).await; // fuera, en C
+        assert!(!engine.is_vamping.load(Ordering::SeqCst), "un seek fuera del bucle desactiva el vamp");
+        assert!(engine.clock_jumps.loop_range().is_none());
+    }
+
+    #[tokio::test]
+    async fn test_cancelar_un_salto_antes_de_empalmar_lo_cancela() {
+        let secciones = vec![seccion("a", 0.0, 2.0), seccion("b", 2.0, 4.0), seccion("c", 4.0, 6.0)];
+        let engine = motor_real("aud_cancel_ok", &[("pista", 288_000)], secciones).await;
+        engine.seek(0.5).await;
+        engine.queue_section_jump("c", Some("section-end")).await.unwrap();
+        assert!(engine.clock_jumps.jump_pending());
+        engine.cancel_queued_jump().await;
+        assert!(!engine.clock_jumps.jump_pending(), "ningún feeder empalmó: debe poder cancelarse");
+    }
+
+    #[tokio::test]
+    async fn test_cancelar_o_cambiar_un_salto_ya_empalmado_se_rechaza() {
+        let secciones = vec![seccion("a", 0.0, 2.0), seccion("b", 2.0, 4.0), seccion("c", 4.0, 6.0)];
+        let engine = motor_real("aud_cancel_tarde", &[("pista", 288_000)], secciones).await;
+        engine.seek(0.5).await;
+        engine.queue_section_jump("c", Some("section-end")).await.unwrap();
+        // Un feeder ya consumió la petición: el audio de la sección destino está en su anillo.
+        {
+            let tracks = engine.tracks.lock().await;
+            *tracks[0].jump_request.lock().unwrap() = None;
+        }
+        engine.cancel_queued_jump().await;
+        assert!(engine.clock_jumps.jump_pending(), "el salto ya empalmado no puede cancelarse solo en el reloj");
+        assert!(engine.queue_section_jump("a", Some("section-end")).await.is_err(), "no se puede reprogramar un salto ya empalmado");
+        assert!(engine.clock_jumps.jump_pending());
+    }
+
     // ----- A03: pista terminada y buffering -----
 
     #[tokio::test]
