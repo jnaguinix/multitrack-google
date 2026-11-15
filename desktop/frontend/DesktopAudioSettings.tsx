@@ -1,5 +1,6 @@
 import React, { memo, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
+import { logAsyncError } from '../../src/utils/asyncErrors';
 import {
   Sliders,
   Volume2,
@@ -95,6 +96,8 @@ const invoke = host.__TAURI__?.core.invoke;
 
 export default memo(function DesktopAudioSettings({ triggerHost }: Props) {
   const dialogRef = useRef<HTMLDialogElement>(null);
+  // El sondeo del estado solo corre con el diálogo abierto: consultar el motor también pone a cero los picos de los medidores.
+  const [isOpen, setIsOpen] = useState(false);
   const [hosts, setHosts] = useState<string[]>(['WASAPI']);
   const [devices, setDevices] = useState<AudioDeviceInfo[]>([]);
   const [selectedHost, setSelectedHost] = useState('WASAPI');
@@ -289,7 +292,7 @@ export default memo(function DesktopAudioSettings({ triggerHost }: Props) {
 
   useEffect(() => {
     let timer: number | null = null;
-    if (invoke) {
+    if (invoke && isOpen) {
       timer = window.setInterval(async () => {
         try {
           const pb = await invoke<PlaybackStateSnapshot>('audio_get_playback_state');
@@ -315,15 +318,15 @@ export default memo(function DesktopAudioSettings({ triggerHost }: Props) {
           }
           const s = await invoke<AudioStreamStatsSnapshot>('audio_get_stats');
           if (s) setStats(s);
-        } catch {
-          // ignore
+        } catch (err) {
+          logAsyncError('sondeo del estado en Ajustes de audio')(err);
         }
       }, 250);
     }
     return () => {
       if (timer) clearInterval(timer);
     };
-  }, [isDraggingSeek]);
+  }, [isDraggingSeek, isOpen]);
 
   const handleNativeLoad = async () => {
     if (!invoke || !selectedProjectId) return;
@@ -726,6 +729,7 @@ export default memo(function DesktopAudioSettings({ triggerHost }: Props) {
             title="Audio"
             onClick={() => {
               dialogRef.current?.showModal();
+              setIsOpen(true);
               void loadAudioConfig();
             }}
           >
@@ -739,6 +743,7 @@ export default memo(function DesktopAudioSettings({ triggerHost }: Props) {
         id="desktop-audio-dialog"
         className="fixed inset-0 m-auto z-50 bg-studio-panel border border-neutral-800 rounded-2xl w-full max-w-xl p-5 space-y-3 shadow-2xl backdrop:bg-black/70 text-neutral-100 overflow-hidden"
         aria-labelledby="desktop-audio-title"
+        onClose={() => setIsOpen(false)}
         onKeyDown={(e) => e.stopPropagation()}
       >
         {/* 1. Cabecera: título «Audio» y botón de cerrar */}
