@@ -108,3 +108,39 @@ pub fn end_of_song_gain(position: u64, total_frames: u64, fade_frames: usize) ->
         (end - position) as f32 / fade as f32
     }
 }
+
+/// Ley de paneo de una pista: ganancias por canal (`pan_l`, `pan_r`, ya con la ganancia de pista) y cuánto
+/// del canal contrario se pasa al canal propio (`cross`, de 0 a 0,5).
+///
+/// Ley de paneo constante en potencia (`cos`/`sin`) con pasaje del canal contrario: al llevar una pista
+/// estéreo a un lado, TODO su contenido va a ese lado (en el extremo, la media de L y R), en vez de quedarse
+/// solo con su canal izquierdo o derecho. Con el pan al centro la imagen estéreo no se toca.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PanLaw {
+    pub pan_l: f32,
+    pub pan_r: f32,
+    pub cross: f32,
+}
+
+/// `pan` de -1,0 (izquierda) a +1,0 (derecha) y `gain` lineal de la pista.
+#[inline]
+pub fn pan_law(pan: f32, gain: f32) -> PanLaw {
+    let p = pan.clamp(-1.0, 1.0);
+    let angle = (p + 1.0) * (std::f32::consts::PI / 4.0);
+    PanLaw {
+        pan_l: angle.cos() * gain,
+        pan_r: angle.sin() * gain,
+        cross: p.abs() * 0.5,
+    }
+}
+
+/// Aplica el paneo a una muestra estéreo. Una fuente mono (`l == r`) suena igual que con el paneo clásico
+/// (`l * pan_l`, `r * pan_r`); una estéreo se pliega hacia el lado elegido.
+#[inline(always)]
+pub fn apply_pan(l: f32, r: f32, law: PanLaw) -> (f32, f32) {
+    let keep = 1.0 - law.cross;
+    (
+        (keep * l + law.cross * r) * law.pan_l,
+        (keep * r + law.cross * l) * law.pan_r,
+    )
+}

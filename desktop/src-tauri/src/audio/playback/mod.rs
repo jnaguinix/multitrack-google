@@ -27,7 +27,7 @@ pub mod types;
 pub use types::*;
 
 pub mod block;
-pub use block::{buffering_ready, consume_track_block, end_of_song_gain, END_FADE_GUARD_FRAMES};
+pub use block::{apply_pan, buffering_ready, consume_track_block, end_of_song_gain, pan_law, END_FADE_GUARD_FRAMES};
 
 pub mod clock;
 pub use clock::{advance_clock, ClockJumps};
@@ -933,10 +933,7 @@ impl PlaybackEngine {
                         }
 
                         let g = f32::from_bits(trk.gain.load(Ordering::Relaxed));
-                        let p = trk.pan.load(Ordering::Relaxed) as f32 / 100.0;
-                        let angle = (p + 1.0) * (std::f32::consts::PI / 4.0);
-                        let pan_l = angle.cos() * g;
-                        let pan_r = angle.sin() * g;
+                        let law = pan_law(trk.pan.load(Ordering::Relaxed) as f32 / 100.0, g);
 
                         if let Ok(mut c) = trk.consumer.try_lock() {
                             let unread_frames = (c.slots() / 2) as u64;
@@ -948,8 +945,7 @@ impl PlaybackEngine {
                             let mut pk_l = 0.0f32;
                             let mut pk_r = 0.0f32;
                             let had_underrun = consume_track_block(&mut c, &trk.skip_frames, track_eof, frames, |f, l, r| {
-                                let tl = l * pan_l;
-                                let tr = r * pan_r;
+                                let (tl, tr) = apply_pan(l, r, law);
                                 pk_l = pk_l.max(tl.abs());
                                 pk_r = pk_r.max(tr.abs());
                                 match track_bus {
@@ -1187,17 +1183,13 @@ impl PlaybackEngine {
             }
 
             let g = f32::from_bits(trk.gain.load(Ordering::Relaxed));
-            let p = trk.pan.load(Ordering::Relaxed) as f32 / 100.0;
-            let angle = (p + 1.0) * (std::f32::consts::PI / 4.0);
-            let pan_l = angle.cos() * g;
-            let pan_r = angle.sin() * g;
+            let law = pan_law(trk.pan.load(Ordering::Relaxed) as f32 / 100.0, g);
 
             if let Ok(mut c) = trk.consumer.lock() {
                 let mut pk_l = 0.0f32;
                 let mut pk_r = 0.0f32;
                 consume_track_block(&mut c, &trk.skip_frames, trk.eof.load(Ordering::Relaxed), frames, |f, l, r| {
-                    let tl = l * pan_l;
-                    let tr = r * pan_r;
+                    let (tl, tr) = apply_pan(l, r, law);
                     pk_l = pk_l.max(tl.abs());
                     pk_r = pk_r.max(tr.abs());
                     match track_bus {

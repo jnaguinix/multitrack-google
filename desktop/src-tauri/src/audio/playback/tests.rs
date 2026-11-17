@@ -1640,6 +1640,52 @@
         assert!(desajustes <= 4, "el reloj no sigue al audio en las vueltas del vamp ({desajustes} bloques)");
     }
 
+    // ----- Paneo de pistas estéreo -----
+
+    #[test]
+    fn test_pan_estereo_al_extremo_manda_todo_el_contenido_a_ese_lado() {
+        // Una pista estéreo con contenido distinto en cada canal (un bajo con la guitarra abierta a un lado).
+        let (l, r) = (0.8f32, 0.2f32);
+        let izq = apply_pan(l, r, pan_law(-1.0, 1.0));
+        assert!((izq.0 - 0.5).abs() < 1e-5, "a la izquierda debe sonar la media de L y R, no solo L: {}", izq.0);
+        assert!(izq.1.abs() < 1e-5, "el lado contrario debe quedar en silencio: {}", izq.1);
+        let der = apply_pan(l, r, pan_law(1.0, 1.0));
+        assert!((der.1 - 0.5).abs() < 1e-5 && der.0.abs() < 1e-5, "simétrico a la derecha: {der:?}");
+    }
+
+    #[test]
+    fn test_pan_al_centro_no_toca_la_imagen_estereo() {
+        let law = pan_law(0.0, 1.0);
+        let (tl, tr) = apply_pan(0.9, -0.3, law);
+        let k = std::f32::consts::FRAC_1_SQRT_2;
+        assert!((tl - 0.9 * k).abs() < 1e-5 && (tr + 0.3 * k).abs() < 1e-5, "{tl} {tr}");
+    }
+
+    #[test]
+    fn test_pan_de_una_fuente_mono_es_igual_que_el_paneo_clasico() {
+        // Una pista mono llega con L == R: el cambio no debe alterar su nivel en ningún punto del paneo.
+        for i in -10..=10 {
+            let pan = i as f32 / 10.0;
+            let g = 0.7f32;
+            let law = pan_law(pan, g);
+            let angle = (pan + 1.0) * (std::f32::consts::PI / 4.0);
+            let (tl, tr) = apply_pan(0.6, 0.6, law);
+            assert!((tl - 0.6 * angle.cos() * g).abs() < 1e-5, "pan {pan}: L {tl}");
+            assert!((tr - 0.6 * angle.sin() * g).abs() < 1e-5, "pan {pan}: R {tr}");
+        }
+    }
+
+    #[test]
+    fn test_pan_es_continuo_sin_saltos_al_salir_del_centro() {
+        let (l, r) = (0.8f32, 0.2f32);
+        let mut previo = apply_pan(l, r, pan_law(-1.0, 1.0));
+        for i in -99..=100 {
+            let actual = apply_pan(l, r, pan_law(i as f32 / 100.0, 1.0));
+            assert!((actual.0 - previo.0).abs() < 0.03 && (actual.1 - previo.1).abs() < 0.03, "salto brusco en {i}: {previo:?} -> {actual:?}");
+            previo = actual;
+        }
+    }
+
     // ----- Auditoría: vamp y saltos tardíos -----
 
     #[tokio::test]
