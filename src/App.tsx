@@ -544,6 +544,20 @@ export default function App() {
     []
   );
 
+  // El interruptor de Split-Mono de Ajustes de audio cambia el modo del proyecto: así el motor no lo pierde
+  // cuando la mezcla se reenvía (mover un fader) y el botón de la barra de transporte refleja el mismo estado.
+  useEffect(() => {
+    const onSplitMono = (event: Event) => {
+      const enabled = Boolean((event as CustomEvent<{ enabled: boolean }>).detail?.enabled);
+      updateCurrentProject((p) => {
+        const mode = enabled ? 'split-mono' : 'stereo';
+        return p.splitRoutingMode === mode ? p : { ...p, splitRoutingMode: mode };
+      });
+    };
+    window.addEventListener('omnitracks:split-mono', onSplitMono);
+    return () => window.removeEventListener('omnitracks:split-mono', onSplitMono);
+  }, [updateCurrentProject]);
+
   // Atajos globales de teclado (Espacio, V, 1-9)
   useStudioShortcuts(currentProjectRef, liveJumpsLockedRef);
 

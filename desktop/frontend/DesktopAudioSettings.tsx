@@ -306,6 +306,9 @@ export default memo(function DesktopAudioSettings({ triggerHost }: Props) {
             if (typeof pb.pitchSemitones === 'number') {
               setPitchSemitones(pb.pitchSemitones);
             }
+            if (typeof pb.splitMono === 'boolean') {
+              setSplitMono(pb.splitMono);
+            }
             if (typeof pb.clickEnabled === 'boolean') {
               setClickEnabled(pb.clickEnabled);
             }
@@ -471,6 +474,9 @@ export default memo(function DesktopAudioSettings({ triggerHost }: Props) {
   const handleSplitMonoChange = async (enabled: boolean) => {
     setSplitMono(enabled);
     localStorage.setItem('omnitracks_split_mono', String(enabled));
+    // El modo vive en el proyecto (`splitRoutingMode`): la app lo reenvía al motor en cada cambio de la
+    // mezcla. Si solo se cambiara el motor, el siguiente movimiento de un fader lo desharía.
+    window.dispatchEvent(new CustomEvent('omnitracks:split-mono', { detail: { enabled } }));
     if (invoke) {
       try {
         await invoke('audio_set_split_mono', { enabled });
