@@ -5,6 +5,7 @@ import {
   compareNames,
   effectiveBus,
   getInstrument,
+  instrumentIdFromName,
   isClickTrack,
   isGuideTrack,
   numberedNames,
@@ -38,6 +39,12 @@ eq(
 eq(numberedNames(['teclado', null, 'teclado']), ['Teclado 1', null, 'Teclado 2'], 'las ignoradas no cuentan ni se numeran');
 eq(numberedNames(['teclado', null]), ['Teclado', null], 'una sola vez, aunque haya ignoradas');
 eq(numberedNames(['x-no-existe']), [null], 'id desconocido da null');
+
+// --- Nombre guardado → instrumento
+eq(instrumentIdFromName('Guitarra eléctrica 2'), 'guitarra-electrica', 'quita el número final');
+eq(instrumentIdFromName('Bajo'), 'bajo', 'sin número');
+eq(instrumentIdFromName('Click Track'), null, 'nombre antiguo fuera del catálogo');
+eq(instrumentIdFromName('Voz Alto 1'), 'voz-alto', 'etiqueta con espacio y número');
 
 // --- Orden: alfabético en español, números naturales, sin Click ni Guía
 assert(compareNames('Batería', 'Bajo') > 0 && compareNames('Bajo', 'Batería') < 0, 'orden español');

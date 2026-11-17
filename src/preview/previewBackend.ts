@@ -25,6 +25,39 @@ interface TrackControl {
   soloed: boolean;
 }
 
+const SCAN_NAMES = [
+  'Diosesamorf#-bajo-Bb-multitrack',
+  'Diosesamorf#-bateria-Bb-multitrack',
+  'Diosesamorf#-guitarra electrica 1-Bb-multitrack',
+  'Diosesamorf#-guitarra electrica 2-Bb-multitrack',
+  'Diosesamorf#-teclado-Bb-multitrack',
+  'Click Track',
+  'Guide',
+  'Bass',
+  'Drums (Live)',
+  'Soprano',
+];
+
+function scannedFolder() {
+  return {
+    folderPath: 'C:\\Vista previa\\Friend of God',
+    folderName: 'Friend of God',
+    title: 'Friend of God',
+    artist: 'Artista Desconocido',
+    bpm: null,
+    key: null,
+    sections: [],
+    files: SCAN_NAMES.map((name, i) => ({
+      filePath: `C:\\Vista previa\\Friend of God\\${name}.wav`,
+      fileName: `${name}.wav`,
+      trackName: name,
+      trackId: `stem-${String(i + 1).padStart(2, '0')}`,
+      estDurationSec: 381.7,
+      fileSize: 67_337_620,
+    })),
+  };
+}
+
 export function createPreviewBackend() {
   const library = createSampleLibrary();
   const songsById = new Map<string, SongProject>(library.songs.map((s) => [s.id, s]));
@@ -280,6 +313,11 @@ export function createPreviewBackend() {
     audio_delete_project_cache: () => null,
     audio_check_files_exist: (a) => Object.fromEntries((a?.paths ?? []).map((p: string) => [p, true])),
     desktop_update_check: () => null,
+
+    // ---- Importación: selector de carpeta y escaneo simulados (nombres largos como los de un multitrack real)
+    'plugin:dialog|open': () => 'C:\\Vista previa\\Friend of God',
+    audio_scan_folder: () => scannedFolder(),
+    audio_scan_files: () => scannedFolder(),
   };
 
   const invoke = async <T,>(command: string, args?: Args): Promise<T> => {

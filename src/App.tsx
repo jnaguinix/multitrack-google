@@ -58,6 +58,13 @@ import { ConfirmSongActionModal } from './components/modals/ConfirmSongActionMod
 import { SectionEditorModal } from './components/modals/SectionEditorModal';
 import { SongFingerprintPromptModal } from './components/modals/SongFingerprintPromptModal';
 import { StemImporterModal } from './components/modals/StemImporterModal';
+import {
+  ImportWizardModal,
+  type ImportWizardMode,
+  type WizardFile,
+  type WizardMeta,
+  type WizardResult,
+} from './components/modals/ImportWizardModal';
 import { inferTrackRoleAndColor } from './utils/trackRole';
 import {
   FingerprintCandidate,
@@ -136,6 +143,17 @@ export default function App() {
   const [songToDeleteFromLibrary, setSongToDeleteFromLibrary] = useState<SongProject | null>(null);
   const [missingFolderSong, setMissingFolderSong] = useState<SongProject | null>(null);
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
+  const [importWizard, setImportWizard] = useState<{
+    mode: ImportWizardMode;
+    initialMeta: WizardMeta;
+    files: WizardFile[];
+    resolve: (result: WizardResult | null) => void;
+  } | null>(null);
+  const requestImportWizard = useCallback(
+    (request: { mode: ImportWizardMode; initialMeta: WizardMeta; files: WizardFile[] }) =>
+      new Promise<WizardResult | null>((resolve) => setImportWizard({ ...request, resolve })),
+    []
+  );
   const [importStatusText, setImportStatusText] = useState<string | null>(null);
   const [fingerprintPrompt, setFingerprintPrompt] = useState<{
     candidates: FingerprintCandidate[];
@@ -634,6 +652,7 @@ export default function App() {
     setImportStatusText,
     setFingerprintPrompt,
     setMissingNativeCache,
+    requestImportWizard,
   });
 
 
@@ -1268,6 +1287,24 @@ export default function App() {
             const cb = fingerprintPrompt.resolve;
             setFingerprintPrompt(null);
             cb('cancel');
+          }}
+        />
+      )}
+
+      {importWizard && (
+        <ImportWizardModal
+          mode={importWizard.mode}
+          initialMeta={importWizard.initialMeta}
+          files={importWizard.files}
+          onConfirm={(result) => {
+            const done = importWizard.resolve;
+            setImportWizard(null);
+            done(result);
+          }}
+          onCancel={() => {
+            const done = importWizard.resolve;
+            setImportWizard(null);
+            done(null);
           }}
         />
       )}

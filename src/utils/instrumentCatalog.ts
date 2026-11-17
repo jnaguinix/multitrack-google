@@ -76,6 +76,17 @@ export function numberedNames(instrumentIds: ReadonlyArray<string | null>): Arra
   });
 }
 
+/**
+ * Instrumento del catálogo que corresponde a un nombre ya guardado («Guitarra eléctrica 2» → `guitarra-electrica`).
+ * Coincidencia exacta con la etiqueta (sin número final): sirve para volver a numerar al añadir pistas a una
+ * canción o al reimportarla. Los nombres antiguos que no están en el catálogo devuelven `null`.
+ */
+export function instrumentIdFromName(name: string): string | null {
+  const base = (name || '').replace(/\s+\d+$/, '').trim();
+  const found = ALL_INSTRUMENTS.find((i) => i.label === base);
+  return found ? found.id : null;
+}
+
 // ---------------------------------------------------------------------------------------------
 // Orden y clasificación
 // ---------------------------------------------------------------------------------------------
