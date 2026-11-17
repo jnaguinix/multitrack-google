@@ -141,7 +141,7 @@ export const ImportWizardModal: React.FC<Props> = ({ mode, initialMeta, files, o
       aria-modal="true"
       aria-labelledby="import-wizard-title"
       onKeyDown={onKeyDown}
-      className="fixed inset-0 z-50 bg-black/70 backdrop-blur-[2px] flex items-center justify-center p-4"
+      className="fixed inset-0 z-[80] bg-black/70 backdrop-blur-[2px] flex items-center justify-center p-4"
     >
       <div className="bg-studio-panel border border-neutral-800 rounded-2xl w-full max-w-2xl max-h-[92dvh] flex flex-col shadow-2xl overflow-hidden">
         {/* Cabecera */}
