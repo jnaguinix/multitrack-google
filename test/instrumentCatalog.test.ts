@@ -10,6 +10,8 @@ import {
   isClickTrack,
   isGuideTrack,
   numberedNames,
+  canonicalInstrumentId,
+  migrateTrackNames,
   orderTracksForDisplay,
   sortInstrumentTracks,
 } from '../src/utils/instrumentCatalog';
@@ -34,19 +36,55 @@ assert(getInstrument('nada') === null && getInstrument(null) === null, 'id desco
 // --- Numeración
 eq(numberedNames(['bajo', 'bateria']), ['Bajo', 'Batería'], 'sin repetidos no hay número');
 eq(
-  numberedNames(['guitarra-electrica', 'bajo', 'guitarra-electrica']),
-  ['Guitarra eléctrica 1', 'Bajo', 'Guitarra eléctrica 2'],
+  numberedNames(['guitarra', 'bajo', 'guitarra']),
+  ['Guitarra 1', 'Bajo', 'Guitarra 2'],
   'repetidos se numeran por orden'
 );
-eq(numberedNames(['teclado', null, 'teclado']), ['Teclado 1', null, 'Teclado 2'], 'las ignoradas no cuentan ni se numeran');
-eq(numberedNames(['teclado', null]), ['Teclado', null], 'una sola vez, aunque haya ignoradas');
+eq(numberedNames(['piano', null, 'piano']), ['Piano 1', null, 'Piano 2'], 'las ignoradas no cuentan ni se numeran');
+eq(numberedNames(['piano', null]), ['Piano', null], 'una sola vez, aunque haya ignoradas');
+eq(numberedNames(['guitarra', 'guitarra', 'guitarra']), ['Guitarra 1', 'Guitarra 2', 'Guitarra 3'], 'tres guitarras');
 eq(numberedNames(['x-no-existe']), [null], 'id desconocido da null');
 
 // --- Nombre guardado → instrumento
-eq(instrumentIdFromName('Guitarra eléctrica 2'), 'guitarra-electrica', 'quita el número final');
+eq(instrumentIdFromName('Guitarra 2'), 'guitarra', 'quita el número final');
 eq(instrumentIdFromName('Bajo'), 'bajo', 'sin número');
 eq(instrumentIdFromName('Click Track'), null, 'nombre antiguo fuera del catálogo');
 eq(instrumentIdFromName('Voz Alto 1'), 'voz-alto', 'etiqueta con espacio y número');
+
+// --- Catálogo simplificado: nombres e ids anteriores se reconocen y se migran
+assert(!labels.includes('Teclado') && !labels.includes('Cuerdas') && !labels.includes('Sintetizador / Pad'), 'ya no están Teclado, Cuerdas ni Sintetizador / Pad');
+assert(labels.includes('Guitarra') && labels.includes('Piano') && labels.includes('Pad') && labels.includes('Strings'), 'Guitarra, Piano, Pad y Strings');
+assert(!labels.some((l) => l.startsWith('Guitarra ')), 'una sola Guitarra, sin acústica ni eléctrica');
+eq(canonicalInstrumentId('guitarra-electrica'), 'guitarra', 'id viejo: guitarra eléctrica');
+eq(canonicalInstrumentId('guitarra-acustica'), 'guitarra', 'id viejo: guitarra acústica');
+eq(canonicalInstrumentId('teclado'), 'piano', 'id viejo: teclado');
+eq(canonicalInstrumentId('sintetizador-pad'), 'pad', 'id viejo: sintetizador / pad');
+eq(canonicalInstrumentId('cuerdas'), 'strings', 'id viejo: cuerdas');
+eq(getInstrument('teclado')?.label, 'Piano', 'getInstrument resuelve los ids viejos');
+eq(instrumentIdFromName('Guitarra eléctrica 2'), 'guitarra', 'nombre viejo: guitarra eléctrica');
+eq(instrumentIdFromName('Guitarra acústica'), 'guitarra', 'nombre viejo: guitarra acústica');
+eq(instrumentIdFromName('Teclado'), 'piano', 'nombre viejo: teclado');
+eq(instrumentIdFromName('Sintetizador / Pad'), 'pad', 'nombre viejo: sintetizador / pad');
+eq(instrumentIdFromName('Cuerdas'), 'strings', 'nombre viejo: cuerdas');
+eq(
+  migrateTrackNames([
+    { name: 'Guitarra acústica' },
+    { name: 'Guitarra eléctrica 1' },
+    { name: 'Guitarra eléctrica 2' },
+    { name: 'Teclado' },
+    { name: 'Sintetizador / Pad' },
+    { name: 'Cuerdas' },
+    { name: 'Bajo' },
+    { name: 'Click Track' },
+    { name: 'Voz' },
+  ]).map((x) => x.name),
+  ['Guitarra 1', 'Guitarra 2', 'Guitarra 3', 'Piano', 'Pad', 'Strings', 'Bajo', 'Click Track', 'Voz'],
+  'las canciones guardadas pasan a los nombres nuevos y se renumeran; lo que no es del catálogo no se toca'
+);
+const ya = migrateTrackNames([{ name: 'Guitarra 1' }, { name: 'Guitarra 2' }, { name: 'Piano' }]);
+eq(migrateTrackNames(ya).map((x) => x.name), ['Guitarra 1', 'Guitarra 2', 'Piano'], 'migrar dos veces no cambia nada');
+const mismo = [{ name: 'Bajo' }];
+assert(migrateTrackNames(mismo)[0] === mismo[0], 'una pista que no cambia es el mismo objeto');
 
 // --- Orden: alfabético en español, números naturales, sin Click ni Guía
 assert(compareNames('Batería', 'Bajo') > 0 && compareNames('Bajo', 'Batería') < 0, 'orden español');
@@ -57,13 +95,13 @@ const tracks = [
   { name: 'Click', role: 'click' as const },
   { name: 'Bajo', role: 'bass' as const },
   { name: 'Guía', role: 'guide' as const },
-  { name: 'Guitarra eléctrica 2', role: 'guitar' as const },
-  { name: 'Guitarra eléctrica 1', role: 'guitar' as const },
+  { name: 'Guitarra 2', role: 'guitar' as const },
+  { name: 'Guitarra 1', role: 'guitar' as const },
 ];
-eq(sortInstrumentTracks(tracks).map((t) => t.name), ['Bajo', 'Guitarra eléctrica 1', 'Guitarra eléctrica 2', 'Teclado'], 'orden y exclusión de fijos');
+eq(sortInstrumentTracks(tracks).map((t) => t.name), ['Bajo', 'Guitarra 1', 'Guitarra 2', 'Teclado'], 'orden y exclusión de fijos');
 eq(
   orderTracksForDisplay(tracks).map((t) => t.name),
-  ['Bajo', 'Guitarra eléctrica 1', 'Guitarra eléctrica 2', 'Teclado', 'Click', 'Guía'],
+  ['Bajo', 'Guitarra 1', 'Guitarra 2', 'Teclado', 'Click', 'Guía'],
   'Arreglo: instrumentos alfabéticos y al final Click y Guía'
 );
 assert(tracks[0].name === 'Teclado', 'sortInstrumentTracks no modifica la lista original');
@@ -94,6 +132,7 @@ eq(loadTrackMapMemory(st), {}, 'memoria vacía');
 rememberTrackMapping(
   [
     { fileName: 'Bass.wav', instrumentId: 'bajo' },
+    { fileName: 'Keys.wav', instrumentId: 'teclado' }, // id anterior: se guarda como «piano»
     { fileName: 'Diosesamorf#-bajo-Bb-multitrack.wav', instrumentId: 'bajo' },
     { fileName: 'Ignorada.wav', instrumentId: null },
     { fileName: 'Rara.wav', instrumentId: 'no-existe' },
@@ -102,6 +141,10 @@ rememberTrackMapping(
 );
 const mem = loadTrackMapMemory(st);
 eq(mem[memoryKey('BASS.WAV')], 'bajo', 'coincide sin distinguir mayúsculas');
+eq(mem[memoryKey('keys.wav')], 'piano', 'un id anterior se guarda ya migrado');
+const viejo = fakeStorage();
+viejo.setItem('omnitracks_track_map_v1', JSON.stringify({ 'pad.wav': 'sintetizador-pad', 'gtr.wav': 'guitarra-electrica' }));
+eq(loadTrackMapMemory(viejo), { 'pad.wav': 'pad', 'gtr.wav': 'guitarra' }, 'la memoria guardada con ids anteriores se carga migrada');
 assert(!('ignorada.wav' in mem) && !('rara.wav' in mem), 'no recuerda ignoradas ni ids desconocidos');
 assert(mem[memoryKey('Bass 2.wav')] === undefined, 'nunca adivina: un nombre parecido no coincide');
 const bad = fakeStorage();

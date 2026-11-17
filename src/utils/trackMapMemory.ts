@@ -5,7 +5,7 @@
  * intenta adivinar a partir de palabras del nombre. El asistente muestra lo recordado ya elegido, con una
  * marca, y el usuario puede cambiarlo.
  */
-import { getInstrument } from './instrumentCatalog';
+import { canonicalInstrumentId, getInstrument } from './instrumentCatalog';
 import { logAsyncError } from './asyncErrors';
 
 const STORAGE_KEY = 'omnitracks_track_map_v1';
@@ -23,7 +23,7 @@ export function loadTrackMapMemory(storage: Pick<Storage, 'getItem'> | null = sa
     if (!parsed || typeof parsed !== 'object') return {};
     const out: TrackMapMemory = {};
     for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) {
-      if (typeof v === 'string' && getInstrument(v)) out[k] = v;
+      if (typeof v === 'string' && getInstrument(v)) out[k] = canonicalInstrumentId(v) as string;
     }
     return out;
   } catch (err) {
@@ -42,7 +42,7 @@ export function rememberTrackMapping(
     const memory = loadTrackMapMemory(storage);
     for (const e of entries) {
       if (e.instrumentId && getInstrument(e.instrumentId) && e.fileName.trim()) {
-        memory[memoryKey(e.fileName)] = e.instrumentId;
+        memory[memoryKey(e.fileName)] = canonicalInstrumentId(e.instrumentId) as string;
       }
     }
     storage.setItem(STORAGE_KEY, JSON.stringify(memory));

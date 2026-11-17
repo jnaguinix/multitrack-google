@@ -2,6 +2,7 @@ import { logAsyncError } from '../utils/asyncErrors';
 import { SongProject, SongSection, TrackChannel } from '../types/project';
 import { isDesktopApp } from '../utils/nativeDialog';
 import { deleteDesktopSong, loadDesktopLibrary, saveDesktopSong } from './desktopLibrary';
+import { migrateTrackNames } from '../utils/instrumentCatalog';
 import {
   collectAudioFromDirectory,
   getRegisteredHandle,
@@ -494,12 +495,12 @@ export async function loadAllProjectsFromDb(): Promise<SongProject[]> {
     const activeSet = new Set(lib.activeSetlist || []);
     const userProjects: SongProject[] = lib.songs.map((item: any) => {
       const inSet = item.inSetlist !== undefined ? Boolean(item.inSetlist) : activeSet.has(item.id);
-      return normalizeProjectSectionsToTime(
-        withoutSolos({
-          ...item,
-          inSetlist: inSet,
-        })
-      );
+      const loaded = withoutSolos({
+        ...item,
+        inSetlist: inSet,
+      });
+      // Los nombres de pista de versiones anteriores del catálogo pasan a los actuales (Guitarra, Piano, Pad, Strings).
+      return normalizeProjectSectionsToTime({ ...loaded, tracks: migrateTrackNames(loaded.tracks || []) });
     });
     userProjects.sort((a, b) => b.updatedAt - a.updatedAt);
     return userProjects;

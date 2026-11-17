@@ -638,7 +638,7 @@ export default function App() {
   );
 
   // «Cambiar instrumento» de una pista: renombra con el catálogo, recalcula la numeración de las demás
-  // («Guitarra eléctrica 1» y «2» pasan a «Guitarra eléctrica» si una se convierte en otra cosa) y ajusta rol, color y bus.
+  // («Guitarra 1» y «2» pasan a «Guitarra» si una se convierte en otra cosa) y ajusta rol, color y bus.
   const handleChangeTrackInstrument = useCallback(
     (trackId: string, instrumentId: string) => {
       const def = getInstrument(instrumentId);

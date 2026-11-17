@@ -23,21 +23,45 @@ export interface InstrumentDef {
 export const INSTRUMENTS: readonly InstrumentDef[] = [
   { id: 'bajo', label: 'Bajo', role: 'bass', color: '#DC2626' },
   { id: 'bateria', label: 'Batería', role: 'drums', color: '#D97706' },
-  { id: 'cuerdas', label: 'Cuerdas', role: 'custom', color: '#7C3AED' },
-  { id: 'guitarra-acustica', label: 'Guitarra acústica', role: 'guitar', color: '#65A30D' },
-  { id: 'guitarra-electrica', label: 'Guitarra eléctrica', role: 'guitar', color: '#059669' },
+  { id: 'guitarra', label: 'Guitarra', role: 'guitar', color: '#059669' },
   { id: 'loop', label: 'Loop', role: 'fx', color: '#64748B' },
   { id: 'metales', label: 'Metales', role: 'custom', color: '#CA8A04' },
   { id: 'organo', label: 'Órgano', role: 'keys', color: '#0E7490' },
+  { id: 'pad', label: 'Pad', role: 'synth', color: '#A855F7' },
   { id: 'percusion', label: 'Percusión', role: 'perc', color: '#EA580C' },
   { id: 'piano', label: 'Piano', role: 'keys', color: '#0891B2' },
-  { id: 'sintetizador-pad', label: 'Sintetizador / Pad', role: 'synth', color: '#A855F7' },
-  { id: 'teclado', label: 'Teclado', role: 'keys', color: '#2563EB' },
+  { id: 'strings', label: 'Strings', role: 'custom', color: '#7C3AED' },
   { id: 'voz-alto', label: 'Voz Alto', role: 'vox', color: '#BE185D' },
   { id: 'voz-principal', label: 'Voz principal', role: 'vox', color: '#DB2777' },
   { id: 'voz-soprano', label: 'Voz Soprano', role: 'vox', color: '#E11D48' },
   { id: 'voz-tenor', label: 'Voz Tenor', role: 'vox', color: '#9D174D' },
 ];
+
+/**
+ * Catálogo anterior (simplificado el 2026-11-17): Guitarra acústica y eléctrica son «Guitarra», Teclado es «Piano»,
+ * «Sintetizador / Pad» es «Pad» y «Cuerdas» es «Strings». Los ids y nombres viejos siguen reconociéndose: las
+ * canciones y la memoria de mapeo ya guardadas se migran al cargarse.
+ */
+const LEGACY_ID: Readonly<Record<string, string>> = {
+  'guitarra-acustica': 'guitarra',
+  'guitarra-electrica': 'guitarra',
+  teclado: 'piano',
+  'sintetizador-pad': 'pad',
+  cuerdas: 'strings',
+};
+const LEGACY_LABEL: Readonly<Record<string, string>> = {
+  'Guitarra acústica': 'guitarra',
+  'Guitarra eléctrica': 'guitarra',
+  Teclado: 'piano',
+  'Sintetizador / Pad': 'pad',
+  Cuerdas: 'strings',
+};
+
+/** Id actual del catálogo para un id guardado (resuelve los ids anteriores). */
+export function canonicalInstrumentId(id: string | null | undefined): string | null {
+  if (!id) return null;
+  return LEGACY_ID[id] ?? id;
+}
 
 export const CLICK_INSTRUMENT: InstrumentDef = { id: 'click', label: 'Click', role: 'click', color: '#0891B2', fixed: true };
 export const GUIDE_INSTRUMENT: InstrumentDef = { id: 'guia', label: 'Guía', role: 'guide', color: '#0284C7', fixed: true };
@@ -49,7 +73,8 @@ export const ALL_INSTRUMENTS: readonly InstrumentDef[] = [...INSTRUMENTS, ...FIX
 const BY_ID = new Map(ALL_INSTRUMENTS.map((i) => [i.id, i] as const));
 
 export function getInstrument(id: string | null | undefined): InstrumentDef | null {
-  return id ? BY_ID.get(id) ?? null : null;
+  const canonical = canonicalInstrumentId(id);
+  return canonical ? BY_ID.get(canonical) ?? null : null;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -58,7 +83,7 @@ export function getInstrument(id: string | null | undefined): InstrumentDef | nu
 
 /**
  * Nombre final de cada pista. Si un instrumento se repite se numera por orden de aparición
- * («Guitarra eléctrica 1», «Guitarra eléctrica 2»); si aparece una sola vez, va sin número.
+ * («Guitarra 1», «Guitarra 2»); si aparece una sola vez, va sin número.
  * `null` (pista ignorada) devuelve `null` y no cuenta.
  */
 export function numberedNames(instrumentIds: ReadonlyArray<string | null>): Array<string | null> {
@@ -77,14 +102,25 @@ export function numberedNames(instrumentIds: ReadonlyArray<string | null>): Arra
 }
 
 /**
- * Instrumento del catálogo que corresponde a un nombre ya guardado («Guitarra eléctrica 2» → `guitarra-electrica`).
+ * Instrumento del catálogo que corresponde a un nombre ya guardado («Guitarra 2» → `guitarra`).
  * Coincidencia exacta con la etiqueta (sin número final): sirve para volver a numerar al añadir pistas a una
  * canción o al reimportarla. Los nombres antiguos que no están en el catálogo devuelven `null`.
  */
 export function instrumentIdFromName(name: string): string | null {
   const base = (name || '').replace(/\s+\d+$/, '').trim();
   const found = ALL_INSTRUMENTS.find((i) => i.label === base);
-  return found ? found.id : null;
+  return found ? found.id : LEGACY_LABEL[base] ?? null;
+}
+
+/**
+ * Pasa los nombres de pista anteriores al catálogo actual y recalcula la numeración de cada instrumento
+ * («Guitarra acústica», «Guitarra eléctrica 1» y «2» pasan a «Guitarra 1», «2» y «3»; «Teclado» pasa a «Piano»).
+ * No toca los nombres que no son del catálogo («Click Track», «Voz»…) y es idempotente.
+ */
+export function migrateTrackNames<T extends { name: string }>(tracks: readonly T[]): T[] {
+  const ids = tracks.map((t) => instrumentIdFromName(t.name));
+  const names = numberedNames(ids);
+  return tracks.map((t, i) => (ids[i] && names[i] && names[i] !== t.name ? { ...t, name: names[i] as string } : t));
 }
 
 // ---------------------------------------------------------------------------------------------
