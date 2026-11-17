@@ -25,6 +25,10 @@ interface TrackControl {
   pan: number;
   muted: boolean;
   soloed: boolean;
+  monitor: boolean;
+  splitSequence: boolean;
+  cueGain: number;
+  cueMuted: boolean;
   bus: string;
 }
 
@@ -113,6 +117,7 @@ export function createPreviewBackend() {
   let splitMono = false;
   let masterGain = 1;
   let cueMasterGain = 0.708;
+  let monitorGain = 1;
   let callbacks = 0;
   let settings = { host: 'WASAPI', deviceName: null as string | null, sampleRate: 48000, bufferSize: null as number | null, testChannel: null as number | null };
 
@@ -181,6 +186,7 @@ export function createPreviewBackend() {
       splitMono,
       masterGain,
       cueMasterGain,
+      monitorGain,
       meters: meters(),
       trackControls: trackIds.map((id) => ({ trackId: id, ...(controls.get(id) as TrackControl) })),
     };
@@ -240,7 +246,7 @@ export function createPreviewBackend() {
       queued = null;
       vamping = false;
       loopRange = null;
-      for (const t of song?.tracks ?? []) controls.set(t.id, { gain: t.gain, pan: Math.round(t.pan * 100), muted: t.muted, soloed: t.soloed, bus: 'main' });
+      for (const t of song?.tracks ?? []) controls.set(t.id, { gain: t.gain, pan: Math.round(t.pan * 100), muted: t.muted, soloed: t.soloed, monitor: false, splitSequence: false, cueGain: 1, cueMuted: false, bus: 'main' });
       const trackPeaks: Record<string, number[]> = {};
       for (const t of song?.tracks ?? []) trackPeaks[t.id] = t.peaks;
       return {
@@ -300,8 +306,12 @@ export function createPreviewBackend() {
 
     // ---- Motor: mezcla
     audio_set_track_controls: (a) => {
-      const c = controls.get(a?.trackId) ?? { gain: 1, pan: 0, muted: false, soloed: false, bus: 'main' };
+      const c = controls.get(a?.trackId) ?? { gain: 1, pan: 0, muted: false, soloed: false, monitor: false, splitSequence: false, cueGain: 1, cueMuted: false, bus: 'main' };
       if (a?.gain != null) c.gain = a.gain;
+      if (a?.monitor != null) c.monitor = Boolean(a.monitor);
+      if (a?.splitSequence != null) c.splitSequence = Boolean(a.splitSequence);
+      if (a?.cueGain != null) c.cueGain = a.cueGain;
+      if (a?.cueMuted != null) c.cueMuted = Boolean(a.cueMuted);
       if (a?.bus != null) c.bus = a.bus;
       if (a?.pan != null) c.pan = a.pan;
       if (a?.muted != null) c.muted = a.muted;
@@ -312,6 +322,7 @@ export function createPreviewBackend() {
     audio_set_master_gains: (a) => {
       if (a?.masterGain != null) masterGain = a.masterGain;
       if (a?.cueMasterGain != null) cueMasterGain = a.cueMasterGain;
+      if (a?.monitorGain != null) monitorGain = a.monitorGain;
       return null;
     },
     audio_set_pitch: (a) => {

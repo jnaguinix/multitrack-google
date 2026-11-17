@@ -18,9 +18,12 @@ use std::sync::atomic::{AtomicU32, AtomicU64, AtomicUsize, Ordering};
 /// Máximo de canales de salida que maneja la matriz (más que cualquier interfaz habitual).
 pub const MAX_OUTPUTS: usize = 32;
 /// Cantidad de fuentes lógicas.
-pub const N_SOURCES: usize = 5;
-/// 1/√2: combina L y R en mono sin que una señal en un solo canal pierda más de 3 dB.
-pub const INV_SQRT2: f32 = std::f32::consts::FRAC_1_SQRT_2;
+pub const N_SOURCES: usize = 6;
+/// Ganancia de la suma a mono: `(L + R) / 2`. El resultado nunca supera el pico de los canales originales, así que
+/// pasar a mono no empuja la mezcla contra el limitador. Lo que está al centro queda al mismo nivel que tenía cada
+/// lado en estéreo; lo que está en un solo canal baja 6 dB (como al pulsar «mono» en una consola).
+/// Antes era 1/√2: lo del centro subía 3 dB y las mezclas fuertes pasaban casi siempre por el limitador.
+pub const MONO_SUM_GAIN: f32 = 0.5;
 
 /// Fuente lógica que se puede enviar a una salida.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -32,10 +35,14 @@ pub enum Source {
     MusicMono,
     Click,
     Guide,
+    /// Las pistas que el usuario marcó para oírse en los auriculares («Aur.»), sumadas en mono. Es una fuente de
+    /// auriculares: nunca comparte salida con la música salvo confirmación.
+    Monitor,
 }
 
 impl Source {
-    pub const ALL: [Source; N_SOURCES] = [Source::MusicL, Source::MusicR, Source::MusicMono, Source::Click, Source::Guide];
+    pub const ALL: [Source; N_SOURCES] =
+        [Source::MusicL, Source::MusicR, Source::MusicMono, Source::Click, Source::Guide, Source::Monitor];
 
     #[inline]
     pub fn index(self) -> usize {
@@ -47,7 +54,7 @@ impl Source {
     }
 
     pub fn is_cue(self) -> bool {
-        matches!(self, Source::Click | Source::Guide)
+        matches!(self, Source::Click | Source::Guide | Source::Monitor)
     }
 
     pub fn label(self) -> &'static str {
@@ -57,6 +64,19 @@ impl Source {
             Source::MusicMono => "música (mono)",
             Source::Click => "click",
             Source::Guide => "guía",
+            Source::Monitor => "monitor",
+        }
+    }
+
+    /// Con artículo, para los mensajes («el click», «la guía»).
+    pub fn with_article(self) -> &'static str {
+        match self {
+            Source::MusicL => "la música izquierda",
+            Source::MusicR => "la música derecha",
+            Source::MusicMono => "la música (mono)",
+            Source::Click => "el click",
+            Source::Guide => "la guía",
+            Source::Monitor => "el monitor",
         }
     }
 }
@@ -108,29 +128,32 @@ pub struct RoutingConfig {
 /// Propuesta automática según los canales independientes que expone el dispositivo.
 ///
 /// - 1 salida: todo mezclado (inválido hasta que el usuario lo confirme: el click llegaría al público).
-/// - 2 salidas: música en mono en la 1; click y guía juntos en la 2.
-/// - 3 salidas: música L y R en 1 y 2; click y guía en la 3.
-/// - 4 o más: música L, música R, click, guía; el resto queda libre.
+/// - 2 salidas: click, guía y monitor juntos en la 1 (izquierda) y la música en mono en la 2 (derecha), como traen
+///   los multitracks comerciales (clic y guía a la izquierda, mezcla a la derecha).
+/// - 3 salidas: música L y R en 1 y 2; click, guía y monitor en la 3.
+/// - 4 o más: música L, música R, click, guía con el monitor; el resto queda libre.
+///
+/// «Monitor» son las pistas que el usuario marca con «Aur.» para oírlas también en los auriculares.
 pub fn propose(channels: u16) -> RoutingConfig {
     let n = channels as usize;
     let mut outputs = vec![OutputAssign::default(); n];
     match n {
         0 => {}
-        1 => outputs[0] = OutputAssign::of(&[Source::MusicMono, Source::Click, Source::Guide]),
+        1 => outputs[0] = OutputAssign::of(&[Source::MusicMono, Source::Click, Source::Guide, Source::Monitor]),
         2 => {
-            outputs[0] = OutputAssign::of(&[Source::MusicMono]);
-            outputs[1] = OutputAssign::of(&[Source::Click, Source::Guide]);
+            outputs[0] = OutputAssign::of(&[Source::Click, Source::Guide, Source::Monitor]);
+            outputs[1] = OutputAssign::of(&[Source::MusicMono]);
         }
         3 => {
             outputs[0] = OutputAssign::of(&[Source::MusicL]);
             outputs[1] = OutputAssign::of(&[Source::MusicR]);
-            outputs[2] = OutputAssign::of(&[Source::Click, Source::Guide]);
+            outputs[2] = OutputAssign::of(&[Source::Click, Source::Guide, Source::Monitor]);
         }
         _ => {
             outputs[0] = OutputAssign::of(&[Source::MusicL]);
             outputs[1] = OutputAssign::of(&[Source::MusicR]);
             outputs[2] = OutputAssign::of(&[Source::Click]);
-            outputs[3] = OutputAssign::of(&[Source::Guide]);
+            outputs[3] = OutputAssign::of(&[Source::Guide, Source::Monitor]);
         }
     }
     RoutingConfig { channels, outputs, allow_mixed: false, custom: false }
@@ -179,15 +202,15 @@ impl RoutingIssue {
                 format!("El dispositivo expone {device} canales; OmniTracks maneja hasta {MAX_OUTPUTS}.")
             }
             RoutingIssue::SourceUnrouted(s) => format!(
-                "La {} no está asignada a ninguna salida: se perdería. Asígnala en Ajustes de audio.",
+                "«{}» no tiene ninguna salida asignada: se perdería. Asígnale una en Ajustes de audio.",
                 s.label()
             ),
             RoutingIssue::CueMixedWithMusic { output, music, cue } => format!(
-                "La salida {} mezcla {} con {}: el {} llegaría al público. Sepáralos en otra salida o confirma la mezcla en Ajustes de audio.",
+                "La salida {} mezcla {} con {}: {} llegaría al público. Sepáralos en otra salida o confirma la mezcla en Ajustes de audio.",
                 output + 1,
-                music.label(),
-                cue.label(),
-                cue.label()
+                music.with_article(),
+                cue.with_article(),
+                cue.with_article()
             ),
             RoutingIssue::NoOutputs => "El dispositivo no expone ninguna salida.".to_string(),
         }
@@ -214,7 +237,7 @@ pub fn validate(config: &RoutingConfig, device_channels: u16) -> Vec<RoutingIssu
     if !routed(&|s| s.is_music()) {
         issues.push(RoutingIssue::SourceUnrouted(Source::MusicMono));
     }
-    for cue in [Source::Click, Source::Guide] {
+    for cue in [Source::Click, Source::Guide, Source::Monitor] {
         if !routed(&|s| s == cue) {
             issues.push(RoutingIssue::SourceUnrouted(cue));
         }
@@ -231,6 +254,23 @@ pub fn validate(config: &RoutingConfig, device_channels: u16) -> Vec<RoutingIssu
         }
     }
     issues
+}
+
+/// Un ruteo guardado antes de que existiera el Monitor no lo tiene: se añade a la salida del click (o de la guía) para
+/// que no quede inválido ni deje sin salida a las pistas marcadas con «Aur.». No modifica el resto del ruteo.
+pub fn ensure_monitor(config: &mut RoutingConfig) {
+    if config.outputs.iter().any(|o| o.has(Source::Monitor)) {
+        return;
+    }
+    let target = config
+        .outputs
+        .iter()
+        .position(|o| o.has(Source::Click))
+        .or_else(|| config.outputs.iter().position(|o| o.has(Source::Guide)))
+        .or_else(|| config.outputs.iter().position(|o| o.sources.iter().any(|e| e.source.is_cue())));
+    if let Some(i) = target {
+        config.outputs[i].sources.push(RouteEntry { source: Source::Monitor, gain: 1.0 });
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -267,9 +307,11 @@ impl RouteTable {
         t.gains[0][Source::MusicL.index()] = 1.0;
         t.gains[0][Source::Click.index()] = 1.0;
         t.gains[0][Source::Guide.index()] = 1.0;
+        t.gains[0][Source::Monitor.index()] = 1.0;
         t.gains[1][Source::MusicR.index()] = 1.0;
         t.gains[1][Source::Click.index()] = 1.0;
         t.gains[1][Source::Guide.index()] = 1.0;
+        t.gains[1][Source::Monitor.index()] = 1.0;
         t
     }
 
@@ -283,7 +325,7 @@ impl RouteTable {
                 continue;
             }
             let g = &self.gains[ch];
-            *slot = g[0] * src[0] + g[1] * src[1] + g[2] * src[2] + g[3] * src[3] + g[4] * src[4];
+            *slot = g[0] * src[0] + g[1] * src[1] + g[2] * src[2] + g[3] * src[3] + g[4] * src[4] + g[5] * src[5];
         }
     }
 }
@@ -337,7 +379,7 @@ impl Default for RoutingSlot {
 /// Música en mono a partir de un par L/R: lo que existe en un solo canal se conserva (a −3 dB).
 #[inline(always)]
 pub fn music_mono(l: f32, r: f32) -> f32 {
-    (l + r) * INV_SQRT2
+    (l + r) * MONO_SUM_GAIN
 }
 
 /// Umbral desde el que el limitador empieza a actuar.
@@ -404,7 +446,9 @@ impl RoutingStore {
     pub fn resolve(&self, key: &str, device_channels: u16) -> Resolution {
         match self.devices.get(key) {
             Some(saved) if saved.channels == device_channels => {
-                Resolution { config: saved.clone(), saved: true, stale: false }
+                let mut config = saved.clone();
+                ensure_monitor(&mut config);
+                Resolution { config, saved: true, stale: false }
             }
             Some(_) => Resolution { config: propose(device_channels), saved: false, stale: true },
             None => Resolution { config: propose(device_channels), saved: false, stale: false },
@@ -445,9 +489,14 @@ impl RoutingStore {
 mod tests {
     use super::*;
 
-    /// Fuentes de una muestra: música L/R ya convertida, click y guía.
+    /// Fuentes de una muestra: música L/R ya convertida, click y guía (sin monitor).
     fn sources(l: f32, r: f32, click: f32, guide: f32) -> [f32; N_SOURCES] {
-        [l, r, music_mono(l, r), click, guide]
+        [l, r, music_mono(l, r), click, guide, 0.0]
+    }
+
+    /// Igual, con las pistas marcadas «Aur.» (monitor).
+    fn sources_m(l: f32, r: f32, click: f32, guide: f32, monitor: f32) -> [f32; N_SOURCES] {
+        [l, r, music_mono(l, r), click, guide, monitor]
     }
 
     fn render(config: &RoutingConfig, src: [f32; N_SOURCES]) -> Vec<f32> {
@@ -459,16 +508,16 @@ mod tests {
 
     #[test]
     fn propone_el_ruteo_segun_los_canales_del_dispositivo() {
-        assert_eq!(propose(2).outputs[0], OutputAssign::of(&[Source::MusicMono]));
-        assert_eq!(propose(2).outputs[1], OutputAssign::of(&[Source::Click, Source::Guide]));
+        assert_eq!(propose(2).outputs[0], OutputAssign::of(&[Source::Click, Source::Guide, Source::Monitor]), "salida 1 (izquierda): click, guía y monitor");
+        assert_eq!(propose(2).outputs[1], OutputAssign::of(&[Source::MusicMono]), "salida 2 (derecha): la música en mono");
         let c3 = propose(3);
         assert_eq!(c3.outputs[0], OutputAssign::of(&[Source::MusicL]));
         assert_eq!(c3.outputs[1], OutputAssign::of(&[Source::MusicR]));
-        assert_eq!(c3.outputs[2], OutputAssign::of(&[Source::Click, Source::Guide]));
+        assert_eq!(c3.outputs[2], OutputAssign::of(&[Source::Click, Source::Guide, Source::Monitor]));
         let c6 = propose(6);
         assert_eq!(c6.outputs.len(), 6);
         assert_eq!(c6.outputs[2], OutputAssign::of(&[Source::Click]));
-        assert_eq!(c6.outputs[3], OutputAssign::of(&[Source::Guide]));
+        assert_eq!(c6.outputs[3], OutputAssign::of(&[Source::Guide, Source::Monitor]));
         assert!(c6.outputs[4].sources.is_empty() && c6.outputs[5].sources.is_empty(), "las salidas extra quedan libres");
         for n in [2u16, 3, 4, 6, 8] {
             assert!(validate(&propose(n), n).is_empty(), "la propuesta de {n} salidas debe ser válida");
@@ -480,12 +529,31 @@ mod tests {
         let cfg = propose(2);
         // Un instrumento que existe únicamente en el canal derecho no debe desaparecer.
         let solo_r = render(&cfg, sources(0.0, 0.8, 0.0, 0.0));
-        assert!((solo_r[0] - 0.8 * INV_SQRT2).abs() < 1e-6, "lo del canal R se conserva en la salida 1: {}", solo_r[0]);
+        assert!((solo_r[1] - 0.4).abs() < 1e-6, "lo del canal R se conserva (−6 dB) en la salida de música: {}", solo_r[1]);
         let solo_l = render(&cfg, sources(0.8, 0.0, 0.0, 0.0));
-        assert!((solo_l[0] - 0.8 * INV_SQRT2).abs() < 1e-6);
-        // Ambos canales iguales (mono real) suben 3 dB: no hay pérdida.
+        assert!((solo_l[1] - 0.4).abs() < 1e-6);
+        // Ambos canales iguales (lo que está al centro) quedan exactamente al mismo nivel.
         let ambos = render(&cfg, sources(0.5, 0.5, 0.0, 0.0));
-        assert!((ambos[0] - 0.5 * 2.0 * INV_SQRT2).abs() < 1e-6);
+        assert!((ambos[1] - 0.5).abs() < 1e-6, "lo del centro no cambia de nivel: {}", ambos[1]);
+    }
+
+    #[test]
+    fn la_suma_a_mono_nunca_supera_el_pico_del_estereo() {
+        // Si la mezcla en estéreo no toca el limitador, en mono tampoco: |(L+R)/2| <= max(|L|, |R|).
+        let mut x = 0x1234_5678u32;
+        let mut next = || {
+            x ^= x << 13;
+            x ^= x >> 17;
+            x ^= x << 5;
+            (x as f32 / u32::MAX as f32) * 2.0 - 1.0
+        };
+        for _ in 0..100_000 {
+            let (l, r) = (next(), next());
+            assert!(music_mono(l, r).abs() <= l.abs().max(r.abs()) + 1e-6, "({l}, {r})");
+        }
+        // Una mezcla fuerte al centro (0,89 por lado, justo debajo del umbral) no pasa por el limitador en mono.
+        let m = music_mono(0.89, 0.89);
+        assert!(m <= LIMITER_KNEE && soft_limit(m) == m, "con la suma anterior (1/√2) daba 1,26 y se aplastaba: {m}");
     }
 
     #[test]
@@ -554,10 +622,72 @@ mod tests {
 
     #[test]
     fn sumar_musica_y_downmix_no_produce_clipping_duro() {
-        // Dos canales correlacionados cerca del máximo: el mono sube 3 dB y pasa de 1,0.
-        let mono = music_mono(0.95, 0.95);
+        // Una mezcla que ya pasa de 1,0 (faders arriba): el limitador la deja por debajo de 1,0 sin recorte duro.
+        let mono = music_mono(1.4, 1.3);
         assert!(mono > 1.0, "sin limitador esto recortaría ({mono})");
         assert!(soft_limit(mono) <= 1.0, "con limitador queda por debajo de 1,0");
+    }
+
+    // ---- Monitor («Aur.»): pistas elegidas para oírse en los auriculares
+
+    #[test]
+    fn el_monitor_sale_por_la_salida_de_auriculares_y_nunca_por_la_de_musica() {
+        // Solo suenan las pistas marcadas «Aur.» (p. ej. el piano): deben salir por la salida de auriculares.
+        for (n, cue_out) in [(2u16, 0usize), (3, 2), (4, 3), (6, 3)] {
+            let out = render(&propose(n), sources_m(0.0, 0.0, 0.0, 0.0, 0.6));
+            for (ch, v) in out.iter().enumerate() {
+                if ch == cue_out {
+                    assert_eq!(*v, 0.6, "con {n} salidas el monitor debe salir por la salida {}", cue_out + 1);
+                } else {
+                    assert_eq!(*v, 0.0, "con {n} salidas el monitor se coló en la salida {}", ch + 1);
+                }
+            }
+        }
+        // Con 4 o más, el monitor comparte salida con la guía y no con el click.
+        let c4 = propose(4);
+        assert!(c4.outputs[3].has(Source::Monitor) && !c4.outputs[2].has(Source::Monitor));
+    }
+
+    #[test]
+    fn la_musica_sigue_saliendo_completa_aunque_haya_monitor() {
+        // El piano marcado «Aur.» suena también en Main: el monitor es un envío adicional, no un desvío.
+        let out = render(&propose(2), sources_m(0.5, 0.5, 0.0, 0.0, 0.5));
+        assert!((out[1] - 0.5).abs() < 1e-6, "la música por la salida de música no cambia: {}", out[1]);
+        assert_eq!(out[0], 0.5, "y el envío sale por la salida de auriculares (izquierda)");
+    }
+
+    #[test]
+    fn mezclar_el_monitor_con_la_musica_exige_confirmacion() {
+        let mut cfg = propose(4);
+        cfg.outputs[0].sources.push(RouteEntry { source: Source::Monitor, gain: 1.0 });
+        let issues = validate(&cfg, 4);
+        assert!(issues.iter().any(|i| matches!(i, RoutingIssue::CueMixedWithMusic { output: 0, cue: Source::Monitor, .. })), "{issues:?}");
+        assert!(issues.iter().all(|i| !i.message().is_empty()));
+        let mut sin_destino = propose(4);
+        sin_destino.outputs[3] = OutputAssign::of(&[Source::Guide]);
+        assert!(validate(&sin_destino, 4).contains(&RoutingIssue::SourceUnrouted(Source::Monitor)), "el monitor necesita una salida");
+    }
+
+    #[test]
+    fn un_ruteo_guardado_antes_del_monitor_lo_recibe_en_la_salida_del_click() {
+        let path = tmp_file("monitor_migracion");
+        let _ = std::fs::remove_file(&path);
+        let key = device_key("WASAPI", "Interfaz vieja");
+        // Ruteo de 4 salidas guardado con las fuentes antiguas (sin Monitor).
+        let mut viejo = propose(4);
+        for o in viejo.outputs.iter_mut() {
+            o.sources.retain(|e| e.source != Source::Monitor);
+        }
+        viejo.custom = true;
+        assert!(!viejo.outputs.iter().any(|o| o.has(Source::Monitor)));
+        let mut store = RoutingStore::load(&path);
+        store.set(&key, viejo).unwrap();
+
+        let r = store.resolve(&key, 4);
+        assert!(r.saved && !r.stale);
+        assert!(r.config.outputs[2].has(Source::Click) && r.config.outputs[2].has(Source::Monitor), "el monitor se añade donde está el click");
+        assert!(validate(&r.config, 4).is_empty(), "el ruteo migrado es válido y no bloquea la reproducción");
+        let _ = std::fs::remove_file(&path);
     }
 
     // ---- Validación

@@ -75,6 +75,16 @@ pub struct LibraryTrack {
     pub muted: Option<bool>,
     #[serde(default)]
     pub soloed: Option<bool>,
+    /// «Aur.»: la pista también se oye en los auriculares.
+    #[serde(default)]
+    pub monitor: Option<bool>,
+    /// Secuencia dividida (canal izquierdo = click y guía, derecho = instrumentos).
+    #[serde(default)]
+    pub split_sequence: Option<bool>,
+    #[serde(default)]
+    pub cue_gain: Option<f32>,
+    #[serde(default)]
+    pub cue_muted: Option<bool>,
     #[serde(default)]
     pub bus: Option<String>,
     #[serde(default)]
@@ -146,6 +156,9 @@ pub struct LibrarySong {
     pub master_gain: Option<f32>,
     #[serde(default)]
     pub cue_master_gain: Option<f32>,
+    /// Volumen general de las pistas marcadas «Aur.» en los auriculares.
+    #[serde(default)]
+    pub monitor_gain: Option<f32>,
     #[serde(default)]
     pub pitch_semitones: Option<i32>,
     #[serde(default)]

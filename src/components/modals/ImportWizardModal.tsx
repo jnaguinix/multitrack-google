@@ -321,13 +321,13 @@ export const ImportWizardModal: React.FC<Props> = ({ mode, initialMeta, files, o
                           <option value="">Elegir instrumento…</option>
                           {INSTRUMENTS.map((ins) => (
                             <option key={ins.id} value={ins.id}>
-                              {ins.label}
+                              {ins.hint ? `${ins.label} (${ins.hint})` : ins.label}
                             </option>
                           ))}
                           <optgroup label="Fijos (van a auriculares)">
                             {FIXED_INSTRUMENTS.map((ins) => (
                               <option key={ins.id} value={ins.id}>
-                                {ins.label}
+                                {ins.hint ? `${ins.label} (${ins.hint})` : ins.label}
                               </option>
                             ))}
                           </optgroup>

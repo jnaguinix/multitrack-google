@@ -718,6 +718,7 @@ export function useImportFlow({
             name: trackName,
             role: def.role,
             color: def.color,
+            ...(def.splitSequence ? { splitSequence: true } : {}),
             gain: 1.0,
             pan: 0,
             muted: false,

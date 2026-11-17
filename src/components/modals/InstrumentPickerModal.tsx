@@ -36,7 +36,10 @@ export const InstrumentPickerModal: React.FC<Props> = ({ trackName, fileName, cu
         }`}
       >
         <span aria-hidden="true" className="w-2 h-2 rounded-full shrink-0" style={{ background: ins.color }} />
-        <span className="truncate">{ins.label}</span>
+        <span className="min-w-0">
+          <span className="block truncate">{ins.label}</span>
+          {ins.hint && <span className="block text-xs text-studio-muted truncate">{ins.hint}</span>}
+        </span>
       </button>
     );
   };

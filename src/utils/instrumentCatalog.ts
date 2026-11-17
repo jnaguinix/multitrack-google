@@ -17,6 +17,10 @@ export interface InstrumentDef {
   color: string;
   /** Click y Guía: salen por el bus Cue (auriculares) y van fijos a la derecha de la mezcla. */
   fixed?: boolean;
+  /** Secuencia completa con el click y la guía en el canal izquierdo y los instrumentos en el derecho. */
+  splitSequence?: boolean;
+  /** Aclaración que se muestra al elegirlo. */
+  hint?: string;
 }
 
 /** Instrumentos normales, en orden alfabético (el que se ve en el selector). */
@@ -31,6 +35,14 @@ export const INSTRUMENTS: readonly InstrumentDef[] = [
   { id: 'pad', label: 'Pad', role: 'synth', color: '#A855F7' },
   { id: 'percusion', label: 'Percusión', role: 'perc', color: '#EA580C' },
   { id: 'piano', label: 'Piano', role: 'keys', color: '#0891B2' },
+  {
+    id: 'secuencia',
+    label: 'Secuencia',
+    role: 'custom',
+    color: '#14B8A6',
+    splitSequence: true,
+    hint: 'L: click y guía · R: música',
+  },
   { id: 'strings', label: 'Strings', role: 'custom', color: '#7C3AED' },
   { id: 'voz', label: 'Voz', role: 'vox', color: '#DB2777' },
 ];

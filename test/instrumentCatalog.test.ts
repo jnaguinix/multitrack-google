@@ -94,6 +94,14 @@ eq(instrumentIdFromName('Otros 2'), 'otros', 'se reconoce con número');
 assert(effectiveBus({ name: 'Otros', role: 'custom' }) === 'main', 'Otros va a Main, no a auriculares');
 assert(sortInstrumentTracks([{ name: 'Otros', role: 'custom' as const }]).length === 1, 'Otros va en la lista alfabética, no entre los fijos');
 
+// --- Secuencia dividida: un archivo con click y guía a la izquierda e instrumentos a la derecha
+assert(labels.includes('Secuencia'), 'el catálogo tiene «Secuencia»');
+assert(getInstrument('secuencia')?.splitSequence === true, 'Secuencia es una secuencia dividida');
+assert(INSTRUMENTS.filter((i) => i.splitSequence).length === 1, 'solo Secuencia divide los canales');
+assert(effectiveBus({ name: 'Secuencia', role: 'custom' }) === 'main', 'la pista va a Main (su canal izquierdo lo separa el motor)');
+assert(!isClickTrack({ name: 'Secuencia', role: 'custom' }) && !isGuideTrack({ name: 'Secuencia', role: 'custom' }), 'no se confunde con Click ni Guía');
+eq(numberedNames(['secuencia', 'secuencia']), ['Secuencia 1', 'Secuencia 2'], 'se numera si se repite');
+
 // --- Una sola Voz (antes Alto, principal, Soprano y Tenor)
 assert(labels.includes('Voz') && !labels.some((l) => l.startsWith('Voz ')), 'una sola Voz en el catálogo');
 for (const viejo of ['voz-alto', 'voz-principal', 'voz-soprano', 'voz-tenor']) eq(canonicalInstrumentId(viejo), 'voz', `id viejo ${viejo}`);

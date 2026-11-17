@@ -24,11 +24,17 @@ export interface EngineTrackControl {
   muted: boolean;
   soloed: boolean;
   bus: string;
+  /** «Aur.»: la pista también va a los auriculares. */
+  monitor?: boolean;
+  splitSequence?: boolean;
+  cueGain?: number;
+  cueMuted?: boolean;
 }
 
 export interface EngineGlobals {
   masterGain?: number;
   cueMasterGain?: number;
+  monitorGain?: number;
   pitchSemitones?: number;
 }
 
@@ -38,12 +44,17 @@ export interface TrackDesired {
   pan: number;
   muted: boolean;
   soloed: boolean;
+  monitor: boolean;
+  splitSequence: boolean;
+  cueGain: number;
+  cueMuted: boolean;
   bus: 'main' | 'click' | 'guide';
 }
 
 const GAIN_TOLERANCE = 1e-4;
 const DEFAULT_MASTER = 1.0;
 const DEFAULT_CUE_MASTER = 0.708;
+const DEFAULT_MONITOR = 1.0;
 
 export function desiredTrack(t: TrackChannel): TrackDesired {
   return {
@@ -52,12 +63,16 @@ export function desiredTrack(t: TrackChannel): TrackDesired {
     pan: panToEngine(t.pan),
     muted: Boolean(t.muted),
     soloed: Boolean(t.soloed),
+    monitor: Boolean(t.monitor),
+    splitSequence: Boolean(t.splitSequence),
+    cueGain: Number.isFinite(t.cueGain) ? (t.cueGain as number) : 1,
+    cueMuted: Boolean(t.cueMuted),
     bus: engineBus(t),
   };
 }
 
-type TrackField = 'gain' | 'pan' | 'muted' | 'soloed' | 'bus';
-const TRACK_FIELDS: readonly TrackField[] = ['gain', 'pan', 'muted', 'soloed', 'bus'];
+type TrackField = 'gain' | 'pan' | 'muted' | 'soloed' | 'monitor' | 'splitSequence' | 'cueGain' | 'cueMuted' | 'bus';
+const TRACK_FIELDS: readonly TrackField[] = ['gain', 'pan', 'muted', 'soloed', 'monitor', 'splitSequence', 'cueGain', 'cueMuted', 'bus'];
 
 const sameGain = (a: number, b: number) => Math.abs(a - b) <= GAIN_TOLERANCE;
 
@@ -114,6 +129,8 @@ export function diffProjectControls(prev: SongProject | null, next: SongProject)
   const masterArgs: Record<string, unknown> = {};
   if (!prev || !sameGain(prev.masterGain ?? DEFAULT_MASTER, master)) masterArgs.masterGain = master;
   if (!prev || !sameGain(prev.cueMasterGain ?? DEFAULT_CUE_MASTER, cue)) masterArgs.cueMasterGain = cue;
+  const monitor = next.monitorGain ?? DEFAULT_MONITOR;
+  if (!prev || !sameGain(prev.monitorGain ?? DEFAULT_MONITOR, monitor)) masterArgs.monitorGain = monitor;
   if (Object.keys(masterArgs).length > 0) ops.push({ key: 'master', cmd: 'audio_set_master_gains', args: masterArgs });
 
   // Tono
@@ -129,7 +146,7 @@ export function diffProjectControls(prev: SongProject | null, next: SongProject)
     const old = before.get(t.id);
     const args: Record<string, unknown> = { trackId: t.id };
     for (const f of TRACK_FIELDS) {
-      const changed = !old || (f === 'gain' ? !sameGain(old.gain, now.gain) : old[f] !== now[f]);
+      const changed = !old || (f === 'gain' || f === 'cueGain' ? !sameGain(old[f], now[f]) : old[f] !== now[f]);
       if (changed) args[f] = now[f];
     }
     if (Object.keys(args).length > 1) ops.push({ key: `track:${t.id}`, cmd: 'audio_set_track_controls', args });
@@ -144,7 +161,7 @@ export function isContinuousOnly(ops: readonly ControlOp[]): boolean {
     ops.every((op) => {
       if (op.key === 'master') return true;
       if (!op.key.startsWith('track:')) return false;
-      return Object.keys(op.args).every((k) => k === 'trackId' || k === 'gain' || k === 'pan');
+      return Object.keys(op.args).every((k) => k === 'trackId' || k === 'gain' || k === 'pan' || k === 'cueGain');
     })
   );
 }
@@ -173,6 +190,10 @@ export function findTrackMismatches(desired: readonly TrackDesired[], actual: re
     if (a.pan !== d.pan) fields.push('pan');
     if (a.muted !== d.muted) fields.push('muted');
     if (a.soloed !== d.soloed) fields.push('soloed');
+    if (Boolean(a.monitor) !== d.monitor) fields.push('monitor');
+    if (a.splitSequence !== undefined && a.splitSequence !== d.splitSequence) fields.push('splitSequence');
+    if (a.cueGain !== undefined && !sameGain(a.cueGain, d.cueGain)) fields.push('cueGain');
+    if (a.cueMuted !== undefined && a.cueMuted !== d.cueMuted) fields.push('cueMuted');
     if (a.bus !== d.bus) fields.push('bus');
     if (fields.length > 0) out.push({ trackId: d.id, fields, desired: d, actual: a });
   }
@@ -257,13 +278,15 @@ export class ControlSync {
     }
     const wantMaster = project.masterGain ?? DEFAULT_MASTER;
     const wantCue = project.cueMasterGain ?? DEFAULT_CUE_MASTER;
+    const wantMonitor = project.monitorGain ?? DEFAULT_MONITOR;
     const masterArgs: Record<string, unknown> = {};
     if (engine.masterGain !== undefined && !sameGain(engine.masterGain, wantMaster)) masterArgs.masterGain = wantMaster;
     if (engine.cueMasterGain !== undefined && !sameGain(engine.cueMasterGain, wantCue)) masterArgs.cueMasterGain = wantCue;
+    if (engine.monitorGain !== undefined && !sameGain(engine.monitorGain, wantMonitor)) masterArgs.monitorGain = wantMonitor;
     if (Object.keys(masterArgs).length > 0) {
       found.set('master', {
-        signature: `master=${engine.masterGain},cue=${engine.cueMasterGain}`,
-        summary: `ganancias maestras: motor=${engine.masterGain}/${engine.cueMasterGain} interfaz=${wantMaster}/${wantCue}`,
+        signature: `master=${engine.masterGain},cue=${engine.cueMasterGain},monitor=${engine.monitorGain}`,
+        summary: `ganancias maestras: motor=${engine.masterGain}/${engine.cueMasterGain}/${engine.monitorGain} interfaz=${wantMaster}/${wantCue}/${wantMonitor}`,
         op: { key: 'master', cmd: 'audio_set_master_gains', args: masterArgs },
       });
     }

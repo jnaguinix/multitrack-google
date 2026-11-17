@@ -53,6 +53,32 @@ export function useMixerActions({
     }));
   };
 
+  const handleToggleTrackMonitor = (trackId: string) => {
+    updateCurrentProject((p) => ({
+      ...p,
+      tracks: p.tracks.map((t) => (t.id === trackId ? { ...t, monitor: !t.monitor } : t)),
+    }));
+  };
+
+  // Secuencia dividida: volumen y mute del canal izquierdo (click y guía), en el fader Click.
+  const handleChangeTrackCueGain = (trackId: string, gain: number) => {
+    updateCurrentProject((p) => ({
+      ...p,
+      tracks: p.tracks.map((t) => (t.id === trackId ? { ...t, cueGain: gain } : t)),
+    }));
+  };
+
+  const handleToggleTrackCueMute = (trackId: string) => {
+    updateCurrentProject((p) => ({
+      ...p,
+      tracks: p.tracks.map((t) => (t.id === trackId ? { ...t, cueMuted: !t.cueMuted } : t)),
+    }));
+  };
+
+  const handleChangeMonitorGain = (gain: number) => {
+    updateCurrentProject((p) => ({ ...p, monitorGain: gain }));
+  };
+
   const handleChangeTrackGain = (trackId: string, gain: number) => {
     updateCurrentProject((p) => ({
       ...p,
@@ -120,6 +146,10 @@ export function useMixerActions({
     handleToggleClick,
     handleToggleTrackMute,
     handleToggleTrackSolo,
+    handleToggleTrackMonitor,
+    handleChangeMonitorGain,
+    handleChangeTrackCueGain,
+    handleToggleTrackCueMute,
     handleChangeTrackGain,
     handleChangeTrackPan,
     handleDeleteTrack,
