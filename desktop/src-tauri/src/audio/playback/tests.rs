@@ -1116,6 +1116,7 @@
                 pan: Arc::new(AtomicI32::new(0)),
                 muted: Arc::new(AtomicBool::new(false)),
                 soloed: Arc::new(AtomicBool::new(false)),
+                monitor: Arc::new(AtomicBool::new(false)),
                 bus: Arc::new(AtomicU8::new(TrackBus::Main as u8)),
                 consumer: Arc::new(std::sync::Mutex::new(cons)),
                 stop_signal: Arc::new(AtomicBool::new(false)),
@@ -1138,6 +1139,7 @@
                 pan: Arc::clone(&t.pan),
                 muted: Arc::clone(&t.muted),
                 soloed: Arc::clone(&t.soloed),
+                monitor: Arc::clone(&t.monitor),
                 bus: Arc::clone(&t.bus),
                 meter: Arc::clone(&t.meter),
                 eof: Arc::clone(&t.eof),
@@ -1729,6 +1731,79 @@
         assert_eq!(engine.routing.load().gains[3][Source::Guide.index()], 1.0);
     }
 
+    // ----- Envío a auriculares («Aur.») -----
+
+    /// Solo suenan las pistas marcadas «Aur.»: click y guía en silencio.
+    async fn solo_monitor(nombre: &str, ruteo: &RoutingConfig) -> PlaybackEngine {
+        let engine = motor_con_buses(nombre, ruteo).await;
+        engine.set_track_controls("click", None, None, Some(true), None, None).await;
+        engine.set_track_controls("guia", None, None, Some(true), None, None).await;
+        engine
+    }
+
+    #[tokio::test]
+    async fn test_monitor_envia_la_pista_marcada_a_la_salida_de_auriculares() {
+        for (n, cue_out) in [(2usize, 1usize), (4, 3)] {
+            let engine = solo_monitor(&format!("mon_{n}"), &proponer_ruteo(n as u16)).await;
+            // Sin marcar nada: la salida de auriculares queda en silencio (click y guía mudos).
+            let sin = picos_por_canal(&engine, n, 40);
+            assert_eq!(sin[cue_out], 0.0, "con {n} salidas, sin «Aur.» no debe salir nada por auriculares: {sin:?}");
+            // El piano marcado: sigue en Main y además sale por auriculares.
+            engine.set_track_monitor("musica", true).await;
+            let con = picos_por_canal(&engine, n, 80);
+            assert!(con[cue_out] > 1e-3, "con {n} salidas, el piano marcado debe oírse en auriculares: {con:?}");
+            assert!(con[0] > 1e-3, "y debe seguir en la música: {con:?}");
+            // Al desmarcarlo vuelve el silencio.
+            engine.set_track_monitor("musica", false).await;
+            let fin = picos_por_canal(&engine, n, 40);
+            assert_eq!(fin[cue_out], 0.0, "desmarcado, deja de salir por auriculares: {fin:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_monitor_con_4_salidas_va_con_la_guia_y_no_con_el_click() {
+        let engine = solo_monitor("mon_guia", &proponer_ruteo(4)).await;
+        engine.set_track_monitor("musica", true).await;
+        let p = picos_por_canal(&engine, 4, 80);
+        assert!(p[3] > 1e-3, "el monitor sale con la guía: {p:?}");
+        assert_eq!(p[2], 0.0, "y no por la salida del click: {p:?}");
+    }
+
+    #[tokio::test]
+    async fn test_monitor_respeta_mute_y_el_volumen_general() {
+        let engine = solo_monitor("mon_mute", &proponer_ruteo(2)).await;
+        engine.set_track_monitor("musica", true).await;
+        let a = picos_por_canal(&engine, 2, 80);
+        assert!(a[1] > 1e-3);
+        // Pista silenciada: no envía nada a auriculares.
+        engine.set_track_controls("musica", None, None, Some(true), None, None).await;
+        let m = picos_por_canal(&engine, 2, 40);
+        assert_eq!(m[1], 0.0, "una pista en mute no se oye ni en auriculares: {m:?}");
+        engine.set_track_controls("musica", None, None, Some(false), None, None).await;
+        // Volumen general del monitor a cero: silencio en auriculares; la música sigue.
+        engine.set_monitor_gain(0.0);
+        let g = picos_por_canal(&engine, 2, 40);
+        assert_eq!(g[1], 0.0, "con el volumen del monitor a 0 no sale nada: {g:?}");
+        assert!(g[0] > 1e-3, "la música no cambia: {g:?}");
+        // Mitad de volumen: el envío baja a la mitad.
+        engine.set_monitor_gain(1.0);
+        let pleno = picos_por_canal(&engine, 2, 80)[1];
+        engine.set_monitor_gain(0.5);
+        let medio = picos_por_canal(&engine, 2, 80)[1];
+        assert!(medio < pleno * 0.75, "el volumen general del monitor escala el envío ({medio} vs {pleno})");
+    }
+
+    #[tokio::test]
+    async fn test_el_estado_informa_el_monitor_de_cada_pista_y_su_volumen() {
+        let engine = motor_real("estado_monitor", &[("piano", 48_000), ("bajo", 48_000)], vec![seccion("a", 0.0, 1.0)]).await;
+        engine.set_track_monitor("piano", true).await;
+        engine.set_monitor_gain(0.6);
+        let s = engine.get_playback_state();
+        assert!(s.track_controls.iter().find(|t| t.track_id == "piano").unwrap().monitor);
+        assert!(!s.track_controls.iter().find(|t| t.track_id == "bajo").unwrap().monitor);
+        assert!((s.monitor_gain - 0.6).abs() < 1e-6);
+    }
+
     // ----- Estado de los controles de pista (red de seguridad contra órdenes perdidas) -----
 
     #[tokio::test]
@@ -2222,6 +2297,7 @@
                 pan: Arc::new(AtomicI32::new(0)),
                 muted: Arc::new(AtomicBool::new(false)),
                 soloed: Arc::new(AtomicBool::new(false)),
+                monitor: Arc::new(AtomicBool::new(false)),
                 bus: Arc::new(AtomicU8::new(TrackBus::Main as u8)),
                 consumer: Arc::new(std::sync::Mutex::new(cons)),
                 stop_signal: Arc::new(AtomicBool::new(false)),
@@ -2243,6 +2319,7 @@
                 pan: Arc::clone(&t.pan),
                 muted: Arc::clone(&t.muted),
                 soloed: Arc::clone(&t.soloed),
+                monitor: Arc::clone(&t.monitor),
                 bus: Arc::clone(&t.bus),
                 meter: Arc::clone(&t.meter),
                 eof: Arc::clone(&t.eof),

@@ -491,11 +491,15 @@ pub async fn audio_set_track_controls(
     muted: Option<bool>,
     soloed: Option<bool>,
     bus: Option<String>,
+    monitor: Option<bool>,
 ) -> Result<(), String> {
     state
         .playback
         .set_track_controls(&track_id, gain, pan, muted, soloed, bus.as_deref())
         .await;
+    if let Some(m) = monitor {
+        state.playback.set_track_monitor(&track_id, m).await;
+    }
     Ok(())
 }
 
@@ -726,8 +730,12 @@ pub async fn audio_set_master_gains(
     state: State<'_, AudioEngineState>,
     master_gain: Option<f32>,
     cue_master_gain: Option<f32>,
+    monitor_gain: Option<f32>,
 ) -> Result<(), String> {
     state.playback.set_master_gains(master_gain, cue_master_gain);
+    if let Some(g) = monitor_gain {
+        state.playback.set_monitor_gain(g);
+    }
     Ok(())
 }
 

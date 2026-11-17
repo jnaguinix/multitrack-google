@@ -40,7 +40,9 @@ pub struct ActiveTrack {
     pub pan: Arc<AtomicI32>,  // -100 to 100
     pub muted: Arc<AtomicBool>,
     pub soloed: Arc<AtomicBool>,
-    pub bus: Arc<AtomicU8>,   // 0: Main, 1: CueClick, 2: Both
+    /// «Aur.»: la pista, además de su bus, se suma al envío de auriculares (fuente Monitor).
+    pub monitor: Arc<AtomicBool>,
+    pub bus: Arc<AtomicU8>,   // 0: Main, 1: CueClick, 2: Both, 3: Guide
     pub consumer: Arc<std::sync::Mutex<rtrb::Consumer<f32>>>,
     pub stop_signal: Arc<AtomicBool>,
     pub seek_request: Arc<AtomicI64>,
@@ -73,6 +75,7 @@ pub struct StreamTrackHandle {
     pub pan: Arc<AtomicI32>,
     pub muted: Arc<AtomicBool>,
     pub soloed: Arc<AtomicBool>,
+    pub monitor: Arc<AtomicBool>,
     pub bus: Arc<AtomicU8>,
     pub meter: Arc<PeakMeter>,
     pub eof: Arc<AtomicBool>,
@@ -203,6 +206,9 @@ pub struct PlaybackStateSnapshot {
     pub quantize_mode: String,
     pub master_gain: f32,
     pub cue_master_gain: f32,
+    /// Volumen general de las pistas marcadas «Aur.» en los auriculares.
+    #[serde(default)]
+    pub monitor_gain: f32,
     #[serde(default)]
     pub meters: MetersSnapshotDto,
     /// Lo que el motor tiene REALMENTE en cada pista (volumen, paneo, mute, solo y bus). La interfaz lo compara con
@@ -222,4 +228,6 @@ pub struct TrackControlSnapshot {
     pub muted: bool,
     pub soloed: bool,
     pub bus: String,
+    #[serde(default)]
+    pub monitor: bool,
 }

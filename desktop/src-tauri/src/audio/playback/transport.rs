@@ -219,6 +219,7 @@ impl PlaybackEngine {
                     muted: trk.muted.load(Ordering::Relaxed),
                     soloed: trk.soloed.load(Ordering::Relaxed),
                     bus: TrackBus::from_u8(trk.bus.load(Ordering::Relaxed)).name().to_string(),
+                    monitor: trk.monitor.load(Ordering::Relaxed),
                 })
                 .collect(),
             Err(_) => Vec::new(),
@@ -255,6 +256,7 @@ impl PlaybackEngine {
             quantize_mode: self.quantize_mode.lock().unwrap().clone(),
             master_gain: f32::from_bits(self.master_gain.load(Ordering::Relaxed)),
             cue_master_gain: f32::from_bits(self.cue_master_gain.load(Ordering::Relaxed)),
+            monitor_gain: f32::from_bits(self.monitor_gain.load(Ordering::Relaxed)),
             meters,
             track_controls,
         }

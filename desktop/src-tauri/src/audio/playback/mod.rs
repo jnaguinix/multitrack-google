@@ -70,6 +70,8 @@ pub struct PlaybackEngine {
     pub active_routing_key: Arc<std::sync::Mutex<Option<String>>>,
     pub master_gain: Arc<AtomicU32>,                   // f32 bits
     pub cue_master_gain: Arc<AtomicU32>,               // f32 bits
+    /// Volumen general del envío «Aur.» (f32 bits).
+    pub monitor_gain: Arc<AtomicU32>,
     pub pitch_semitones: Arc<AtomicI32>,
     pub queued_jump: Arc<std::sync::Mutex<Option<QueuedJumpInfo>>>,
     pub metronome: Arc<std::sync::Mutex<MetronomeEngine>>,
@@ -108,6 +110,7 @@ impl PlaybackEngine {
             active_routing_key: Arc::new(std::sync::Mutex::new(None)),
             master_gain: Arc::new(AtomicU32::new(1.0f32.to_bits())),
             cue_master_gain: Arc::new(AtomicU32::new(0.708f32.to_bits())),
+            monitor_gain: Arc::new(AtomicU32::new(1.0f32.to_bits())),
             pitch_semitones: Arc::new(AtomicI32::new(0)),
             queued_jump: Arc::new(std::sync::Mutex::new(None)),
             metronome: Arc::new(std::sync::Mutex::new(MetronomeEngine::new(
@@ -541,6 +544,7 @@ impl PlaybackEngine {
                 pan: Arc::new(AtomicI32::new(0)),
                 muted: Arc::new(AtomicBool::new(false)),
                 soloed: Arc::new(AtomicBool::new(false)),
+                monitor: Arc::new(AtomicBool::new(false)),
                 bus: Arc::new(AtomicU8::new(initial_bus)),
                 consumer: Arc::new(std::sync::Mutex::new(consumer)),
                 stop_signal,
@@ -583,6 +587,7 @@ impl PlaybackEngine {
                 pan: Arc::clone(&t.pan),
                 muted: Arc::clone(&t.muted),
                 soloed: Arc::clone(&t.soloed),
+                monitor: Arc::clone(&t.monitor),
                 bus: Arc::clone(&t.bus),
                 meter: Arc::clone(&t.meter),
                 eof: Arc::clone(&t.eof),
@@ -674,6 +679,18 @@ impl PlaybackEngine {
         }
         self.routing.store(table);
         Ok(())
+    }
+
+    /// Marca o desmarca una pista para el envío a auriculares («Aur.»).
+    pub async fn set_track_monitor(&self, track_id: &str, monitor: bool) {
+        let tracks = self.tracks.lock().await;
+        if let Some(trk) = tracks.iter().find(|t| t.track_id == track_id) {
+            trk.monitor.store(monitor, Ordering::Relaxed);
+        }
+    }
+
+    pub fn set_monitor_gain(&self, gain: f32) {
+        self.monitor_gain.store(gain.clamp(0.0, 4.0).to_bits(), Ordering::SeqCst);
     }
 
     pub fn set_master_gains(&self, master_gain: Option<f32>, cue_master_gain: Option<f32>) {
@@ -851,6 +868,7 @@ impl PlaybackEngine {
         let metronome_arc = Arc::clone(&self.metronome);
         let master_gain_arc = Arc::clone(&self.master_gain);
         let cue_master_gain_arc = Arc::clone(&self.cue_master_gain);
+        let monitor_gain_arc = Arc::clone(&self.monitor_gain);
         let pitch_arc = Arc::clone(&self.pitch_semitones);
         let vamping_arc = Arc::clone(&self.is_vamping);
         let bus_meters_arc = Arc::clone(&self.bus_meters);
@@ -874,6 +892,8 @@ impl PlaybackEngine {
         let mut both_r = vec![0.0f32; MAX_CALLBACK_FRAMES];
         let mut guide_l = vec![0.0f32; MAX_CALLBACK_FRAMES];
         let mut guide_r = vec![0.0f32; MAX_CALLBACK_FRAMES];
+        let mut mon_l = vec![0.0f32; MAX_CALLBACK_FRAMES];
+        let mut mon_r = vec![0.0f32; MAX_CALLBACK_FRAMES];
         let mut click_buf = vec![0.0f32; MAX_CALLBACK_FRAMES];
         // Fotograma de la canción donde debería empezar el siguiente bloque si el reloj fuera continuo.
         // Si no coincide (seek, salto de sección, vuelta de vamp) el metrónomo se recoloca.
@@ -922,6 +942,8 @@ impl PlaybackEngine {
                     both_r[..frames].fill(0.0);
                     guide_l[..frames].fill(0.0);
                     guide_r[..frames].fill(0.0);
+                    mon_l[..frames].fill(0.0);
+                    mon_r[..frames].fill(0.0);
                     click_buf[..frames].fill(0.0);
 
                     let mut fade = match fade_arc.try_lock() {
@@ -962,6 +984,7 @@ impl PlaybackEngine {
                         let is_muted = trk.muted.load(Ordering::Relaxed);
                         let is_solo = trk.soloed.load(Ordering::Relaxed);
                         let track_bus = TrackBus::from_u8(trk.bus.load(Ordering::Relaxed));
+                        let monitor_on = trk.monitor.load(Ordering::Relaxed);
 
                         if is_muted || (any_solo && !is_solo) {
                             // Una pista silenciada también avanza: se consume (y se resincroniza) igual.
@@ -1010,6 +1033,10 @@ impl PlaybackEngine {
                                         guide_l[f] += tl;
                                         guide_r[f] += tr;
                                     }
+                                }
+                                if monitor_on {
+                                    mon_l[f] += tl;
+                                    mon_r[f] += tr;
                                 }
                             });
                             trk.meter.record(pk_l, pk_r);
@@ -1066,6 +1093,7 @@ impl PlaybackEngine {
 
                     let master_g = f32::from_bits(master_gain_arc.load(Ordering::Relaxed));
                     let cue_g = f32::from_bits(cue_master_gain_arc.load(Ordering::Relaxed));
+                    let monitor_g = f32::from_bits(monitor_gain_arc.load(Ordering::Relaxed));
                     // Matriz de ruteo del dispositivo: se copia a la pila una vez por bloque (sin bloqueos ni asignaciones).
                     let route = routing_arc.load();
 
@@ -1087,14 +1115,15 @@ impl PlaybackEngine {
                         let m_r = (main_r[f] + both_r[f]) * master_g;
                         let click_src = ((cue_l[f] + cue_r[f] + both_l[f] + both_r[f]) * 0.5 + click_buf[f]) * cue_g;
                         let guide_src = (guide_l[f] + guide_r[f]) * 0.5 * cue_g;
-                        let src = [m_l, m_r, music_mono(m_l, m_r), click_src, guide_src];
+                        let monitor_src = (mon_l[f] + mon_r[f]) * 0.5 * monitor_g;
+                        let src = [m_l, m_r, music_mono(m_l, m_r), click_src, guide_src, monitor_src];
 
                         let frame = &mut data[f * channels..(f + 1) * channels];
                         route.mix_frame(&src, frame);
 
                         mk_l = mk_l.max((m_l * env_gain).abs());
                         mk_r = mk_r.max((m_r * env_gain).abs());
-                        ck = ck.max(click_src.abs().max(guide_src.abs()) * env_gain);
+                        ck = ck.max(click_src.abs().max(guide_src.abs()).max(monitor_src.abs()) * env_gain);
                         for (ch, v) in frame.iter_mut().enumerate() {
                             let o = *v * env_gain;
                             if ch == 0 {
@@ -1199,11 +1228,14 @@ impl PlaybackEngine {
         let mut both_r = vec![0.0f32; frames];
         let mut guide_l = vec![0.0f32; frames];
         let mut guide_r = vec![0.0f32; frames];
+        let mut mon_l = vec![0.0f32; frames];
+        let mut mon_r = vec![0.0f32; frames];
 
         for trk in tracks_guard.iter() {
             let is_muted = trk.muted.load(Ordering::Relaxed);
             let is_solo = trk.soloed.load(Ordering::Relaxed);
             let track_bus = TrackBus::from_u8(trk.bus.load(Ordering::Relaxed));
+            let monitor_on = trk.monitor.load(Ordering::Relaxed);
 
             if is_muted || (any_solo && !is_solo) {
                 if let Ok(mut c) = trk.consumer.lock() {
@@ -1240,6 +1272,10 @@ impl PlaybackEngine {
                             guide_r[f] += tr;
                         }
                     }
+                    if monitor_on {
+                        mon_l[f] += tl;
+                        mon_r[f] += tr;
+                    }
                 });
                 trk.meter.record(pk_l, pk_r);
             }
@@ -1247,6 +1283,7 @@ impl PlaybackEngine {
 
         let master_g = f32::from_bits(self.master_gain.load(Ordering::Relaxed));
         let cue_g = f32::from_bits(self.cue_master_gain.load(Ordering::Relaxed));
+        let monitor_g = f32::from_bits(self.monitor_gain.load(Ordering::Relaxed));
         let (mut mk_l, mut mk_r, mut ck, mut ok_l, mut ok_r) = (0.0f32, 0.0f32, 0.0f32, 0.0f32, 0.0f32);
         let route = self.routing.load();
         let start_song_f = self.current_frame.load(Ordering::Relaxed);
@@ -1268,12 +1305,13 @@ impl PlaybackEngine {
             let m_r = (main_r[f] + both_r[f]) * master_g;
             let click_src = ((cue_l[f] + cue_r[f] + both_l[f] + both_r[f]) * 0.5) * cue_g;
             let guide_src = (guide_l[f] + guide_r[f]) * 0.5 * cue_g;
-            let src = [m_l, m_r, music_mono(m_l, m_r), click_src, guide_src];
+            let monitor_src = (mon_l[f] + mon_r[f]) * 0.5 * monitor_g;
+            let src = [m_l, m_r, music_mono(m_l, m_r), click_src, guide_src, monitor_src];
             let frame = &mut data[f * channels..(f + 1) * channels];
             route.mix_frame(&src, frame);
             mk_l = mk_l.max((m_l * env_gain).abs());
             mk_r = mk_r.max((m_r * env_gain).abs());
-            ck = ck.max(click_src.abs().max(guide_src.abs()) * env_gain);
+            ck = ck.max(click_src.abs().max(guide_src.abs()).max(monitor_src.abs()) * env_gain);
             for (ch, v) in frame.iter_mut().enumerate() {
                 let o = *v * env_gain;
                 if ch == 0 {
