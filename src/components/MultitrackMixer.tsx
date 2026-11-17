@@ -334,7 +334,9 @@ const FixedStrip: React.FC<{
   onToggleMute: () => void;
   onToggleSolo?: () => void;
   onRename?: () => void;
-}> = ({ name, sub, color, live, gain, muted, dim, disabled, soloed, peakOf, levelsOf, onChangeGain, onToggleMute, onToggleSolo, onRename }) => (
+  /** Sin M ni S (el Monitor solo lleva volumen). */
+  noButtons?: boolean;
+}> = ({ name, sub, color, live, gain, muted, dim, disabled, soloed, peakOf, levelsOf, onChangeGain, onToggleMute, onToggleSolo, onRename, noButtons }) => (
   <div
     style={{ '--c': color } as React.CSSProperties}
     className={`lt-strip lt-bus ${dim ? 'lt-dim' : ''}`}
@@ -360,7 +362,7 @@ const FixedStrip: React.FC<{
         onChangeGain={onChangeGain}
       />
     )}
-    {!disabled && (
+    {!disabled && !noButtons && (
       <div className="lt-ms">
         <button type="button" className="lt-m" aria-pressed={muted} aria-label={`Mute ${name}`} onClick={onToggleMute}>
           M
@@ -387,6 +389,10 @@ export interface MultitrackMixerProps {
   onChangeClickPan?: (pan: number) => void;
   onToggleClick: () => void;
   onChangeMasterGain: (gain: number) => void;
+  /** «Aur.»: enviar una pista también a los auriculares. */
+  onToggleTrackMonitor?: (trackId: string) => void;
+  /** Volumen general de lo enviado a los auriculares con «Aur.». */
+  onChangeMonitorGain?: (gain: number) => void;
   onResetMixer: () => void;
   onEditTracks?: () => void;
   /** Abre «Cambiar instrumento» para una pista (clic en su nombre). */
@@ -405,6 +411,8 @@ export const MultitrackMixer: React.FC<MultitrackMixerProps> = ({
   onChangeClickPan,
   onToggleClick,
   onChangeMasterGain,
+  onToggleTrackMonitor,
+  onChangeMonitorGain,
   onResetMixer,
   onEditTracks,
   onPickInstrument,
@@ -532,6 +540,24 @@ export const MultitrackMixer: React.FC<MultitrackMixerProps> = ({
                     S
                   </button>
                 </div>
+
+                {onToggleTrackMonitor && (
+                  <button
+                    type="button"
+                    className="lt-route"
+                    data-bus={track.monitor ? 'cue-click' : 'main'}
+                    aria-pressed={Boolean(track.monitor)}
+                    aria-label={`Enviar ${displayName} a los auriculares`}
+                    title={
+                      track.monitor
+                        ? 'Se oye también en los auriculares. Pulsa para quitarla.'
+                        : 'Enviar esta pista también a los auriculares (sigue sonando en la sala).'
+                    }
+                    onClick={() => onToggleTrackMonitor(track.id)}
+                  >
+                    Aur.
+                  </button>
+                )}
               </div>
             );
           })}
@@ -590,6 +616,20 @@ export const MultitrackMixer: React.FC<MultitrackMixerProps> = ({
             onToggleSolo={guideTrack ? () => onToggleTrackSolo(guideTrack.id) : undefined}
             onRename={guideTrack && onPickInstrument ? () => onPickInstrument(guideTrack.id) : undefined}
           />
+          {onChangeMonitorGain && (
+            <FixedStrip
+              name="Monitor"
+              sub="Aur. en auriculares"
+              color="#a78bfa"
+              live={live}
+              gain={project.monitorGain ?? 1}
+              muted={false}
+              dim={!project.tracks.some((tr) => tr.monitor)}
+              noButtons
+              onChangeGain={onChangeMonitorGain}
+              onToggleMute={() => {}}
+            />
+          )}
         </section>
       </main>
     </div>

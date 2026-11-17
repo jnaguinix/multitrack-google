@@ -37,6 +37,8 @@ export interface TrackChannel {
   pan: number; // -1.0 (L) to +1.0 (R)
   muted: boolean;
   soloed: boolean;
+  /** «Aur.»: la pista, además de su salida normal, se oye en los auriculares (junto al click y la guía). */
+  monitor?: boolean;
   bus: OutputBus;
   peaks: number[]; // Normalized 0..1 envelope peaks for canvas waveform rendering
   isCustomAudio?: boolean;
@@ -71,6 +73,8 @@ export interface SongProject {
   clickSubdivision: 1 | 2; // 1 = quarter notes, 2 = eighth notes
   masterGain: number;
   cueMasterGain?: number; // Master output gain for the Click / Cue bus ("Auriculares banda")
+  /** Volumen general de las pistas marcadas «Aur.» en los auriculares (1 = sin cambio). */
+  monitorGain?: number;
   pitchSemitones: number; // -6 to +6 semitones detune for stems
   isTitleCustom?: boolean;
   /** Notas de la canción para el servicio (por ejemplo «entrar con el coro»). */

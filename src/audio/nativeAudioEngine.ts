@@ -52,6 +52,7 @@ export interface NativePlaybackSnapshot {
   quantizeMode?: string;
   masterGain?: number;
   cueMasterGain?: number;
+  monitorGain?: number;
   /** Lo que el motor tiene realmente en cada pista: la interfaz lo compara con lo que muestra y corrige diferencias. */
   trackControls?: EngineTrackControl[];
   /** Picos reales medidos por el motor desde la consulta anterior. */

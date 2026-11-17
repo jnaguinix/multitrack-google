@@ -4,7 +4,7 @@
  * edita y para la vista previa del navegador; si cambian las reglas hay que cambiarlas en los dos sitios.
  */
 
-export type RouteSource = 'musicL' | 'musicR' | 'musicMono' | 'click' | 'guide';
+export type RouteSource = 'musicL' | 'musicR' | 'musicMono' | 'click' | 'guide' | 'monitor';
 
 export interface RouteEntry {
   source: RouteSource;
@@ -38,7 +38,7 @@ export interface RoutingInfo {
   summary: string;
 }
 
-export const ROUTE_SOURCES: readonly RouteSource[] = ['musicL', 'musicR', 'musicMono', 'click', 'guide'];
+export const ROUTE_SOURCES: readonly RouteSource[] = ['musicL', 'musicR', 'musicMono', 'click', 'guide', 'monitor'];
 
 export const SOURCE_LABEL: Record<RouteSource, string> = {
   musicL: 'Música izq.',
@@ -46,36 +46,39 @@ export const SOURCE_LABEL: Record<RouteSource, string> = {
   musicMono: 'Música mono',
   click: 'Click',
   guide: 'Guía',
+  monitor: 'Monitor',
 };
 
+/** Con artículo, para los mensajes. */
 const SOURCE_NAME: Record<RouteSource, string> = {
-  musicL: 'música izquierda',
-  musicR: 'música derecha',
-  musicMono: 'música (mono)',
-  click: 'click',
-  guide: 'guía',
+  musicL: 'la música izquierda',
+  musicR: 'la música derecha',
+  musicMono: 'la música (mono)',
+  click: 'el click',
+  guide: 'la guía',
+  monitor: 'el monitor',
 };
 
 const isMusic = (s: RouteSource) => s === 'musicL' || s === 'musicR' || s === 'musicMono';
-const isCue = (s: RouteSource) => s === 'click' || s === 'guide';
+const isCue = (s: RouteSource) => s === 'click' || s === 'guide' || s === 'monitor';
 const entries = (...sources: RouteSource[]): OutputAssign => ({ sources: sources.map((source) => ({ source, gain: 1 })) });
 
 /** Propuesta automática según los canales independientes que expone el dispositivo. */
 export function proposeRouting(channels: number): RoutingConfig {
   const outputs: OutputAssign[] = Array.from({ length: channels }, () => ({ sources: [] }));
-  if (channels === 1) outputs[0] = entries('musicMono', 'click', 'guide');
+  if (channels === 1) outputs[0] = entries('musicMono', 'click', 'guide', 'monitor');
   else if (channels === 2) {
     outputs[0] = entries('musicMono');
-    outputs[1] = entries('click', 'guide');
+    outputs[1] = entries('click', 'guide', 'monitor');
   } else if (channels === 3) {
     outputs[0] = entries('musicL');
     outputs[1] = entries('musicR');
-    outputs[2] = entries('click', 'guide');
+    outputs[2] = entries('click', 'guide', 'monitor');
   } else if (channels >= 4) {
     outputs[0] = entries('musicL');
     outputs[1] = entries('musicR');
     outputs[2] = entries('click');
-    outputs[3] = entries('guide');
+    outputs[3] = entries('guide', 'monitor');
   }
   return { channels, outputs, allowMixed: false, custom: false };
 }
@@ -91,13 +94,14 @@ export function validateRouting(config: RoutingConfig, deviceChannels: number): 
   if (!has(isMusic)) issues.push('La música no está asignada a ninguna salida: se perdería.');
   if (!has((s) => s === 'click')) issues.push('El click no está asignado a ninguna salida: se perdería.');
   if (!has((s) => s === 'guide')) issues.push('La guía no está asignada a ninguna salida: se perdería.');
+  if (!has((s) => s === 'monitor')) issues.push('El monitor (Aur.) no está asignado a ninguna salida: las pistas marcadas se perderían.');
   if (!config.allowMixed) {
     config.outputs.forEach((o, i) => {
       const music = o.sources.find((e) => e.gain > 0 && isMusic(e.source));
       const cue = o.sources.find((e) => e.gain > 0 && isCue(e.source));
       if (music && cue) {
         issues.push(
-          `La salida ${i + 1} mezcla ${SOURCE_NAME[music.source]} con ${SOURCE_NAME[cue.source]}: el ${SOURCE_NAME[cue.source]} llegaría al público.`
+          `La salida ${i + 1} mezcla ${SOURCE_NAME[music.source]} con ${SOURCE_NAME[cue.source]}: ${SOURCE_NAME[cue.source]} llegaría al público.`
         );
       }
     });

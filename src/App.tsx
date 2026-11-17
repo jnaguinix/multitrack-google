@@ -810,6 +810,8 @@ export default function App() {
     handleToggleClick,
     handleToggleTrackMute,
     handleToggleTrackSolo,
+    handleToggleTrackMonitor,
+    handleChangeMonitorGain,
     handleChangeTrackGain,
     handleChangeTrackPan,
     handleDeleteTrack,
@@ -1124,6 +1126,8 @@ export default function App() {
                 updateCurrentProject((p) => ({ ...p, masterGain: gain }))
               }
               onResetMixer={handleResetMixer}
+              onToggleTrackMonitor={handleToggleTrackMonitor}
+              onChangeMonitorGain={handleChangeMonitorGain}
               onPickInstrument={setInstrumentPickerTrackId}
             />
           )}
@@ -1240,6 +1244,8 @@ export default function App() {
                             updateCurrentProject((p) => ({ ...p, masterGain: gain }))
                           }
                           onResetMixer={handleResetMixer}
+                          onToggleTrackMonitor={handleToggleTrackMonitor}
+                          onChangeMonitorGain={handleChangeMonitorGain}
                           onPickInstrument={setInstrumentPickerTrackId}
                         />
                       </div>
@@ -1289,6 +1295,8 @@ export default function App() {
                   updateCurrentProject((p) => ({ ...p, masterGain: gain }))
                 }
                 onResetMixer={handleResetMixer}
+                onToggleTrackMonitor={handleToggleTrackMonitor}
+                onChangeMonitorGain={handleChangeMonitorGain}
                 onPickInstrument={setInstrumentPickerTrackId}
                 onEditTracks={() => setIsEditTracksOpen(true)}
               />

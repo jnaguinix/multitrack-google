@@ -69,8 +69,8 @@ function makeProject(n = 6): SongProject {
 
 /** Motor simulado: aplica las órdenes con una latencia aleatoria, como las tareas independientes de Tauri. */
 class FakeEngine {
-  tracks = new Map<string, { gain: number; pan: number; muted: boolean; soloed: boolean; bus: string }>();
-  master = { masterGain: 1, cueMasterGain: 0.708 };
+  tracks = new Map<string, { gain: number; pan: number; muted: boolean; soloed: boolean; bus: string; monitor: boolean }>();
+  master = { masterGain: 1, cueMasterGain: 0.708, monitorGain: 1 };
   pitch = 0;
   calls: string[] = [];
   /** Si es `true`, ignora las órdenes de pista (simula un motor que no obedece). */
@@ -82,12 +82,13 @@ class FakeEngine {
     if (this.maxDelay > 0) await sleep(Math.floor(this.random() * this.maxDelay));
     const a = args ?? {};
     if (cmd === 'audio_set_track_controls' && !this.deaf) {
-      const t = this.tracks.get(a.trackId as string) ?? { gain: 1, pan: 0, muted: false, soloed: false, bus: 'main' };
-      for (const k of ['gain', 'pan', 'muted', 'soloed', 'bus'] as const) if (k in a) (t as Record<string, unknown>)[k] = a[k];
+      const t = this.tracks.get(a.trackId as string) ?? { gain: 1, pan: 0, muted: false, soloed: false, bus: 'main', monitor: false };
+      for (const k of ['gain', 'pan', 'muted', 'soloed', 'bus', 'monitor'] as const) if (k in a) (t as Record<string, unknown>)[k] = a[k];
       this.tracks.set(a.trackId as string, t);
     } else if (cmd === 'audio_set_master_gains') {
       if ('masterGain' in a) this.master.masterGain = a.masterGain as number;
       if ('cueMasterGain' in a) this.master.cueMasterGain = a.cueMasterGain as number;
+      if ('monitorGain' in a) this.master.monitorGain = a.monitorGain as number;
     } else if (cmd === 'audio_set_pitch') {
       this.pitch = a.semitones as number;
     }
@@ -99,11 +100,11 @@ class FakeEngine {
 }
 
 function matches(engine: FakeEngine, p: SongProject): boolean {
-  if (engine.master.masterGain !== p.masterGain || engine.master.cueMasterGain !== p.cueMasterGain || engine.pitch !== p.pitchSemitones) return false;
+  if (engine.master.masterGain !== p.masterGain || engine.master.cueMasterGain !== p.cueMasterGain || engine.master.monitorGain !== (p.monitorGain ?? 1) || engine.pitch !== p.pitchSemitones) return false;
   return p.tracks.every((t) => {
     const d = desiredTrack(t);
     const e = engine.tracks.get(t.id);
-    return !!e && Math.abs(e.gain - d.gain) < 1e-9 && e.pan === d.pan && e.muted === d.muted && e.soloed === d.soloed && e.bus === d.bus;
+    return !!e && Math.abs(e.gain - d.gain) < 1e-9 && e.pan === d.pan && e.muted === d.muted && e.soloed === d.soloed && e.bus === d.bus && e.monitor === d.monitor;
   });
 }
 
@@ -114,6 +115,7 @@ function randomChange(p: SongProject, random: () => number): SongProject {
   const t = next.tracks[i];
   const r = random();
   if (r < 0.3) t.soloed = !t.soloed;
+  else if (r < 0.4) t.monitor = !t.monitor;
   else if (r < 0.5) t.muted = !t.muted;
   else if (r < 0.75) t.gain = Math.round(random() * 200) / 100;
   else if (r < 0.9) t.pan = Math.round((random() * 2 - 1) * 100) / 100;
@@ -197,8 +199,8 @@ async function main() {
     project.tracks[0].pan = 0.35; // el pan decimal de la interfaz debe llegar como entero
     project.tracks[1].pan = -1;
     const allowed: Record<string, string[]> = {
-      audio_set_track_controls: ['trackId', 'gain', 'pan', 'muted', 'soloed', 'bus'],
-      audio_set_master_gains: ['masterGain', 'cueMasterGain'],
+      audio_set_track_controls: ['trackId', 'gain', 'pan', 'muted', 'soloed', 'bus', 'monitor'],
+      audio_set_master_gains: ['masterGain', 'cueMasterGain', 'monitorGain'],
       audio_set_pitch: ['semitones'],
       audio_set_metronome: ['config'],
       audio_configure_song: ['bpm', 'beatsPerBar', 'sections', 'quantizeMode'],
@@ -220,6 +222,32 @@ async function main() {
     // El click y la guía llegan al motor con su propio bus para poder sacarlos por salidas distintas
     const buses = new Map(diffProjectControls(null, project).filter((o) => o.key.startsWith('track:')).map((o) => [o.key, (o.args as { bus: string }).bus]));
     assert(buses.get('track:t4') === 'click' && buses.get('track:t5') === 'guide' && buses.get('track:t0') === 'main', 'bus por tipo de pista');
+  }
+
+  // ------------------------------------------------------------------ Monitor («Aur.»)
+  {
+    const p = makeProject();
+    const marcado = { ...p, tracks: p.tracks.map((t, i) => (i === 2 ? { ...t, monitor: true } : t)) } as SongProject;
+    const ops = diffProjectControls(p, marcado);
+    assert(ops.length === 1 && JSON.stringify(ops[0].args) === JSON.stringify({ trackId: 't2', monitor: true }), 'marcar «Aur.» envía solo ese campo de esa pista');
+    assert(!isContinuousOnly(ops), 'marcar «Aur.» se guarda al momento');
+    const vol = diffProjectControls(p, { ...p, monitorGain: 0.4 } as SongProject);
+    assert(vol.length === 1 && vol[0].key === 'master' && (vol[0].args as { monitorGain: number }).monitorGain === 0.4, 'el volumen del monitor va por las ganancias maestras');
+    assert(isContinuousOnly(vol), 'mover el volumen del monitor es un cambio continuo');
+    // La autocorrección también vigila el monitor: un envío que quedó puesto (o quitado) en el motor se corrige
+    const engine = new FakeEngine(0, rng(11));
+    let clock = 5_000;
+    const sync = new ControlSync({ getInvoke: () => engine.invoke, onError: () => {}, recorder: new FlightRecorder(50), now: () => clock });
+    sync.syncAll(marcado);
+    await sync.queue.idle();
+    assert(engine.tracks.get('t2')!.monitor === true, 'el motor recibe el envío a auriculares');
+    engine.tracks.get('t2')!.monitor = false;
+    clock += SETTLE_MS + 1;
+    const snap = () => ({ trackControls: engine.report(), monitorGain: 1 });
+    sync.reconcile(snap(), marcado);
+    sync.reconcile(snap(), marcado);
+    await sync.queue.idle();
+    assert(engine.tracks.get('t2')!.monitor === true, 'si el motor pierde un «Aur.», se corrige solo');
   }
 
   // ------------------------------------------------------------------ modelo aleatorio: con la cola, el motor siempre termina igual que la interfaz

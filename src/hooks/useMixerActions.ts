@@ -53,6 +53,17 @@ export function useMixerActions({
     }));
   };
 
+  const handleToggleTrackMonitor = (trackId: string) => {
+    updateCurrentProject((p) => ({
+      ...p,
+      tracks: p.tracks.map((t) => (t.id === trackId ? { ...t, monitor: !t.monitor } : t)),
+    }));
+  };
+
+  const handleChangeMonitorGain = (gain: number) => {
+    updateCurrentProject((p) => ({ ...p, monitorGain: gain }));
+  };
+
   const handleChangeTrackGain = (trackId: string, gain: number) => {
     updateCurrentProject((p) => ({
       ...p,
@@ -120,6 +131,8 @@ export function useMixerActions({
     handleToggleClick,
     handleToggleTrackMute,
     handleToggleTrackSolo,
+    handleToggleTrackMonitor,
+    handleChangeMonitorGain,
     handleChangeTrackGain,
     handleChangeTrackPan,
     handleDeleteTrack,
