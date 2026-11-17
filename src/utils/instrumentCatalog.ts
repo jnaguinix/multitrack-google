@@ -27,6 +27,7 @@ export const INSTRUMENTS: readonly InstrumentDef[] = [
   { id: 'loop', label: 'Loop', role: 'fx', color: '#64748B' },
   { id: 'metales', label: 'Metales', role: 'custom', color: '#CA8A04' },
   { id: 'organo', label: 'Órgano', role: 'keys', color: '#0E7490' },
+  { id: 'otros', label: 'Otros', role: 'custom', color: '#737373' },
   { id: 'pad', label: 'Pad', role: 'synth', color: '#A855F7' },
   { id: 'percusion', label: 'Percusión', role: 'perc', color: '#EA580C' },
   { id: 'piano', label: 'Piano', role: 'keys', color: '#0891B2' },

@@ -86,6 +86,14 @@ eq(migrateTrackNames(ya).map((x) => x.name), ['Guitarra 1', 'Guitarra 2', 'Piano
 const mismo = [{ name: 'Bajo' }];
 assert(migrateTrackNames(mismo)[0] === mismo[0], 'una pista que no cambia es el mismo objeto');
 
+// --- Otros: para lo que no encaja en ningún instrumento
+assert(labels.includes('Otros'), 'el catálogo tiene «Otros»');
+eq(getInstrument('otros')?.role, 'custom', 'Otros usa el rol genérico');
+eq(numberedNames(['otros', 'otros']), ['Otros 1', 'Otros 2'], 'varios «Otros» se numeran');
+eq(instrumentIdFromName('Otros 2'), 'otros', 'se reconoce con número');
+assert(effectiveBus({ name: 'Otros', role: 'custom' }) === 'main', 'Otros va a Main, no a auriculares');
+assert(sortInstrumentTracks([{ name: 'Otros', role: 'custom' as const }]).length === 1, 'Otros va en la lista alfabética, no entre los fijos');
+
 // --- Una sola Voz (antes Alto, principal, Soprano y Tenor)
 assert(labels.includes('Voz') && !labels.some((l) => l.startsWith('Voz ')), 'una sola Voz en el catálogo');
 for (const viejo of ['voz-alto', 'voz-principal', 'voz-soprano', 'voz-tenor']) eq(canonicalInstrumentId(viejo), 'voz', `id viejo ${viejo}`);
