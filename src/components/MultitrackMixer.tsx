@@ -393,6 +393,9 @@ export interface MultitrackMixerProps {
   onToggleTrackMonitor?: (trackId: string) => void;
   /** Volumen general de lo enviado a los auriculares con «Aur.». */
   onChangeMonitorGain?: (gain: number) => void;
+  /** Secuencia dividida: volumen y mute de su canal izquierdo (click y guía). */
+  onChangeTrackCueGain?: (trackId: string, gain: number) => void;
+  onToggleTrackCueMute?: (trackId: string) => void;
   onResetMixer: () => void;
   onEditTracks?: () => void;
   /** Abre «Cambiar instrumento» para una pista (clic en su nombre). */
@@ -413,6 +416,8 @@ export const MultitrackMixer: React.FC<MultitrackMixerProps> = ({
   onChangeMasterGain,
   onToggleTrackMonitor,
   onChangeMonitorGain,
+  onChangeTrackCueGain,
+  onToggleTrackCueMute,
   onResetMixer,
   onEditTracks,
   onPickInstrument,
@@ -431,6 +436,9 @@ export const MultitrackMixer: React.FC<MultitrackMixerProps> = ({
   const instrumentTracks = sortInstrumentTracks(project.tracks);
   const clickTrack = project.tracks.find(isClickTrack) ?? null;
   const guideTrack = project.tracks.find(isGuideTrack) ?? null;
+  // Sin pista de click propia, el fader Click controla el click y la guía de una secuencia dividida.
+  const splitTrack =
+    !clickTrack && onChangeTrackCueGain && onToggleTrackCueMute ? project.tracks.find((tr) => tr.splitSequence) ?? null : null;
   const trackIsDimmed = (t: TrackChannel) => t.muted || (anySolo && !t.soloed);
   return (
     <div
@@ -584,22 +592,37 @@ export const MultitrackMixer: React.FC<MultitrackMixerProps> = ({
           </div>
 
           {/* Click y Guía: un solo control cada uno, fijos junto a Main (salen por auriculares / Cue) */}
-          <FixedStrip
-            name="Click"
-            sub={clickTrack ? 'Pista' : 'Metrónomo'}
-            color="#22d3ee"
-            live={live}
-            gain={clickTrack ? clickTrack.gain : project.clickGain}
-            muted={clickTrack ? clickTrack.muted : !project.clickEnabled}
-            dim={clickTrack ? trackIsDimmed(clickTrack) : !project.clickEnabled}
-            soloed={clickTrack ? clickTrack.soloed : undefined}
-            peakOf={clickTrack ? (m) => trackPeak(project, transport, m, clickTrack.id) : undefined}
-            levelsOf={clickTrack ? undefined : busLevelsOf('click')}
-            onChangeGain={(g) => (clickTrack ? onChangeTrackGain(clickTrack.id, g) : onChangeClickGain(g))}
-            onToggleMute={() => (clickTrack ? onToggleTrackMute(clickTrack.id) : onToggleClick())}
-            onToggleSolo={clickTrack ? () => onToggleTrackSolo(clickTrack.id) : undefined}
-            onRename={clickTrack && onPickInstrument ? () => onPickInstrument(clickTrack.id) : undefined}
-          />
+          {splitTrack && onChangeTrackCueGain && onToggleTrackCueMute ? (
+            <FixedStrip
+              name="Click"
+              sub={`${splitTrack.name} · L`}
+              color="#22d3ee"
+              live={live}
+              gain={splitTrack.cueGain ?? 1}
+              muted={Boolean(splitTrack.cueMuted)}
+              dim={Boolean(splitTrack.cueMuted)}
+              levelsOf={busLevelsOf('cue')}
+              onChangeGain={(g) => onChangeTrackCueGain(splitTrack.id, g)}
+              onToggleMute={() => onToggleTrackCueMute(splitTrack.id)}
+            />
+          ) : (
+            <FixedStrip
+              name="Click"
+              sub={clickTrack ? 'Pista' : 'Metrónomo'}
+              color="#22d3ee"
+              live={live}
+              gain={clickTrack ? clickTrack.gain : project.clickGain}
+              muted={clickTrack ? clickTrack.muted : !project.clickEnabled}
+              dim={clickTrack ? trackIsDimmed(clickTrack) : !project.clickEnabled}
+              soloed={clickTrack ? clickTrack.soloed : undefined}
+              peakOf={clickTrack ? (m) => trackPeak(project, transport, m, clickTrack.id) : undefined}
+              levelsOf={clickTrack ? undefined : busLevelsOf('click')}
+              onChangeGain={(g) => (clickTrack ? onChangeTrackGain(clickTrack.id, g) : onChangeClickGain(g))}
+              onToggleMute={() => (clickTrack ? onToggleTrackMute(clickTrack.id) : onToggleClick())}
+              onToggleSolo={clickTrack ? () => onToggleTrackSolo(clickTrack.id) : undefined}
+              onRename={clickTrack && onPickInstrument ? () => onPickInstrument(clickTrack.id) : undefined}
+            />
+          )}
           <FixedStrip
             name="Guía"
             sub={guideTrack ? 'Pista' : 'Sin pista de guía'}

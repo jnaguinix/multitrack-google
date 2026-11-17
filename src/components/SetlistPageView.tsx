@@ -80,6 +80,8 @@ interface SetlistPageViewProps {
   onChangeMasterGain: (gain: number) => void;
   onToggleTrackMonitor?: (trackId: string) => void;
   onChangeMonitorGain?: (gain: number) => void;
+  onChangeTrackCueGain?: (trackId: string, gain: number) => void;
+  onToggleTrackCueMute?: (trackId: string) => void;
   onResetMixer: () => void;
   onOptimizeProject: (song: SongProject) => void;
   /** Guarda las notas de una canción. */
@@ -142,6 +144,8 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
   onChangeMasterGain,
   onToggleTrackMonitor,
   onChangeMonitorGain,
+  onChangeTrackCueGain,
+  onToggleTrackCueMute,
   onResetMixer,
   onStartLive,
   onSetSongTransition,
@@ -602,6 +606,8 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
                 onChangeMasterGain={onChangeMasterGain}
                 onToggleTrackMonitor={onToggleTrackMonitor}
                 onChangeMonitorGain={onChangeMonitorGain}
+                onChangeTrackCueGain={onChangeTrackCueGain}
+                onToggleTrackCueMute={onToggleTrackCueMute}
                 onResetMixer={onResetMixer}
                 onPickInstrument={onPickInstrument}
               />

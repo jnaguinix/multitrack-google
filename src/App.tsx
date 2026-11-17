@@ -620,7 +620,7 @@ export default function App() {
             const def = getInstrument(picked.get(tr.id));
             const name = names[i];
             if (!def || !name) return tr;
-            return { ...tr, name, role: def.role, color: def.color, bus: effectiveBus({ name, role: def.role }) };
+            return { ...tr, name, role: def.role, color: def.color, splitSequence: Boolean(def.splitSequence), bus: effectiveBus({ name, role: def.role }) };
           }),
           updatedAt: Date.now(),
         };
@@ -652,7 +652,7 @@ export default function App() {
           ...p,
           tracks: p.tracks.map((tr, i) => {
             const name = names[i];
-            if (tr.id === trackId && name) return { ...tr, name, role: def.role, color: def.color, bus: effectiveBus({ name, role: def.role }) };
+            if (tr.id === trackId && name) return { ...tr, name, role: def.role, color: def.color, splitSequence: Boolean(def.splitSequence), bus: effectiveBus({ name, role: def.role }) };
             return name && ids[i] && name !== tr.name ? { ...tr, name } : tr;
           }),
           updatedAt: Date.now(),
@@ -812,6 +812,8 @@ export default function App() {
     handleToggleTrackSolo,
     handleToggleTrackMonitor,
     handleChangeMonitorGain,
+    handleChangeTrackCueGain,
+    handleToggleTrackCueMute,
     handleChangeTrackGain,
     handleChangeTrackPan,
     handleDeleteTrack,
@@ -1128,6 +1130,8 @@ export default function App() {
               onResetMixer={handleResetMixer}
               onToggleTrackMonitor={handleToggleTrackMonitor}
               onChangeMonitorGain={handleChangeMonitorGain}
+              onChangeTrackCueGain={handleChangeTrackCueGain}
+              onToggleTrackCueMute={handleToggleTrackCueMute}
               onPickInstrument={setInstrumentPickerTrackId}
             />
           )}
@@ -1246,6 +1250,8 @@ export default function App() {
                           onResetMixer={handleResetMixer}
                           onToggleTrackMonitor={handleToggleTrackMonitor}
                           onChangeMonitorGain={handleChangeMonitorGain}
+                          onChangeTrackCueGain={handleChangeTrackCueGain}
+                          onToggleTrackCueMute={handleToggleTrackCueMute}
                           onPickInstrument={setInstrumentPickerTrackId}
                         />
                       </div>
@@ -1297,6 +1303,8 @@ export default function App() {
                 onResetMixer={handleResetMixer}
                 onToggleTrackMonitor={handleToggleTrackMonitor}
                 onChangeMonitorGain={handleChangeMonitorGain}
+                onChangeTrackCueGain={handleChangeTrackCueGain}
+                onToggleTrackCueMute={handleToggleTrackCueMute}
                 onPickInstrument={setInstrumentPickerTrackId}
                 onEditTracks={() => setIsEditTracksOpen(true)}
               />

@@ -199,7 +199,7 @@ async function main() {
     project.tracks[0].pan = 0.35; // el pan decimal de la interfaz debe llegar como entero
     project.tracks[1].pan = -1;
     const allowed: Record<string, string[]> = {
-      audio_set_track_controls: ['trackId', 'gain', 'pan', 'muted', 'soloed', 'bus', 'monitor'],
+      audio_set_track_controls: ['trackId', 'gain', 'pan', 'muted', 'soloed', 'bus', 'monitor', 'splitSequence', 'cueGain', 'cueMuted'],
       audio_set_master_gains: ['masterGain', 'cueMasterGain', 'monitorGain'],
       audio_set_pitch: ['semitones'],
       audio_set_metronome: ['config'],
@@ -248,6 +248,21 @@ async function main() {
     sync.reconcile(snap(), marcado);
     await sync.queue.idle();
     assert(engine.tracks.get('t2')!.monitor === true, 'si el motor pierde un «Aur.», se corrige solo');
+  }
+
+  // ------------------------------------------------------------------ Secuencia dividida
+  {
+    const p = makeProject();
+    const sec = { ...p, tracks: p.tracks.map((t, i) => (i === 1 ? { ...t, splitSequence: true } : t)) } as SongProject;
+    const ops = diffProjectControls(p, sec);
+    assert(ops.length === 1 && JSON.stringify(ops[0].args) === JSON.stringify({ trackId: 't1', splitSequence: true }), 'marcar la secuencia envía solo ese campo');
+    const vol = diffProjectControls(sec, { ...sec, tracks: sec.tracks.map((t, i) => (i === 1 ? { ...t, cueGain: 0.5 } : t)) } as SongProject);
+    assert(vol.length === 1 && (vol[0].args as { cueGain: number }).cueGain === 0.5, 'el fader Click de la secuencia envía cueGain');
+    assert(isContinuousOnly(vol), 'mover el fader Click de la secuencia es un cambio continuo');
+    const mute = diffProjectControls(sec, { ...sec, tracks: sec.tracks.map((t, i) => (i === 1 ? { ...t, cueMuted: true } : t)) } as SongProject);
+    assert(mute.length === 1 && (mute[0].args as { cueMuted: boolean }).cueMuted === true && !isContinuousOnly(mute), 'el mute del click se guarda al momento');
+    const todo = diffProjectControls(null, sec).find((o) => o.key === 'track:t1')!;
+    assert((todo.args as { splitSequence: boolean }).splitSequence === true && (todo.args as { cueGain: number }).cueGain === 1, 'la carga completa incluye la secuencia y su volumen de click');
   }
 
   // ------------------------------------------------------------------ modelo aleatorio: con la cola, el motor siempre termina igual que la interfaz

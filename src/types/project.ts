@@ -39,6 +39,15 @@ export interface TrackChannel {
   soloed: boolean;
   /** «Aur.»: la pista, además de su salida normal, se oye en los auriculares (junto al click y la guía). */
   monitor?: boolean;
+  /**
+   * Secuencia dividida: un solo archivo con el click y la guía en el canal izquierdo y los instrumentos en el derecho.
+   * El izquierdo va a auriculares (volumen y mute en el fader Click) y el derecho a la música (fader de la pista).
+   */
+  splitSequence?: boolean;
+  /** Volumen del canal izquierdo (click y guía) de una secuencia dividida. */
+  cueGain?: number;
+  /** Mute del canal izquierdo (click y guía) de una secuencia dividida. */
+  cueMuted?: boolean;
   bus: OutputBus;
   peaks: number[]; // Normalized 0..1 envelope peaks for canvas waveform rendering
   isCustomAudio?: boolean;
