@@ -54,7 +54,8 @@ export function rememberTrackMapping(
 function safeStorage(): Storage | null {
   try {
     return typeof localStorage === 'undefined' ? null : localStorage;
-  } catch {
+  } catch (err) {
+    logAsyncError('abrir el almacenamiento de la memoria de mapeo')(err);
     return null;
   }
 }

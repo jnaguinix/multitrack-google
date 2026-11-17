@@ -89,13 +89,13 @@ export async function collectAudioFromDirectory(
             writable: false,
             configurable: true,
           });
-        } catch {
-          // ignore
+        } catch (err) {
+          console.warn(`[SourceFiles] Sin ruta relativa para ${file.name}:`, err);
         }
         registerFileHandle(file, { file: entry, dir: rootDir });
         out.push(file);
-      } catch {
-        // unreadable file: skip
+      } catch (err) {
+        console.warn(`[SourceFiles] Archivo ilegible, no se importa: ${prefix}/${entry.name}`, err);
       }
     } else if (entry.kind === 'directory') {
       out.push(...(await collectAudioFromDirectory(entry, rootDir, prefix)));
@@ -237,8 +237,8 @@ export async function queryReadPermission(handle: any): Promise<PermissionState>
     if (typeof handle?.queryPermission === 'function') {
       return (await handle.queryPermission({ mode: 'read' })) as PermissionState;
     }
-  } catch {
-    // ignore
+  } catch (err) {
+    console.warn('[SourceFiles] No se pudo consultar el permiso de lectura:', err);
   }
   return 'granted';
 }
@@ -248,8 +248,8 @@ export async function queryWritePermission(handle: any): Promise<PermissionState
     if (typeof handle?.queryPermission === 'function') {
       return (await handle.queryPermission({ mode: 'readwrite' })) as PermissionState;
     }
-  } catch {
-    // ignore
+  } catch (err) {
+    console.warn('[SourceFiles] No se pudo consultar el permiso de escritura:', err);
   }
   return 'denied';
 }
@@ -259,8 +259,8 @@ export async function requestWritePermission(handle: any): Promise<PermissionSta
     if (typeof handle?.requestPermission === 'function') {
       return (await handle.requestPermission({ mode: 'readwrite' })) as PermissionState;
     }
-  } catch {
-    // ignore
+  } catch (err) {
+    console.warn('[SourceFiles] No se pudo pedir el permiso de escritura:', err);
   }
   return 'denied';
 }
@@ -278,8 +278,11 @@ export async function readProjectSidecarFromDirectory(
     const file: File = await exactHandle.getFile();
     const parsed = parseProjectSidecarText(await file.text());
     if (parsed) return parsed;
-  } catch {
-    // Exact sidecar file not present; scan directory entries for *.omnitracks.json
+  } catch (err) {
+    // Que no exista es lo normal (se buscan entonces los *.omnitracks.json); cualquier otro fallo se registra.
+    if ((err as { name?: string })?.name !== 'NotFoundError') {
+      console.warn('[SourceFiles] No se pudo leer omnitracks.project.json:', err);
+    }
   }
 
   if (typeof dirHandle.values === 'function') {
@@ -290,13 +293,13 @@ export async function readProjectSidecarFromDirectory(
             const file: File = await entry.getFile();
             const parsed = parseProjectSidecarText(await file.text());
             if (parsed) return parsed;
-          } catch {
-            // ignore
+          } catch (err) {
+            console.warn(`[SourceFiles] No se pudo leer el sidecar ${entry.name}:`, err);
           }
         }
       }
-    } catch {
-      // ignore
+    } catch (err) {
+      console.warn('[SourceFiles] No se pudo recorrer la carpeta buscando el sidecar:', err);
     }
   }
   return null;

@@ -46,8 +46,8 @@ export function parseProjectSidecarText(text: string): SongProject | null {
     ) {
       return parsed;
     }
-  } catch {
-    // Ignore invalid JSON
+  } catch (err) {
+    console.warn('[FileImport] El sidecar no es un JSON válido; se importa sin él:', err);
   }
   return null;
 }
@@ -81,8 +81,8 @@ export async function extractSidecarFromFileList(
       const text = await candidate.text();
       const parsed = parseProjectSidecarText(text);
       if (parsed) return parsed;
-    } catch {
-      // Ignore unreadable candidate
+    } catch (err) {
+      console.warn(`[FileImport] No se pudo leer el sidecar ${candidate.name}:`, err);
     }
   }
 
@@ -201,7 +201,8 @@ export async function parseWavHeaderFast(file: File): Promise<FastWavHeaderInfo 
       dataOffset,
       dataSize,
     };
-  } catch {
+  } catch (err) {
+    console.warn(`[FileImport] No se pudo leer la cabecera WAV de ${file.name}:`, err);
     return null;
   }
 }
@@ -253,8 +254,9 @@ export async function extractAudioFilesFromDataTransfer(
                     writable: false,
                     configurable: true,
                   });
-                } catch {
-                  // Ignore if browser restricts defining property on native File
+                } catch (err) {
+                  // El archivo se importa igual, solo sin la ruta relativa de la carpeta.
+                  console.warn(`[FileImport] Sin ruta relativa para ${file.name}:`, err);
                 }
                 extractedFiles.push(file);
               }

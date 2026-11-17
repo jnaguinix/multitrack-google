@@ -611,7 +611,11 @@ export class NativeAudioEngine {
       this.loadedProjectId = project.id;
       this.updateProjectConfig(project);
       this.notifyCache();
-    } catch {
+    } catch (err) {
+      // Sin canción precargada (o el motor la rechazó): se monta desde cero. Se anota para el diagnóstico,
+      // porque así el cambio deja de ser instantáneo.
+      console.warn('[NativeAudioEngine] No se pudo pasar a la canción precargada; se carga de nuevo:', err);
+      flightRecorder.record('precarga', `cambio sin precarga a ${project.id}: ${err instanceof Error ? err.message : String(err)}`);
       await this.loadProject(project);
     }
   }

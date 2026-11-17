@@ -65,7 +65,8 @@ function loadPresetMemoryList(): StoredPresetEntry[] {
     if (!raw) return [];
     const parsed = JSON.parse(raw);
     return Array.isArray(parsed) ? (parsed as StoredPresetEntry[]) : [];
-  } catch {
+  } catch (err) {
+    console.warn('[ProjectDb] No se pudo leer la memoria de canciones; se empieza vacía:', err);
     return [];
   }
 }
@@ -77,8 +78,9 @@ function savePresetMemoryList(list: StoredPresetEntry[]): void {
       .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))
       .slice(0, MAX_SAVED_PRESETS);
     window.localStorage.setItem(PRESET_MEMORY_STORAGE_KEY, JSON.stringify(trimmed));
-  } catch {
-    // Ignore storage quota errors
+  } catch (err) {
+    // Normalmente, el almacenamiento local está lleno: la memoria no se actualiza, pero la canción sí se guarda.
+    console.warn('[ProjectDb] No se pudo guardar la memoria de canciones:', err);
   }
 }
 
@@ -416,8 +418,8 @@ async function resolveProjectDirHandle(projectId: string): Promise<any | null> {
       projectDirHandleCache.set(projectId, found);
       return found;
     }
-  } catch {
-    // ignore
+  } catch (err) {
+    console.warn(`[ProjectDb] No se pudo leer la carpeta de origen de ${projectId}:`, err);
   }
   return null;
 }

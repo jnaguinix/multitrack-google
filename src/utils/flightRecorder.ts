@@ -19,7 +19,8 @@ const DEFAULT_CAPACITY = 500;
 function safeStorage(): Pick<Storage, 'getItem' | 'setItem'> | null {
   try {
     return typeof localStorage === 'undefined' ? null : localStorage;
-  } catch {
+  } catch (err) {
+    console.warn('[FlightRecorder] Sin almacenamiento local; la caja negra solo queda en memoria:', err);
     return null;
   }
 }
@@ -50,8 +51,9 @@ export class FlightRecorder {
     this.record('discrepancia', summary);
     try {
       this.storage?.setItem(LAST_MISMATCH_KEY, JSON.stringify({ at: new Date().toISOString(), summary }));
-    } catch {
-      // Sin almacenamiento disponible: el registro en memoria basta.
+    } catch (err) {
+      // El registro en memoria basta, pero la discrepancia no sobrevivirá a un reinicio.
+      console.warn('[FlightRecorder] No se pudo guardar la última discrepancia:', err);
     }
   }
 
@@ -59,7 +61,8 @@ export class FlightRecorder {
     try {
       const raw = this.storage?.getItem(LAST_MISMATCH_KEY);
       return raw ? (JSON.parse(raw) as { at: string; summary: string }) : null;
-    } catch {
+    } catch (err) {
+      console.warn('[FlightRecorder] La última discrepancia guardada no se pudo leer:', err);
       return null;
     }
   }
