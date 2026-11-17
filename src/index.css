@@ -24,6 +24,12 @@
     --lt-mut: #aaaaa7;
     --lt-track: #121212;
     --lt-meter-bg: #111111;
+    /* Medidores en cuadritos: apagado, cuerpo naranja, zona alta (−6 dBFS) ámbar y último tramo (−1 dBFS) rojo. */
+    --lt-meter-off: #2a2724;
+    --lt-meter-low: #c2410c;
+    --lt-meter-mid: #fb923c;
+    --lt-meter-hot: #fbbf24;
+    --lt-meter-clip: #ef4444;
     --lt-accent: #8dd6cd;
     /* Versión viva del acento, para lo que debe llamar la atención (Iniciar en vivo, canción montada). */
     --lt-vivid: var(--lt-accent);
@@ -276,18 +282,6 @@
 }
 .lt-scale span[data-zero] { width: 10px; height: 2px; background: var(--lt-text); }
 
-.lt-fx:has(.lt-peak-meter) { gap: 3px; }
-.lt-peak-scale { flex-basis: 10px; }
-.lt-peak-scale span { left: 0; right: auto; }
-
-.lt-docked .lt-fx:has(.lt-peak-meter) .lt-fader { width: 18px; }
-
-.lt-peak-readout {
-  color: var(--lt-mut);
-  text-align: center;
-  font-size: 12px;
-  white-space: nowrap;
-}
 
 .lt-fader {
   position: relative;
@@ -343,29 +337,58 @@
   background: #b4b4b4;
 }
 
-.lt-meter {
-  position: relative;
-  width: 8px;
-  border-radius: 3px;
-  background: var(--lt-meter-bg);
-  overflow: hidden;
+/* Dos columnas por tira (izquierda y derecha), en cuadritos de 3 px con 1 px de separación desde abajo. */
+.lt-meter-pair {
+  display: flex;
+  gap: 2px;
 }
 
+.lt-meter {
+  position: relative;
+  width: 5px;
+  background: var(--lt-meter-off);
+  overflow: hidden;
+  -webkit-mask-image: repeating-linear-gradient(to top, #000 0 3px, transparent 3px 4px);
+  mask-image: repeating-linear-gradient(to top, #000 0 3px, transparent 3px 4px);
+}
+
+/* Escala dBFS (−60..0): −6 dBFS al 90 % y −1 dBFS al 98,3 % de la altura. */
 .lt-meter i {
   position: absolute;
   inset: 0;
-  background: var(--lt-accent);
+  background: linear-gradient(
+    to top,
+    var(--lt-meter-low) 0%,
+    var(--lt-meter-mid) 90%,
+    var(--lt-meter-hot) 90%,
+    var(--lt-meter-hot) 98.3%,
+    var(--lt-meter-clip) 98.3%
+  );
 }
 
+/* Lo que no suena: cuadritos apagados (tapan el color desde arriba). */
 .lt-meter s {
   position: absolute;
   left: 0;
   right: 0;
   top: 0;
-  background: var(--lt-meter-bg);
+  z-index: 1;
+  background: var(--lt-meter-off);
   height: 100%;
   text-decoration: none;
   transition: height 60ms linear;
+}
+
+/* Medidores estimados (sin niveles reales del motor): zonas más bajas. */
+.lt-meter:not(.lt-db-meter) i {
+  background: linear-gradient(
+    to top,
+    var(--lt-meter-low) 0%,
+    var(--lt-meter-mid) 62%,
+    var(--lt-meter-hot) 62%,
+    var(--lt-meter-hot) 82%,
+    var(--lt-meter-clip) 82%
+  );
 }
 
 .lt-db {
@@ -1750,16 +1773,6 @@
 }
 
 
-/* Retain separate signal, warning and peak zones in each level meter. */
-.lt-meter i::before, .lt-meter i::after { content: ""; position: absolute; inset: 0 0 auto; }
-.lt-meter i::before { height: 38%; background: var(--lt-solo); }
-.lt-meter i::after { height: 18%; background: var(--lt-mute); }
-.lt-meter s { z-index: 1; }
-.lt-peak-meter i::before { height: 10%; }
-.lt-peak-meter i::after { height: 1.67%; }
-/* Medidores de bus con niveles nativos en dBFS: mismas zonas que las pistas (−6 y −1 dBFS sobre −60..0). */
-.lt-db-meter i::before { height: 10%; }
-.lt-db-meter i::after { height: 1.67%; }
 
 @media (max-width: 420px) {
   .lt-transport .lt-icon-control { width: 29px; }
