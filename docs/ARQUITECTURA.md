@@ -170,4 +170,3 @@ Puentes con el escritorio en `desktop/frontend/`: `DesktopAudioSettings.tsx` (di
 ## 7. Deuda Técnica Registrada
 
 1. **Archivos grandes**: `SectionEditorModal.tsx` (~430); en el motor, `playback/mod.rs` (~1300, con la mezcla del callback duplicada en `simulate_callback_block` para las pruebas) y `audio/mod.rs` (~1140).
-2. **Comandos sin llamada desde la interfaz**: `audio_import_folder` y `audio_import_track_bytes` (los usaba el antiguo panel de desarrollo de Ajustes de audio).
