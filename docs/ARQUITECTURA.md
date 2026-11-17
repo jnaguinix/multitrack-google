@@ -38,8 +38,9 @@ El archivo monolítico original fue dividido en el módulo modular `playback/`, 
 
 ```
 desktop/src-tauri/src/audio/playback/
-├── mod.rs          # PlaybackEngine: estructura central, ciclo de vida, buffers y callback CPAL (ensure_stream)
-├── block.rs        # Lógica por bloque compartida por el callback real y su simulación en pruebas: buffering_ready (salida de buffering), consume_track_block (lectura de un anillo con resincronía tras underrun)
+├── mod.rs          # PlaybackEngine: estructura central, ciclo de vida, apertura del stream CPAL (ensure_stream) y simulate_callback_block (pruebas)
+├── callback.rs     # BlockMixer: el bloque del callback de audio (pistas, metrónomo, ruteo, limitador, medidores, reloj). Lo ejecutan el stream CPAL y simulate_callback_block, así que las pruebas ejercitan el mismo código que suena
+├── block.rs        # Piezas por bloque que usa `BlockMixer`: buffering_ready (salida de buffering), consume_track_block (lectura de un anillo con resincronía tras underrun)
 ├── bus.rs          # TrackBus: tipos y conversión de buses de salida (main, cue, both)
 ├── clock.rs        # ClockJumps y advance_clock: saltos de sección y vueltas de vamp aplicados al reloj current_frame desde el callback
 ├── fade.rs         # FadeEnvelope, FadeType y constantes (FADE_MS = 8.0): micro-fundidos
@@ -154,7 +155,7 @@ Puentes con el escritorio en `desktop/frontend/`: `DesktopAudioSettings.tsx` (di
           ▼ Play
    audio_play -> PlaybackEngine::play (fade-in 8 ms en fade.rs)
           │
-          ▼ Callback de Audio en Tiempo Real (ensure_stream en playback/mod.rs)
+          ▼ Callback de Audio en Tiempo Real (BlockMixer en playback/callback.rs, creado por ensure_stream)
    Drena rtrb buffers + mezcla click (metronome.rs) -> CPAL WASAPI
 ```
 
@@ -169,4 +170,4 @@ Puentes con el escritorio en `desktop/frontend/`: `DesktopAudioSettings.tsx` (di
 
 ## 7. Deuda Técnica Registrada
 
-1. **Archivos grandes**: `SectionEditorModal.tsx` (~430); en el motor, `playback/mod.rs` (~1300, con la mezcla del callback duplicada en `simulate_callback_block` para las pruebas) y `audio/mod.rs` (~1140).
+1. **Archivos grandes**: `SectionEditorModal.tsx` (~430); en el motor, `audio/mod.rs` (~1140) y `playback/mod.rs` (~950). La mezcla del callback ya no está duplicada (`playback/callback.rs`).
