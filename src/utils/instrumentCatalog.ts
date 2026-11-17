@@ -31,15 +31,13 @@ export const INSTRUMENTS: readonly InstrumentDef[] = [
   { id: 'percusion', label: 'Percusión', role: 'perc', color: '#EA580C' },
   { id: 'piano', label: 'Piano', role: 'keys', color: '#0891B2' },
   { id: 'strings', label: 'Strings', role: 'custom', color: '#7C3AED' },
-  { id: 'voz-alto', label: 'Voz Alto', role: 'vox', color: '#BE185D' },
-  { id: 'voz-principal', label: 'Voz principal', role: 'vox', color: '#DB2777' },
-  { id: 'voz-soprano', label: 'Voz Soprano', role: 'vox', color: '#E11D48' },
-  { id: 'voz-tenor', label: 'Voz Tenor', role: 'vox', color: '#9D174D' },
+  { id: 'voz', label: 'Voz', role: 'vox', color: '#DB2777' },
 ];
 
 /**
  * Catálogo anterior (simplificado el 2026-11-17): Guitarra acústica y eléctrica son «Guitarra», Teclado es «Piano»,
- * «Sintetizador / Pad» es «Pad» y «Cuerdas» es «Strings». Los ids y nombres viejos siguen reconociéndose: las
+ * «Sintetizador / Pad» es «Pad», «Cuerdas» es «Strings» y Voz Alto, Voz principal, Voz Soprano y Voz Tenor son «Voz».
+ * Los ids y nombres viejos siguen reconociéndose: las
  * canciones y la memoria de mapeo ya guardadas se migran al cargarse.
  */
 const LEGACY_ID: Readonly<Record<string, string>> = {
@@ -48,6 +46,10 @@ const LEGACY_ID: Readonly<Record<string, string>> = {
   teclado: 'piano',
   'sintetizador-pad': 'pad',
   cuerdas: 'strings',
+  'voz-alto': 'voz',
+  'voz-principal': 'voz',
+  'voz-soprano': 'voz',
+  'voz-tenor': 'voz',
 };
 const LEGACY_LABEL: Readonly<Record<string, string>> = {
   'Guitarra acústica': 'guitarra',
@@ -55,6 +57,10 @@ const LEGACY_LABEL: Readonly<Record<string, string>> = {
   Teclado: 'piano',
   'Sintetizador / Pad': 'pad',
   Cuerdas: 'strings',
+  'Voz Alto': 'voz',
+  'Voz principal': 'voz',
+  'Voz Soprano': 'voz',
+  'Voz Tenor': 'voz',
 };
 
 /** Id actual del catálogo para un id guardado (resuelve los ids anteriores). */

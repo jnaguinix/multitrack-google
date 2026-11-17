@@ -49,7 +49,7 @@ eq(numberedNames(['x-no-existe']), [null], 'id desconocido da null');
 eq(instrumentIdFromName('Guitarra 2'), 'guitarra', 'quita el número final');
 eq(instrumentIdFromName('Bajo'), 'bajo', 'sin número');
 eq(instrumentIdFromName('Click Track'), null, 'nombre antiguo fuera del catálogo');
-eq(instrumentIdFromName('Voz Alto 1'), 'voz-alto', 'etiqueta con espacio y número');
+eq(instrumentIdFromName('Voz 1'), 'voz', 'etiqueta con espacio y número');
 
 // --- Catálogo simplificado: nombres e ids anteriores se reconocen y se migran
 assert(!labels.includes('Teclado') && !labels.includes('Cuerdas') && !labels.includes('Sintetizador / Pad'), 'ya no están Teclado, Cuerdas ni Sintetizador / Pad');
@@ -85,6 +85,18 @@ const ya = migrateTrackNames([{ name: 'Guitarra 1' }, { name: 'Guitarra 2' }, { 
 eq(migrateTrackNames(ya).map((x) => x.name), ['Guitarra 1', 'Guitarra 2', 'Piano'], 'migrar dos veces no cambia nada');
 const mismo = [{ name: 'Bajo' }];
 assert(migrateTrackNames(mismo)[0] === mismo[0], 'una pista que no cambia es el mismo objeto');
+
+// --- Una sola Voz (antes Alto, principal, Soprano y Tenor)
+assert(labels.includes('Voz') && !labels.some((l) => l.startsWith('Voz ')), 'una sola Voz en el catálogo');
+for (const viejo of ['voz-alto', 'voz-principal', 'voz-soprano', 'voz-tenor']) eq(canonicalInstrumentId(viejo), 'voz', `id viejo ${viejo}`);
+for (const viejo of ['Voz Alto', 'Voz principal', 'Voz Soprano', 'Voz Tenor']) eq(instrumentIdFromName(viejo), 'voz', `nombre viejo ${viejo}`);
+eq(numberedNames(['voz', 'voz', 'voz']), ['Voz 1', 'Voz 2', 'Voz 3'], 'varias voces se numeran');
+eq(
+  migrateTrackNames([{ name: 'Voz Alto' }, { name: 'Voz principal' }, { name: 'Voz Tenor 2' }, { name: 'Bajo' }]).map((x) => x.name),
+  ['Voz 1', 'Voz 2', 'Voz 3', 'Bajo'],
+  'las voces guardadas pasan a Voz 1, 2, 3'
+);
+eq(migrateTrackNames([{ name: 'Voz Soprano' }]).map((x) => x.name), ['Voz'], 'una sola voz queda sin número');
 
 // --- Orden: alfabético en español, números naturales, sin Click ni Guía
 assert(compareNames('Batería', 'Bajo') > 0 && compareNames('Bajo', 'Batería') < 0, 'orden español');
