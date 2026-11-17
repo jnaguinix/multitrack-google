@@ -7,6 +7,7 @@
 // =============================================================================
 
 import { logAsyncError } from '../utils/asyncErrors';
+import { panToEngine } from '../utils/panScale';
 import { AudioEngineMode, SongProject, TrackChannel, TransportState, MetersSnapshot } from '../types/project';
 import { MeterBallistics, NativeMetersSnapshot } from './meterBallistics';
 import { StatePoller } from './statePoller';
@@ -563,7 +564,7 @@ export class NativeAudioEngine {
   public setTrackPan(trackId: string, pan: number): void {
     const invoke = getInvoke();
     if (!invoke) return;
-    invoke('audio_set_track_controls', { trackId, pan }).catch(logAsyncError('audio_set_track_controls'));
+    invoke('audio_set_track_controls', { trackId, pan: panToEngine(pan) }).catch(logAsyncError('audio_set_track_controls'));
   }
 
   public setTrackMuted(trackId: string, muted: boolean): void {
@@ -684,7 +685,7 @@ export class NativeAudioEngine {
       invoke('audio_set_track_controls', {
         trackId: trk.id,
         gain: trk.gain,
-        pan: trk.pan,
+        pan: panToEngine(trk.pan),
         muted: trk.muted,
         soloed: trk.soloed,
         bus: trk.bus,
