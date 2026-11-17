@@ -90,8 +90,10 @@ export class MeterBallistics {
     // Pistas conocidas por la vista + las que el motor está midiendo de verdad.
     const ids = new Set<string>([...trackIds, ...this.trackIdsSeen]);
     for (const id of ids) {
-      const v = Math.max(this.level(`t:${id}:l`, now), this.level(`t:${id}:r`, now));
-      tracks[id] = { rms: Math.min(1, v), peak: Math.min(1, v), clipping: v >= 1 };
+      const l = this.level(`t:${id}:l`, now);
+      const r = this.level(`t:${id}:r`, now);
+      const v = Math.max(l, r);
+      tracks[id] = { rms: Math.min(1, v), peak: Math.min(1, v), clipping: v >= 1, l: Math.min(1, l), r: Math.min(1, r) };
     }
     const main = this.pair('main', now);
     const m = Math.max(main.l, main.r);

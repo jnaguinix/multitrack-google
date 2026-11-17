@@ -389,7 +389,7 @@ for (const name of commands.keys()) {
 const RESPONSE_TYPES: { file: string; iface: string; rust: string }[] = [
   { file: 'src/audio/nativeAudioEngine.ts', iface: 'NativePlaybackSnapshot', rust: 'PlaybackStateSnapshot' },
   { file: 'desktop/frontend/DesktopAudioSettings.tsx', iface: 'PlaybackStateSnapshot', rust: 'PlaybackStateSnapshot' },
-  { file: 'desktop/frontend/DesktopAudioSettings.tsx', iface: 'AudioStreamStatsSnapshot', rust: 'AudioStreamStatsSnapshot' },
+  { file: 'desktop/frontend/AudioDiagnostics.tsx', iface: 'AudioStreamStatsSnapshot', rust: 'AudioStreamStatsSnapshot' },
   { file: 'desktop/frontend/DesktopAudioSettings.tsx', iface: 'AudioDeviceInfo', rust: 'AudioDeviceInfo' },
   { file: 'desktop/frontend/DesktopAudioSettings.tsx', iface: 'AudioSettings', rust: 'AudioSettings' },
   { file: 'src/audio/controlSync.ts', iface: 'EngineTrackControl', rust: 'TrackControlSnapshot' },

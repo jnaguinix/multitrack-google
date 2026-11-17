@@ -128,6 +128,9 @@ export interface TrackMeterReading {
   rms: number; // 0..1
   peak: number; // 0..1
   clipping: boolean;
+  /** Pico de cada canal (0..1) cuando el motor los mide por separado; `peak` es el mayor de los dos. */
+  l?: number;
+  r?: number;
 }
 
 /** Niveles reales por bus del motor nativo (pico lineal con caída, 1.0 = 0 dBFS). */

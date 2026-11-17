@@ -45,6 +45,29 @@ export function trackPeak(
   return !isDimmed && transport.isPlaying ? meters.tracks[trackId]?.peak ?? 0 : 0;
 }
 
+/** Posición 0..1 en la escala dBFS de un pico lineal (1.0 = 0 dBFS). */
+function linearToPosition(x: number): number {
+  return peakPosition(x > 0 ? 20 * Math.log10(x) : -Infinity);
+}
+
+/**
+ * Medidor de una pista: izquierda y derecha en la escala dBFS (0 si está atenuada o no se reproduce). Si el motor
+ * no informa los canales por separado, los dos muestran el pico.
+ */
+export function trackLevels(
+  project: SongProject,
+  transport: TransportState,
+  meters: MetersSnapshot,
+  trackId: string
+): StripLevels {
+  const peak = trackPeak(project, transport, meters, trackId);
+  if (peak <= 0) return { l: 0, r: 0 };
+  const reading = meters.tracks[trackId];
+  const l = reading?.l ?? peak;
+  const r = reading?.r ?? peak;
+  return { l: linearToPosition(l), r: linearToPosition(r) };
+}
+
 /** Niveles de los cuatro buses: medidos en escritorio, estimados en la web. */
 export function computeMixerLevels(
   project: SongProject,
@@ -81,7 +104,7 @@ export function computeMixerLevels(
     : 0;
 
   const nb = transport.isPlaying ? meters.nativeBuses ?? null : null;
-  const busPos = (x: number) => peakPosition(x > 0 ? 20 * Math.log10(x) : -Infinity);
+  const busPos = linearToPosition;
   const strip = (native: { l: number; r: number } | undefined, est: number, rFactor: number): StripLevels =>
     nb && native ? { l: busPos(native.l), r: busPos(native.r) } : { l: est, r: est * rFactor };
 

@@ -45,7 +45,18 @@ async function main() {
   assert(s.tracks.otra.peak === 0, 'pista sin dato -> 0');
   assert(close(s.master.peak, 0.9), 'main real');
   assert(close(s.nativeBuses!.click.l, 0.2), 'click real');
-  console.log('OK 2: valores reales y 0 para pistas sin dato');
+  assert(close(s.tracks.a.l!, 0.8) && close(s.tracks.a.r!, 0.4), `canales de la pista por separado (L ${s.tracks.a.l}, R ${s.tracks.a.r})`);
+  console.log('OK 2: valores reales, cada canal de la pista por separado y 0 para pistas sin dato');
+
+  // 2b. El medidor de la Mezcla muestra izquierda y derecha en la escala dBFS; una pista en mute, nada.
+  const { trackLevels } = await import('../src/utils/mixerLevels');
+  const proyecto = { tracks: [{ id: 'a', muted: false, soloed: false }, { id: 'm', muted: true, soloed: false }] } as any;
+  const sonando = { isPlaying: true } as any;
+  const lv = trackLevels(proyecto, sonando, s, 'a');
+  assert(lv.l > lv.r && close(lv.l, (20 * Math.log10(0.8) + 60) / 60, 1e-9), `posición dBFS por canal (${lv.l}, ${lv.r})`);
+  assert(trackLevels(proyecto, sonando, s, 'm').l === 0, 'pista en mute -> medidor apagado');
+  assert(trackLevels(proyecto, { isPlaying: false } as any, s, 'a').r === 0, 'parado -> medidor apagado');
+  console.log('OK 2b: medidor de pista de dos canales');
 
   // 3. Caída: 20 dB/s -> a los 500 ms baja 10 dB (×0,316); nunca sube sin dato nuevo.
   const t500 = b.snapshot(['a'], 500, true).tracks.a.peak;

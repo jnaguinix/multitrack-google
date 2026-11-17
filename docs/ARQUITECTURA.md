@@ -80,23 +80,42 @@ Servidor HTTP y WebSocket local embebido (basado en Axum y Tokio, puerto 8765):
 
 ## 5. Frontend Web & Desktop (React / TypeScript)
 
-La lógica de control de `src/App.tsx` se encuentra desacoplada en custom hooks en `src/hooks/`:
+`src/App.tsx` (~710 líneas) guarda el estado compartido (canciones, canción actual, transporte), elige la página y reparte las acciones. La lógica está en custom hooks en `src/hooks/` y las piezas de pantalla de `App` en `src/components/app/`:
 
 ```
 src/hooks/
-├── useOptimization.ts     # Generación de la caché PCM nativa de una canción (botón «Generar caché»)
-├── useProjectActions.ts   # Carga inmediata, creación, edición de metadatos, borrado y JSON export/import
-├── useSetlist.ts          # Gestión de lista de canciones (setlist), reorden, precarga y expulsión de RAM
-├── useSetlistMeta.ts      # Nombre y fecha del servicio (almacenamiento local)
-├── useProgressiveList.ts  # Render por tandas de listas largas (Biblioteca y explorador del Setlist)
-├── useImportFlow.ts       # Importación instantánea (Drop / Selector), escaneo y decodificación nativa
-├── useMixerActions.ts     # Control de transporte, volumen, mute, solo, paneo, bus y secciones
-└── useDawDragDrop.ts      # Manejo de eventos Drag & Drop de archivos y canciones sobre la DAW
+├── useProjectPersistence.ts # Carga inicial, updateCurrentProject (motor + guardado en orden), guardar al ocultar, IDs repetidos
+├── useProjectActivation.ts  # Montar una canción en el motor, anterior/siguiente del setlist, qué hacer al terminar
+├── useSetlistCaching.ts     # Estado real de la caché de cada canción del setlist, precarga y prioridad
+├── useNativeCacheBanner.ts  # Avisos: dispositivo desconectado y canción sin caché («Generar caché nativa»)
+├── useTrackInstruments.ts   # «Editar pistas» y «Cambiar instrumento» (renumera las demás)
+├── useSongEditing.ts        # Notas, transición por canción, plantilla de sección y marcador en el cursor
+├── useRelinkProject.ts      # «Reubicar carpeta» de una canción
+├── useLibraryDeletion.ts    # Eliminar de la biblioteca (tras confirmar)
+├── useToast.ts              # Aviso breve en pantalla
+├── useImportFlow.ts         # Compone las dos rutas de importación:
+│   ├── useNativeImport.ts   #   diálogos del sistema (escritorio): escaneo, asistente, sin decodificar
+│   └── useHtmlImport.ts     #   selector HTML o arrastre: decodifica al importar
+├── useOptimization.ts       # Generación de la caché PCM nativa de una canción (botón «Generar caché»)
+├── useProjectActions.ts     # Carga inmediata, creación, edición de metadatos, borrado y JSON export/import
+├── useSetlist.ts            # Gestión de lista de canciones (setlist), reorden, precarga y expulsión de RAM
+├── useSetlistMeta.ts        # Nombre y fecha del servicio (almacenamiento local)
+├── useProgressiveList.ts    # Render por tandas de listas largas (Biblioteca y explorador del Setlist)
+├── useMixerActions.ts       # Control de transporte, volumen, mute, solo, paneo, bus y secciones
+└── useDawDragDrop.ts        # Manejo de eventos Drag & Drop de archivos y canciones sobre la DAW
+
+src/components/app/
+├── StatusBanners.tsx        # Avisos de dispositivo desconectado y caché faltante
+├── WorkspacePlaceholders.tsx# Capa de arrastre y páginas Arreglo/Mezcla sin canción
+├── DockedMixerDialog.tsx    # Consola flotante del Arreglo y MixerHandlers (acciones de consola compartidas)
+└── TrackEditDialogs.tsx     # «Editar pistas» y «Cambiar instrumento»
 ```
+
+La parte de la importación nativa que no depende de React (filas y datos del asistente, pistas numeradas, secciones, reimportación, resultado de la decodificación) está en `src/utils/nativeImportPlan.ts`. En el adaptador del motor, `nativeAudioEngine.ts` delega la caché PCM en `nativeCacheManager.ts` y el cálculo de compás y pulso en `nativeTransport.ts`.
 
 Páginas (`WorkspaceView` en `TopBar.tsx`): Setlist (`SetlistPageView.tsx`, `SetlistStrip.tsx`, `SongPickerModal.tsx`), En vivo (`LiveSetView.tsx`), Arreglo (`TimelineArranger.tsx`), Mezcla (`MultitrackMixer.tsx`) y Biblioteca (`LibraryView.tsx`; modales en `components/modals/`). La búsqueda de canciones está en `src/utils/songSearch.ts`.
 
-Puentes con el escritorio en `desktop/frontend/`: `RemoteConnectionBridge.tsx` monta el diálogo «Conexión remota» y el botón de la barra superior mediante un portal; en `npm run dev` usa `previewInvoke.ts` (datos simulados, descartado de la compilación de producción) para poder ver el diseño sin Tauri.
+Puentes con el escritorio en `desktop/frontend/`: `DesktopAudioSettings.tsx` (diálogo «Audio») con `AudioDiagnostics.tsx` (su sección «Diagnóstico») y `AudioRoutingPanel.tsx` (ruteo); `RemoteConnectionBridge.tsx` monta el diálogo «Conexión remota» y el botón de la barra superior mediante un portal; en `npm run dev` usa `previewInvoke.ts` (datos simulados, descartado de la compilación de producción) para poder ver el diseño sin Tauri.
 
 ---
 
@@ -139,7 +158,7 @@ Puentes con el escritorio en `desktop/frontend/`: `RemoteConnectionBridge.tsx` m
    Drena rtrb buffers + mezcla click (metronome.rs) -> CPAL WASAPI
 ```
 
-1. **Importar**: `handleImportNative` (TS, `useImportFlow.ts`) invoca `audio_scan_folder` o `audio_scan_files` (Rust, `audio/mod.rs`), extrae metadatos y guarda la canción en `library.json` mediante `library_save_song` y el sidecar `omnitracks.project.json` mediante `library_write_sidecar`. **No se genera caché PCM en este paso**. Entre el escaneo y la creación de pistas se abre el asistente (`ImportWizardModal`): el usuario escribe nombre, artista, tono, BPM y pulsos por compás, y elige a mano el instrumento de cada archivo (catálogo en `instrumentCatalog.ts`; sin adivinar nombres). Cada pista se guarda con el nombre del catálogo (numerado si se repite); el archivo original queda en `fileName`/`filePath`.
+1. **Importar**: `handleImportNative` (TS, `useNativeImport.ts`) invoca `audio_scan_folder` o `audio_scan_files` (Rust, `audio/mod.rs`), extrae metadatos y guarda la canción en `library.json` mediante `library_save_song` y el sidecar `omnitracks.project.json` mediante `library_write_sidecar`. **No se genera caché PCM en este paso**. Entre el escaneo y la creación de pistas se abre el asistente (`ImportWizardModal`): el usuario escribe nombre, artista, tono, BPM y pulsos por compás, y elige a mano el instrumento de cada archivo (catálogo en `instrumentCatalog.ts`; sin adivinar nombres). Cada pista se guarda con el nombre del catálogo (numerado si se repite); el archivo original queda en `fileName`/`filePath`.
 2. **Biblioteca**: `library_load` carga `library.json` al iniciar. La UI lista las canciones en `LibraryView.tsx` (`LibraryView.tsx`; modales en `components/modals/`).
 3. **Añadir al Setlist**: `handleAddToSetlist` (TS, `useSetlist.ts`) añade la canción a `setlistQueue`. Verifica la caché con `nativeAudioEngine.checkProjectCacheStatus` (`audio_get_project_cache_status`). Si `isReady == false`, invoca `nativeAudioEngine.generateNativeCacheForProject`.
 4. **Caché PCM**: `audio_import_tracks` (`audio/mod.rs`) decodifica cada stem con `import::decode_and_cache_track` (`audio/import.rs`), remuestrea al `target_sample_rate` y escribe `stem-*.pcm` y `stem-*.json` en disco vía `cache::write_track_pcm_and_metadata` (`audio/cache.rs`), emitiendo eventos `audio://import-progress`.
@@ -150,7 +169,5 @@ Puentes con el escritorio en `desktop/frontend/`: `RemoteConnectionBridge.tsx` m
 
 ## 7. Deuda Técnica Registrada
 
-1. **`handleRelinkProject` en `src/App.tsx`**:
-   - Se mantuvo directamente en `App.tsx` para respetar el orden de declaración y evitar errores de hoisting temporal (`TS2448`) con `activateProject` y `handleSelectView`.
-   - *Acción recomendada*: Pasar las dependencias como callbacks a un submódulo específico durante una próxima fase de refactorización de vistas.
-2. **Archivos grandes**: `App.tsx` (~1490).
+1. **Archivos grandes**: `SectionEditorModal.tsx` (~430); en el motor, `playback/mod.rs` (~1300, con la mezcla del callback duplicada en `simulate_callback_block` para las pruebas) y `audio/mod.rs` (~1140).
+2. **Comandos sin llamada desde la interfaz**: `audio_import_folder` y `audio_import_track_bytes` (los usaba el antiguo panel de desarrollo de Ajustes de audio).
