@@ -11,7 +11,7 @@ const names = (c: RoutingConfig, i: number) => c.outputs[i].sources.map((e) => e
 
 // Propuesta según los canales independientes del dispositivo
 const c2 = proposeRouting(2);
-assert(names(c2, 0) === 'musicMono' && names(c2, 1) === 'click+guide+monitor', '2 salidas: música mono y click+guía+monitor');
+assert(names(c2, 0) === 'click+guide+monitor' && names(c2, 1) === 'musicMono', '2 salidas: click, guía y monitor a la izquierda; música mono a la derecha');
 const c3 = proposeRouting(3);
 assert(names(c3, 0) === 'musicL' && names(c3, 1) === 'musicR' && names(c3, 2) === 'click+guide+monitor', '3 salidas: música L/R y click+guía+monitor');
 const c6 = proposeRouting(6);

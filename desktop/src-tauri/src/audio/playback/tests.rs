@@ -1666,24 +1666,24 @@
     }
 
     #[tokio::test]
-    async fn test_ruteo_2_salidas_musica_en_mono_y_click_con_guia_aparte() {
+    async fn test_ruteo_2_salidas_click_y_guia_a_la_izquierda_y_musica_en_mono_a_la_derecha() {
         let engine = motor_con_buses("ruteo2", &proponer_ruteo(2)).await;
         let todas = picos_por_canal(&engine, 2, 80);
-        assert!(todas[0] > 1e-3, "música (mono) en la salida 1: {todas:?}");
-        assert!(todas[1] > 1e-3, "click y guía en la salida 2: {todas:?}");
+        assert!(todas[0] > 1e-3, "click y guía en la salida 1 (izquierda): {todas:?}");
+        assert!(todas[1] > 1e-3, "música (mono) en la salida 2 (derecha): {todas:?}");
 
         engine.set_track_controls("click", None, None, Some(true), None, None).await;
         engine.set_track_controls("guia", None, None, Some(true), None, None).await;
         let solo_musica = picos_por_canal(&engine, 2, 40);
-        assert!(solo_musica[0] > 1e-3);
-        assert_eq!(solo_musica[1], 0.0, "la música se coló en la salida de click y guía");
+        assert!(solo_musica[1] > 1e-3);
+        assert_eq!(solo_musica[0], 0.0, "la música se coló en la salida de click y guía (izquierda)");
 
         engine.set_track_controls("click", None, None, Some(false), None, None).await;
         engine.set_track_controls("guia", None, None, Some(false), None, None).await;
         engine.set_track_controls("musica", None, None, Some(true), None, None).await;
         let solo_cue = picos_por_canal(&engine, 2, 40);
-        assert_eq!(solo_cue[0], 0.0, "el click o la guía se colaron en la salida de música: {solo_cue:?}");
-        assert!(solo_cue[1] > 1e-3);
+        assert_eq!(solo_cue[1], 0.0, "el click o la guía se colaron en la salida de música (derecha): {solo_cue:?}");
+        assert!(solo_cue[0] > 1e-3);
     }
 
     #[tokio::test]
@@ -1743,7 +1743,8 @@
 
     #[tokio::test]
     async fn test_monitor_envia_la_pista_marcada_a_la_salida_de_auriculares() {
-        for (n, cue_out) in [(2usize, 1usize), (4, 3)] {
+        for (n, cue_out) in [(2usize, 0usize), (4, 3)] {
+            let music_out = if n == 2 { 1 } else { 0 };
             let engine = solo_monitor(&format!("mon_{n}"), &proponer_ruteo(n as u16)).await;
             // Sin marcar nada: la salida de auriculares queda en silencio (click y guía mudos).
             let sin = picos_por_canal(&engine, n, 40);
@@ -1752,7 +1753,7 @@
             engine.set_track_monitor("musica", true).await;
             let con = picos_por_canal(&engine, n, 80);
             assert!(con[cue_out] > 1e-3, "con {n} salidas, el piano marcado debe oírse en auriculares: {con:?}");
-            assert!(con[0] > 1e-3, "y debe seguir en la música: {con:?}");
+            assert!(con[music_out] > 1e-3, "y debe seguir en la música: {con:?}");
             // Al desmarcarlo vuelve el silencio.
             engine.set_track_monitor("musica", false).await;
             let fin = picos_por_canal(&engine, n, 40);
@@ -1771,25 +1772,26 @@
 
     #[tokio::test]
     async fn test_monitor_respeta_mute_y_el_volumen_general() {
+        // 2 salidas: auriculares a la izquierda (0), música a la derecha (1).
         let engine = solo_monitor("mon_mute", &proponer_ruteo(2)).await;
         engine.set_track_monitor("musica", true).await;
         let a = picos_por_canal(&engine, 2, 80);
-        assert!(a[1] > 1e-3);
+        assert!(a[0] > 1e-3);
         // Pista silenciada: no envía nada a auriculares.
         engine.set_track_controls("musica", None, None, Some(true), None, None).await;
         let m = picos_por_canal(&engine, 2, 40);
-        assert_eq!(m[1], 0.0, "una pista en mute no se oye ni en auriculares: {m:?}");
+        assert_eq!(m[0], 0.0, "una pista en mute no se oye ni en auriculares: {m:?}");
         engine.set_track_controls("musica", None, None, Some(false), None, None).await;
         // Volumen general del monitor a cero: silencio en auriculares; la música sigue.
         engine.set_monitor_gain(0.0);
         let g = picos_por_canal(&engine, 2, 40);
-        assert_eq!(g[1], 0.0, "con el volumen del monitor a 0 no sale nada: {g:?}");
-        assert!(g[0] > 1e-3, "la música no cambia: {g:?}");
+        assert_eq!(g[0], 0.0, "con el volumen del monitor a 0 no sale nada: {g:?}");
+        assert!(g[1] > 1e-3, "la música no cambia: {g:?}");
         // Mitad de volumen: el envío baja a la mitad.
         engine.set_monitor_gain(1.0);
-        let pleno = picos_por_canal(&engine, 2, 80)[1];
+        let pleno = picos_por_canal(&engine, 2, 80)[0];
         engine.set_monitor_gain(0.5);
-        let medio = picos_por_canal(&engine, 2, 80)[1];
+        let medio = picos_por_canal(&engine, 2, 80)[0];
         assert!(medio < pleno * 0.75, "el volumen general del monitor escala el envío ({medio} vs {pleno})");
     }
 

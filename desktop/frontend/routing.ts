@@ -68,8 +68,9 @@ export function proposeRouting(channels: number): RoutingConfig {
   const outputs: OutputAssign[] = Array.from({ length: channels }, () => ({ sources: [] }));
   if (channels === 1) outputs[0] = entries('musicMono', 'click', 'guide', 'monitor');
   else if (channels === 2) {
-    outputs[0] = entries('musicMono');
-    outputs[1] = entries('click', 'guide', 'monitor');
+    // Como los multitracks comerciales: clic y guía a la izquierda, la mezcla a la derecha.
+    outputs[0] = entries('click', 'guide', 'monitor');
+    outputs[1] = entries('musicMono');
   } else if (channels === 3) {
     outputs[0] = entries('musicL');
     outputs[1] = entries('musicR');

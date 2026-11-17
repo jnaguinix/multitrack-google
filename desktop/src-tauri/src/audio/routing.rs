@@ -125,7 +125,8 @@ pub struct RoutingConfig {
 /// Propuesta automática según los canales independientes que expone el dispositivo.
 ///
 /// - 1 salida: todo mezclado (inválido hasta que el usuario lo confirme: el click llegaría al público).
-/// - 2 salidas: música en mono en la 1; click, guía y monitor juntos en la 2.
+/// - 2 salidas: click, guía y monitor juntos en la 1 (izquierda) y la música en mono en la 2 (derecha), como traen
+///   los multitracks comerciales (clic y guía a la izquierda, mezcla a la derecha).
 /// - 3 salidas: música L y R en 1 y 2; click, guía y monitor en la 3.
 /// - 4 o más: música L, música R, click, guía con el monitor; el resto queda libre.
 ///
@@ -137,8 +138,8 @@ pub fn propose(channels: u16) -> RoutingConfig {
         0 => {}
         1 => outputs[0] = OutputAssign::of(&[Source::MusicMono, Source::Click, Source::Guide, Source::Monitor]),
         2 => {
-            outputs[0] = OutputAssign::of(&[Source::MusicMono]);
-            outputs[1] = OutputAssign::of(&[Source::Click, Source::Guide, Source::Monitor]);
+            outputs[0] = OutputAssign::of(&[Source::Click, Source::Guide, Source::Monitor]);
+            outputs[1] = OutputAssign::of(&[Source::MusicMono]);
         }
         3 => {
             outputs[0] = OutputAssign::of(&[Source::MusicL]);
@@ -504,8 +505,8 @@ mod tests {
 
     #[test]
     fn propone_el_ruteo_segun_los_canales_del_dispositivo() {
-        assert_eq!(propose(2).outputs[0], OutputAssign::of(&[Source::MusicMono]));
-        assert_eq!(propose(2).outputs[1], OutputAssign::of(&[Source::Click, Source::Guide, Source::Monitor]));
+        assert_eq!(propose(2).outputs[0], OutputAssign::of(&[Source::Click, Source::Guide, Source::Monitor]), "salida 1 (izquierda): click, guía y monitor");
+        assert_eq!(propose(2).outputs[1], OutputAssign::of(&[Source::MusicMono]), "salida 2 (derecha): la música en mono");
         let c3 = propose(3);
         assert_eq!(c3.outputs[0], OutputAssign::of(&[Source::MusicL]));
         assert_eq!(c3.outputs[1], OutputAssign::of(&[Source::MusicR]));
@@ -525,12 +526,12 @@ mod tests {
         let cfg = propose(2);
         // Un instrumento que existe únicamente en el canal derecho no debe desaparecer.
         let solo_r = render(&cfg, sources(0.0, 0.8, 0.0, 0.0));
-        assert!((solo_r[0] - 0.8 * INV_SQRT2).abs() < 1e-6, "lo del canal R se conserva en la salida 1: {}", solo_r[0]);
+        assert!((solo_r[1] - 0.8 * INV_SQRT2).abs() < 1e-6, "lo del canal R se conserva en la salida de música: {}", solo_r[1]);
         let solo_l = render(&cfg, sources(0.8, 0.0, 0.0, 0.0));
-        assert!((solo_l[0] - 0.8 * INV_SQRT2).abs() < 1e-6);
+        assert!((solo_l[1] - 0.8 * INV_SQRT2).abs() < 1e-6);
         // Ambos canales iguales (mono real) suben 3 dB: no hay pérdida.
         let ambos = render(&cfg, sources(0.5, 0.5, 0.0, 0.0));
-        assert!((ambos[0] - 0.5 * 2.0 * INV_SQRT2).abs() < 1e-6);
+        assert!((ambos[1] - 0.5 * 2.0 * INV_SQRT2).abs() < 1e-6);
     }
 
     #[test]
@@ -610,7 +611,7 @@ mod tests {
     #[test]
     fn el_monitor_sale_por_la_salida_de_auriculares_y_nunca_por_la_de_musica() {
         // Solo suenan las pistas marcadas «Aur.» (p. ej. el piano): deben salir por la salida de auriculares.
-        for (n, cue_out) in [(2u16, 1usize), (3, 2), (4, 3), (6, 3)] {
+        for (n, cue_out) in [(2u16, 0usize), (3, 2), (4, 3), (6, 3)] {
             let out = render(&propose(n), sources_m(0.0, 0.0, 0.0, 0.0, 0.6));
             for (ch, v) in out.iter().enumerate() {
                 if ch == cue_out {
@@ -629,8 +630,8 @@ mod tests {
     fn la_musica_sigue_saliendo_completa_aunque_haya_monitor() {
         // El piano marcado «Aur.» suena también en Main: el monitor es un envío adicional, no un desvío.
         let out = render(&propose(2), sources_m(0.5, 0.5, 0.0, 0.0, 0.5));
-        assert!((out[0] - 2.0 * 0.5 * INV_SQRT2).abs() < 1e-6, "la música por la salida 1 no cambia: {}", out[0]);
-        assert_eq!(out[1], 0.5, "y el envío sale por la salida de auriculares");
+        assert!((out[1] - 2.0 * 0.5 * INV_SQRT2).abs() < 1e-6, "la música por la salida de música no cambia: {}", out[1]);
+        assert_eq!(out[0], 0.5, "y el envío sale por la salida de auriculares (izquierda)");
     }
 
     #[test]
