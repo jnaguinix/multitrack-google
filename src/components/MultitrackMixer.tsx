@@ -476,18 +476,12 @@ export const MultitrackMixer: React.FC<MultitrackMixerProps> = ({
           {!hasCustomClickTrack && (
             <div
               style={{ '--c': '#22d3ee' } as React.CSSProperties}
-              className={`lt-strip ${!project.clickEnabled || anySolo ? 'lt-dim' : ''}`}
+              className={`lt-strip ${!project.clickEnabled ? 'lt-dim' : ''}`}
             >
               <div className="lt-cap" />
               <div className="lt-name" title="Click Metrónomo">
                 Click
               </div>
-
-              <PanKnob
-                name="Click"
-                pan={project.clickPan ?? 0}
-                onChangePan={(nextPan) => onChangeClickPan?.(nextPan)}
-              />
 
               <StudioFader
                 name="Click"
@@ -506,17 +500,6 @@ export const MultitrackMixer: React.FC<MultitrackMixerProps> = ({
                   onClick={onToggleClick}
                 >
                   M
-                </button>
-                <button
-                  type="button"
-                  className="lt-s"
-                  aria-pressed={false}
-                  aria-label="Solo Click"
-                  onClick={() => {
-                    if (!project.clickEnabled) onToggleClick();
-                  }}
-                >
-                  S
                 </button>
               </div>
 
