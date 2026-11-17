@@ -67,6 +67,14 @@ import {
 } from './components/modals/ImportWizardModal';
 import { inferTrackRoleAndColor } from './utils/trackRole';
 import {
+  effectiveBus,
+  getInstrument,
+  instrumentIdFromName,
+  numberedNames,
+  orderTracksForDisplay,
+} from './utils/instrumentCatalog';
+import { loadTrackMapMemory, memoryKey, rememberTrackMapping } from './utils/trackMapMemory';
+import {
   FingerprintCandidate,
 } from './audio/fingerprint';
 
@@ -165,6 +173,7 @@ export default function App() {
     null
   );
   const [isSectionEditorOpen, setIsSectionEditorOpen] = useState(false);
+  const [isEditTracksOpen, setIsEditTracksOpen] = useState(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
   const currentProjectRef = useRef<SongProject | null>(currentProject);
@@ -575,6 +584,35 @@ export default function App() {
     window.addEventListener('omnitracks:split-mono', onSplitMono);
     return () => window.removeEventListener('omnitracks:split-mono', onSplitMono);
   }, [updateCurrentProject]);
+
+  // «Editar pistas»: reasigna el instrumento de cada pista de la canción actual (nombre, rol, color y bus).
+  const handleSaveTrackMapping = useCallback(
+    (result: WizardResult) => {
+      const picked = new Map(result.rows.map((r) => [r.id, r.instrumentId] as const));
+      updateCurrentProject((p) => {
+        const names = numberedNames(p.tracks.map((tr) => picked.get(tr.id) ?? null));
+        return {
+          ...p,
+          tracks: p.tracks.map((tr, i) => {
+            const def = getInstrument(picked.get(tr.id));
+            const name = names[i];
+            if (!def || !name) return tr;
+            return { ...tr, name, role: def.role, color: def.color, bus: effectiveBus({ name, role: def.role }) };
+          }),
+          updatedAt: Date.now(),
+        };
+      });
+      const cur = currentProjectRef.current;
+      rememberTrackMapping(
+        result.rows.map((r) => ({
+          fileName: cur?.tracks.find((tr) => tr.id === r.id)?.fileName ?? '',
+          instrumentId: r.instrumentId,
+        }))
+      );
+      showToast('Pistas actualizadas.');
+    },
+    [updateCurrentProject, showToast]
+  );
 
   // Atajos globales de teclado (Espacio, V, 1-9)
   useStudioShortcuts(currentProjectRef, liveJumpsLockedRef);
@@ -1010,6 +1048,7 @@ export default function App() {
               onCancelQueuedJump={handleCancelQueuedJump}
               onAddMarkerAtPlayhead={handleAddMarkerAtPlayhead}
               onOpenSectionEditor={() => setIsSectionEditorOpen(true)}
+              onEditTracks={() => setIsEditTracksOpen(true)}
               onAddStemsToCurrentSong={(files) =>
                 handleInstantImportFiles(files, 'main', 'current-song')
               }
@@ -1090,6 +1129,7 @@ export default function App() {
                   onAddMarkerAtPlayhead={handleAddMarkerAtPlayhead}
                   onOpenImportModal={() => setIsImportModalOpen(true)}
                   onOpenSectionEditor={() => setIsSectionEditorOpen(true)}
+              onEditTracks={() => setIsEditTracksOpen(true)}
                 />
 
                 {isDockedMixerOpen && (
@@ -1198,6 +1238,7 @@ export default function App() {
                   updateCurrentProject((p) => ({ ...p, masterGain: gain }))
                 }
                 onResetMixer={handleResetMixer}
+                onEditTracks={() => setIsEditTracksOpen(true)}
               />
             ) : (
               <div className="flex-1 flex flex-col items-center justify-center p-5 text-center">
@@ -1274,6 +1315,35 @@ export default function App() {
             setFingerprintPrompt(null);
             cb('cancel');
           }}
+        />
+      )}
+
+      {isEditTracksOpen && currentProject && (
+        <ImportWizardModal
+          mode="edit-tracks"
+          initialMeta={{
+            title: currentProject.title,
+            artist: currentProject.artist,
+            key: currentProject.keySignature,
+            bpm: currentProject.bpm,
+            beatsPerBar: currentProject.beatsPerBar,
+          }}
+          files={orderTracksForDisplay(currentProject.tracks).map((tr) => {
+            const own = instrumentIdFromName(tr.name);
+            const rememberedId = tr.fileName ? loadTrackMapMemory()[memoryKey(tr.fileName)] ?? null : null;
+            return {
+              id: tr.id,
+              fileName: tr.fileName || tr.name,
+              durationSec: tr.durationSec ?? null,
+              instrumentId: own ?? rememberedId,
+              remembered: !own && Boolean(rememberedId),
+            };
+          })}
+          onConfirm={(result) => {
+            setIsEditTracksOpen(false);
+            handleSaveTrackMapping(result);
+          }}
+          onCancel={() => setIsEditTracksOpen(false)}
         />
       )}
 

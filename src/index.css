@@ -169,6 +169,17 @@
   color: var(--lt-text);
 }
 
+/* Los nombres del catálogo pueden ser largos («Guitarra eléctrica 1»): hasta dos líneas, altura fija para alinear los canales. */
+.lt-channels .lt-strip .lt-name {
+  white-space: normal;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  line-height: 1.15;
+  min-height: 2.3em;
+  word-break: break-word;
+}
+
 .lt-docked .lt-strip .lt-name {
   font-size: 12px;
 }

@@ -38,6 +38,7 @@ interface TimelineArrangerProps {
   onAddMarkerAtPlayhead: () => void;
   onOpenImportModal: () => void;
   onOpenSectionEditor: () => void;
+  onEditTracks?: () => void;
 }
 
 function gainToDbText(gain: number): string {
@@ -250,6 +251,7 @@ export const TimelineArranger: React.FC<TimelineArrangerProps> = ({
   onAddMarkerAtPlayhead,
   onOpenImportModal,
   onOpenSectionEditor,
+  onEditTracks,
 }) => {
   const addStemInputRef = useRef<HTMLInputElement | null>(null);
   // Quitar una pista exige dos clics (el segundo en 3 s): un roce junto a M/S no debe borrar un stem.
@@ -618,6 +620,18 @@ export const TimelineArranger: React.FC<TimelineArrangerProps> = ({
           >
             Editar Secciones ({project.sections.length})
           </button>
+          {onEditTracks && (
+            <>
+              <span aria-hidden="true">·</span>
+              <button
+                type="button"
+                onClick={onEditTracks}
+                className="text-neutral-200 hover:underline font-semibold cursor-pointer"
+              >
+                Editar Pistas ({project.tracks.length})
+              </button>
+            </>
+          )}
         </div>
       </div>
     </div>

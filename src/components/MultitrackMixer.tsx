@@ -383,6 +383,7 @@ export interface MultitrackMixerProps {
   onToggleClick: () => void;
   onChangeMasterGain: (gain: number) => void;
   onResetMixer: () => void;
+  onEditTracks?: () => void;
 }
 
 export const MultitrackMixer: React.FC<MultitrackMixerProps> = ({
@@ -398,6 +399,7 @@ export const MultitrackMixer: React.FC<MultitrackMixerProps> = ({
   onToggleClick,
   onChangeMasterGain,
   onResetMixer,
+  onEditTracks,
 }) => {
   const anySolo = project.tracks.some((t) => t.soloed);
   const activeSection = project.sections.find((s) => s.id === transport.activeSectionId);
@@ -437,13 +439,24 @@ export const MultitrackMixer: React.FC<MultitrackMixerProps> = ({
             </span>
           </div>
 
-          <button
-            type="button"
-            onClick={onResetMixer}
-            className="text-xs font-medium text-studio-muted hover:text-studio-ink underline underline-offset-3 cursor-pointer"
-          >
-            Restablecer mezcla a 0 dB
-          </button>
+          <div className="flex items-center gap-4">
+            {onEditTracks && (
+              <button
+                type="button"
+                onClick={onEditTracks}
+                className="text-xs font-medium text-studio-muted hover:text-studio-ink underline underline-offset-3 cursor-pointer"
+              >
+                Editar pistas
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={onResetMixer}
+              className="text-xs font-medium text-studio-muted hover:text-studio-ink underline underline-offset-3 cursor-pointer"
+            >
+              Restablecer mezcla a 0 dB
+            </button>
+          </div>
         </div>
       )}
 

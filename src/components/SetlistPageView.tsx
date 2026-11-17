@@ -64,6 +64,7 @@ interface SetlistPageViewProps {
   onCancelQueuedJump: () => void;
   onAddMarkerAtPlayhead: () => void;
   onOpenSectionEditor: () => void;
+  onEditTracks?: () => void;
   onAddStemsToCurrentSong: (files: FileList | File[]) => void;
   onQuickImportNewSongFiles: (files: FileList | File[]) => void;
   onQuickImportNativeFolder?: (folderPath: string) => void;
@@ -122,6 +123,7 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
   onJumpSection,
   onAddMarkerAtPlayhead,
   onOpenSectionEditor,
+  onEditTracks,
   onAddStemsToCurrentSong,
   onQuickImportNewSongFiles,
   onQuickImportNativeFolder,
@@ -318,6 +320,11 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
             <button type="button" onClick={onOpenSectionEditor} className="lt-control">
               Editar secciones
             </button>
+            {onEditTracks && (
+              <button type="button" onClick={onEditTracks} className="lt-control">
+                Editar pistas
+              </button>
+            )}
             <button type="button" onClick={() => setIsFloatingMixerOpen(true)} className="lt-control">
               <Sliders size={16} /> Mezcla
             </button>

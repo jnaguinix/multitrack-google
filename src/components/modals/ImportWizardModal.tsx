@@ -69,6 +69,7 @@ const fieldClass =
 
 export const ImportWizardModal: React.FC<Props> = ({ mode, initialMeta, files, onConfirm, onCancel }) => {
   const hasSongStep = mode === 'new-song';
+  const allowSkip = mode !== 'edit-tracks';
   const [step, setStep] = useState<1 | 2>(hasSongStep ? 1 : 2);
 
   // --- Paso 1
@@ -330,7 +331,7 @@ export const ImportWizardModal: React.FC<Props> = ({ mode, initialMeta, files, o
                               </option>
                             ))}
                           </optgroup>
-                          <option value={SKIP}>— No importar —</option>
+                          {allowSkip && <option value={SKIP}>— No importar —</option>}
                         </select>
                       </div>
                     </li>
