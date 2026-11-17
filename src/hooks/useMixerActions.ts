@@ -74,13 +74,6 @@ export function useMixerActions({
     }));
   };
 
-  const handleChangeTrackBus = (trackId: string, bus: OutputBus) => {
-    updateCurrentProject((p) => ({
-      ...p,
-      tracks: p.tracks.map((t) => (t.id === trackId ? { ...t, bus } : t)),
-    }));
-  };
-
   const handleDeleteTrack = (trackId: string) => {
     audioEngine.removeTrack(trackId);
     updateCurrentProject((p) => ({
@@ -137,7 +130,6 @@ export function useMixerActions({
     handleToggleTrackSolo,
     handleChangeTrackGain,
     handleChangeTrackPan,
-    handleChangeTrackBus,
     handleDeleteTrack,
     handleResetMixer,
     handleSaveSections,

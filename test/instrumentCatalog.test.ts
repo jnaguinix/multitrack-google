@@ -9,6 +9,7 @@ import {
   isClickTrack,
   isGuideTrack,
   numberedNames,
+  orderTracksForDisplay,
   sortInstrumentTracks,
 } from '../src/utils/instrumentCatalog';
 import { loadTrackMapMemory, memoryKey, rememberTrackMapping } from '../src/utils/trackMapMemory';
@@ -59,6 +60,11 @@ const tracks = [
   { name: 'Guitarra eléctrica 1', role: 'guitar' as const },
 ];
 eq(sortInstrumentTracks(tracks).map((t) => t.name), ['Bajo', 'Guitarra eléctrica 1', 'Guitarra eléctrica 2', 'Teclado'], 'orden y exclusión de fijos');
+eq(
+  orderTracksForDisplay(tracks).map((t) => t.name),
+  ['Bajo', 'Guitarra eléctrica 1', 'Guitarra eléctrica 2', 'Teclado', 'Click', 'Guía'],
+  'Arreglo: instrumentos alfabéticos y al final Click y Guía'
+);
 assert(tracks[0].name === 'Teclado', 'sortInstrumentTracks no modifica la lista original');
 
 // --- Canciones anteriores al catálogo

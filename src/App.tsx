@@ -725,7 +725,6 @@ export default function App() {
     handleToggleTrackSolo,
     handleChangeTrackGain,
     handleChangeTrackPan,
-    handleChangeTrackBus,
     handleDeleteTrack,
     handleResetMixer,
     handleSaveSections,
@@ -1027,7 +1026,6 @@ export default function App() {
               onToggleTrackSolo={handleToggleTrackSolo}
               onChangeTrackGain={handleChangeTrackGain}
               onChangeTrackPan={handleChangeTrackPan}
-              onChangeTrackBus={handleChangeTrackBus}
               onChangeClickGain={(gain) =>
                 updateCurrentProject((p) => ({ ...p, clickGain: gain }))
               }
@@ -1037,9 +1035,6 @@ export default function App() {
               onToggleClick={handleToggleClick}
               onChangeMasterGain={(gain) =>
                 updateCurrentProject((p) => ({ ...p, masterGain: gain }))
-              }
-              onChangeCueMasterGain={(gain) =>
-                updateCurrentProject((p) => ({ ...p, cueMasterGain: gain }))
               }
               onResetMixer={handleResetMixer}
             />
@@ -1085,7 +1080,6 @@ export default function App() {
                   onToggleTrackSolo={handleToggleTrackSolo}
                   onChangeTrackGain={handleChangeTrackGain}
                   onChangeTrackPan={handleChangeTrackPan}
-                  onChangeTrackBus={handleChangeTrackBus}
                   onDeleteTrack={handleDeleteTrack}
                   onAddStemsToCurrentSong={(files) =>
                     handleInstantImportFiles(files, 'main', 'current-song')
@@ -1145,7 +1139,6 @@ export default function App() {
                           onToggleTrackSolo={handleToggleTrackSolo}
                           onChangeTrackGain={handleChangeTrackGain}
                           onChangeTrackPan={handleChangeTrackPan}
-                          onChangeTrackBus={handleChangeTrackBus}
                           onChangeClickGain={(gain) =>
                             updateCurrentProject((p) => ({ ...p, clickGain: gain }))
                           }
@@ -1155,9 +1148,6 @@ export default function App() {
                           onToggleClick={handleToggleClick}
                           onChangeMasterGain={(gain) =>
                             updateCurrentProject((p) => ({ ...p, masterGain: gain }))
-                          }
-                          onChangeCueMasterGain={(gain) =>
-                            updateCurrentProject((p) => ({ ...p, cueMasterGain: gain }))
                           }
                           onResetMixer={handleResetMixer}
                         />
@@ -1197,7 +1187,6 @@ export default function App() {
                 onToggleTrackSolo={handleToggleTrackSolo}
                 onChangeTrackGain={handleChangeTrackGain}
                 onChangeTrackPan={handleChangeTrackPan}
-                onChangeTrackBus={handleChangeTrackBus}
                 onChangeClickGain={(gain) =>
                   updateCurrentProject((p) => ({ ...p, clickGain: gain }))
                 }
@@ -1207,9 +1196,6 @@ export default function App() {
                 onToggleClick={handleToggleClick}
                 onChangeMasterGain={(gain) =>
                   updateCurrentProject((p) => ({ ...p, masterGain: gain }))
-                }
-                onChangeCueMasterGain={(gain) =>
-                  updateCurrentProject((p) => ({ ...p, cueMasterGain: gain }))
                 }
                 onResetMixer={handleResetMixer}
               />

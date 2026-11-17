@@ -15,6 +15,7 @@ import {
   TransportState,
 } from '../types/project';
 import { audioEngine } from '../audio/audioEngine';
+import { orderTracksForDisplay } from '../utils/instrumentCatalog';
 import { useLiveMeters } from '../audio/liveMeters';
 import { formatMmSs } from './TransportDeck';
 import { isDesktopApp, pickNativeFiles } from '../utils/nativeDialog';
@@ -31,7 +32,6 @@ interface TimelineArrangerProps {
   onToggleTrackSolo: (trackId: string) => void;
   onChangeTrackGain: (trackId: string, gain: number) => void;
   onChangeTrackPan: (trackId: string, pan: number) => void;
-  onChangeTrackBus: (trackId: string, bus: OutputBus) => void;
   onDeleteTrack: (trackId: string) => void;
   onAddStemsToCurrentSong: (files: FileList | File[]) => void;
   onAddNativeStemsToCurrentSong?: (filePaths: string[]) => void;
@@ -244,7 +244,6 @@ export const TimelineArranger: React.FC<TimelineArrangerProps> = ({
   onToggleTrackMute,
   onToggleTrackSolo,
   onChangeTrackGain,
-  onChangeTrackBus,
   onDeleteTrack,
   onAddStemsToCurrentSong,
   onAddNativeStemsToCurrentSong,
@@ -455,7 +454,7 @@ export const TimelineArranger: React.FC<TimelineArrangerProps> = ({
           </div>
         ) : (
           <div className="divide-y divide-neutral-800/90">
-            {project.tracks.map((track: TrackChannel) => {
+            {orderTracksForDisplay(project.tracks).map((track: TrackChannel) => {
               const isAudible = anySolo ? track.soloed && !track.muted : !track.muted;
 
               return (
@@ -548,18 +547,6 @@ export const TimelineArranger: React.FC<TimelineArrangerProps> = ({
                         {gainToDbText(track.gain)}
                       </span>
 
-                      <select
-                        aria-label={`Bus de salida para ${track.name}`}
-                        value={track.bus}
-                        onChange={(e) =>
-                          onChangeTrackBus(track.id, e.target.value as OutputBus)
-                        }
-                        className="bg-neutral-900 border border-neutral-700 rounded px-1.5 py-0.5 text-xs font-semibold text-neutral-200 focus:outline-none focus:border-studio-line cursor-pointer ml-auto"
-                      >
-                        <option value="main">Main</option>
-                        <option value="cue-click">Cue</option>
-                        <option value="both">Both</option>
-                      </select>
                     </div>
 
                     {/* Mini VU horizontal (componente hoja: solo él se renderiza con cada lectura) */}

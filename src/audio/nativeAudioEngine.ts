@@ -8,6 +8,7 @@
 
 import { logAsyncError } from '../utils/asyncErrors';
 import { panToEngine } from '../utils/panScale';
+import { effectiveBus } from '../utils/instrumentCatalog';
 import { AudioEngineMode, SongProject, TrackChannel, TransportState, MetersSnapshot } from '../types/project';
 import { MeterBallistics, NativeMetersSnapshot } from './meterBallistics';
 import { StatePoller } from './statePoller';
@@ -688,7 +689,7 @@ export class NativeAudioEngine {
         pan: panToEngine(trk.pan),
         muted: trk.muted,
         soloed: trk.soloed,
-        bus: trk.bus,
+        bus: effectiveBus(trk),
       }).catch(logAsyncError('audio_set_track_controls'));
     }
   }

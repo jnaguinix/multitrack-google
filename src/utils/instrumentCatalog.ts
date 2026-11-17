@@ -129,6 +129,15 @@ export function sortInstrumentTracks<T extends TrackLike>(tracks: readonly T[]):
   return tracks.filter(isInstrumentTrack).sort((a, b) => compareNames(a.name, b.name));
 }
 
+/** Orden de Arreglo: instrumentos en orden alfabético y, al final, Click y Guía. */
+export function orderTracksForDisplay<T extends TrackLike>(tracks: readonly T[]): T[] {
+  return [
+    ...sortInstrumentTracks(tracks),
+    ...tracks.filter((t) => isClickTrack(t)),
+    ...tracks.filter((t) => !isClickTrack(t) && isGuideTrack(t)),
+  ];
+}
+
 /**
  * Bus real de una pista. Los instrumentos van siempre a Main y solo Click y Guía a Cue (auriculares): la
  * interfaz ya no deja elegir el ruteo por pista, y lo guardado en canciones anteriores se normaliza aquí.
