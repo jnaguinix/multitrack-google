@@ -719,7 +719,7 @@ export default memo(function DesktopAudioSettings({ triggerHost }: Props) {
       <dialog
         ref={dialogRef}
         id="desktop-audio-dialog"
-        className="fixed inset-0 m-auto z-50 bg-studio-panel border border-neutral-800 rounded-2xl w-full max-w-xl p-5 space-y-3 shadow-2xl backdrop:bg-black/70 text-neutral-100 overflow-hidden"
+        className="fixed inset-0 m-auto z-50 bg-studio-panel border border-neutral-800 rounded-2xl w-full max-w-xl p-5 space-y-3 shadow-2xl backdrop:bg-black/70 text-neutral-100 max-h-[92dvh] overflow-y-auto"
         aria-labelledby="desktop-audio-title"
         onClose={() => setIsOpen(false)}
         onKeyDown={(e) => e.stopPropagation()}
