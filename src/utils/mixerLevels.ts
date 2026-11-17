@@ -1,3 +1,4 @@
+import { effectiveBus } from './instrumentCatalog';
 import type { MetersSnapshot, SongProject, TransportState } from '../types/project';
 
 const PEAK_FLOOR_DBFS = -60;
@@ -58,8 +59,9 @@ export function computeMixerLevels(
     const isAudible = anySolo ? trk.soloed && !trk.muted : !trk.muted;
     const rawRms = isAudible && transport.isPlaying ? meters.tracks[trk.id]?.rms || 0 : 0;
     if (rawRms > 0) {
-      if (trk.bus === 'main' || trk.bus === 'both') maxMainBusLevel = Math.max(maxMainBusLevel, rawRms);
-      if (trk.bus === 'cue-click' || trk.bus === 'both') maxCueBusLevel = Math.max(maxCueBusLevel, rawRms);
+      const bus = effectiveBus(trk);
+      if (bus === 'main') maxMainBusLevel = Math.max(maxMainBusLevel, rawRms);
+      if (bus === 'cue-click') maxCueBusLevel = Math.max(maxCueBusLevel, rawRms);
     }
   }
 

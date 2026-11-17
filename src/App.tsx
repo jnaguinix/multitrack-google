@@ -26,7 +26,6 @@ import {
   syncProjectSidecarNow,
 } from './storage/projectDb';
 import {
-  AudioEngineMode,
   OutputBus,
   QuantizeMode,
   SetlistTransitionMode,
@@ -59,7 +58,27 @@ import { ConfirmSongActionModal } from './components/modals/ConfirmSongActionMod
 import { SectionEditorModal } from './components/modals/SectionEditorModal';
 import { SongFingerprintPromptModal } from './components/modals/SongFingerprintPromptModal';
 import { StemImporterModal } from './components/modals/StemImporterModal';
+import { InstrumentPickerModal } from './components/modals/InstrumentPickerModal';
+import {
+  ImportWizardModal,
+  type ImportWizardMode,
+  type WizardFile,
+  type WizardMeta,
+  type WizardResult,
+} from './components/modals/ImportWizardModal';
 import { inferTrackRoleAndColor } from './utils/trackRole';
+import {
+  effectiveBus,
+  getInstrument,
+  instrumentIdFromName,
+  numberedNames,
+  orderTracksForDisplay,
+} from './utils/instrumentCatalog';
+import { loadTrackMapMemory, memoryKey, rememberTrackMapping } from './utils/trackMapMemory';
+import { isContinuousOnly } from './audio/controlSync';
+import { flightRecorder } from './utils/flightRecorder';
+import { findDuplicateTrackIds } from './utils/trackIds';
+import { projectSaves } from './storage/projectSaves';
 import {
   FingerprintCandidate,
 } from './audio/fingerprint';
@@ -68,7 +87,7 @@ const DesktopRemoteBridge = (import.meta.env.VITE_OMNITRACKS_DESKTOP === '1' || 
   ? React.lazy(() => import('../desktop/frontend/RemoteConnectionBridge'))
   : null;
 
-const DesktopAudioSettings = import.meta.env.VITE_OMNITRACKS_DESKTOP === '1'
+const DesktopAudioSettings = (import.meta.env.VITE_OMNITRACKS_DESKTOP === '1' || import.meta.env.DEV)
   ? React.lazy(() => import('../desktop/frontend/DesktopAudioSettings'))
   : null;
 
@@ -123,12 +142,6 @@ export default function App() {
   const [audioTriggerHost, setAudioTriggerHost] = useState<HTMLSpanElement | null>(null);
   const [transport, setTransport] = useState<TransportState>(INITIAL_TRANSPORT);
   const [ramCacheVersion, setRamCacheVersion] = useState<number>(0);
-  const [engineMode, setEngineModeState] = useState<AudioEngineMode>(() =>
-    audioEngine.getEngineMode()
-  );
-  const [ramBudgetMB, setRamBudgetMBState] = useState<number>(() =>
-    audioEngine.getRamBudgetMB()
-  );
   // Default transition mode is 'cue-next' (mounts at 00:00 in pause) so songs never start playing on their own unexpectedly
   const [setlistTransitionMode, setSetlistTransitionMode] =
     useState<SetlistTransitionMode>('cue-next');
@@ -143,6 +156,17 @@ export default function App() {
   const [songToDeleteFromLibrary, setSongToDeleteFromLibrary] = useState<SongProject | null>(null);
   const [missingFolderSong, setMissingFolderSong] = useState<SongProject | null>(null);
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
+  const [importWizard, setImportWizard] = useState<{
+    mode: ImportWizardMode;
+    initialMeta: WizardMeta;
+    files: WizardFile[];
+    resolve: (result: WizardResult | null) => void;
+  } | null>(null);
+  const requestImportWizard = useCallback(
+    (request: { mode: ImportWizardMode; initialMeta: WizardMeta; files: WizardFile[] }) =>
+      new Promise<WizardResult | null>((resolve) => setImportWizard({ ...request, resolve })),
+    []
+  );
   const [importStatusText, setImportStatusText] = useState<string | null>(null);
   const [fingerprintPrompt, setFingerprintPrompt] = useState<{
     candidates: FingerprintCandidate[];
@@ -154,6 +178,8 @@ export default function App() {
     null
   );
   const [isSectionEditorOpen, setIsSectionEditorOpen] = useState(false);
+  const [isEditTracksOpen, setIsEditTracksOpen] = useState(false);
+  const [instrumentPickerTrackId, setInstrumentPickerTrackId] = useState<string | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
   const currentProjectRef = useRef<SongProject | null>(currentProject);
@@ -268,7 +294,7 @@ export default function App() {
     return () => {
       window.clearTimeout(timerId);
     };
-  }, [setlistQueue, currentProject?.id, ramBudgetMB, isActivatingProject]);
+  }, [setlistQueue, currentProject?.id, isActivatingProject]);
 
   // Surface engine notices (play blocked, still loading...) instead of failing silently
   useEffect(() => {
@@ -365,28 +391,6 @@ export default function App() {
       showToast('Reubicar carpetas solo está disponible en la app de escritorio.');
     },
     [isDesktopApp, showToast]
-  );
-
-  const handleChangeEngineMode = useCallback(
-    (mode: AudioEngineMode) => {
-      audioEngine.setEngineMode(mode);
-      setEngineModeState(audioEngine.getEngineMode());
-      showToast(
-        mode === 'stream'
-          ? 'Modo Stream seleccionado (usa Buffer como respaldo si la canción aún no tiene PCM)'
-          : 'Modo Buffer seleccionado (AudioBuffer completo en RAM con presupuesto)'
-      );
-    },
-    [showToast]
-  );
-
-  const handleChangeRamBudgetMB = useCallback(
-    (mb: number) => {
-      audioEngine.setRamBudgetMB(mb);
-      setRamBudgetMBState(audioEngine.getRamBudgetMB());
-      showToast(`Presupuesto de caché RAM ajustado a ${audioEngine.getRamBudgetMB()} MB`);
-    },
-    [showToast]
   );
 
   // 2 & 6. Activate a project using cached AudioBuffers if available and log console.info metrics
@@ -560,17 +564,104 @@ export default function App() {
   // Mutate and persist current project helper
   const updateCurrentProject = useCallback(
     (updater: (prev: SongProject) => SongProject) => {
-      setCurrentProject((prev) => {
-        if (!prev) return null;
-        const next = updater(prev);
-        if (next === prev) return prev;
-        audioEngine.updateProjectConfig(next);
-        saveProjectToDb(next).catch(logAsyncError('guardar la canción'));
-        setProjects((list) => list.map((item) => (item.id === next.id ? next : item)));
-        return next;
-      });
+      // Nada de efectos secundarios dentro de un actualizador de estado: se calcula aquí, una sola vez, y el motor
+      // recibe solo la diferencia, en orden. `currentProjectRef` se adelanta para que dos cambios seguidos (p. ej.
+      // un solo y un volumen en el mismo instante) se compongan en vez de pisarse.
+      const prev = currentProjectRef.current;
+      if (!prev) return;
+      const next = updater(prev);
+      if (next === prev) return;
+      currentProjectRef.current = next;
+      setCurrentProject(next);
+      const ops = audioEngine.applyProjectChange(prev, next);
+      setProjects((list) => list.map((item) => (item.id === next.id ? next : item)));
+      // Arrastrar un fader no escribe el disco con cada píxel: se agrupa y se guarda el último valor.
+      if (isContinuousOnly(ops)) projectSaves.schedule(next);
+      else void projectSaves.saveNow(next);
     },
     []
+  );
+
+  // Al ocultar o cerrar la ventana se vacía lo pendiente de guardar.
+  useEffect(() => {
+    const flush = () => void projectSaves.flushAll();
+    const onVisibility = () => {
+      if (document.visibilityState === 'hidden') flush();
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+    window.addEventListener('pagehide', flush);
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibility);
+      window.removeEventListener('pagehide', flush);
+    };
+  }, []);
+
+  // Aviso (una vez por canción) si hay pistas con ID repetido: el motor solo direcciona la primera.
+  const warnedDuplicateIds = useRef(new Set<string>());
+  useEffect(() => {
+    for (const p of projects) {
+      const dup = findDuplicateTrackIds(p.tracks);
+      if (dup.length === 0 || warnedDuplicateIds.current.has(p.id)) continue;
+      warnedDuplicateIds.current.add(p.id);
+      flightRecorder.record('ids-repetidos', `${p.title}: ${dup.join(', ')}`);
+      showToast(`«${p.title}» tiene pistas con ID repetido (${dup.join(', ')}). Reimporta la carpeta para corregirlo.`);
+    }
+  }, [projects, showToast]);
+
+  // «Editar pistas»: reasigna el instrumento de cada pista de la canción actual (nombre, rol, color y bus).
+  const handleSaveTrackMapping = useCallback(
+    (result: WizardResult) => {
+      const picked = new Map(result.rows.map((r) => [r.id, r.instrumentId] as const));
+      updateCurrentProject((p) => {
+        const names = numberedNames(p.tracks.map((tr) => picked.get(tr.id) ?? null));
+        return {
+          ...p,
+          tracks: p.tracks.map((tr, i) => {
+            const def = getInstrument(picked.get(tr.id));
+            const name = names[i];
+            if (!def || !name) return tr;
+            return { ...tr, name, role: def.role, color: def.color, bus: effectiveBus({ name, role: def.role }) };
+          }),
+          updatedAt: Date.now(),
+        };
+      });
+      const cur = currentProjectRef.current;
+      rememberTrackMapping(
+        result.rows.map((r) => ({
+          fileName: cur?.tracks.find((tr) => tr.id === r.id)?.fileName ?? '',
+          instrumentId: r.instrumentId,
+        }))
+      );
+      showToast('Pistas actualizadas.');
+    },
+    [updateCurrentProject, showToast]
+  );
+
+  // «Cambiar instrumento» de una pista: renombra con el catálogo, recalcula la numeración de las demás
+  // («Guitarra 1» y «2» pasan a «Guitarra» si una se convierte en otra cosa) y ajusta rol, color y bus.
+  const handleChangeTrackInstrument = useCallback(
+    (trackId: string, instrumentId: string) => {
+      const def = getInstrument(instrumentId);
+      if (!def) return;
+      const cur = currentProjectRef.current;
+      const fileName = cur?.tracks.find((tr) => tr.id === trackId)?.fileName;
+      updateCurrentProject((p) => {
+        const ids = p.tracks.map((tr) => (tr.id === trackId ? instrumentId : instrumentIdFromName(tr.name)));
+        const names = numberedNames(ids);
+        return {
+          ...p,
+          tracks: p.tracks.map((tr, i) => {
+            const name = names[i];
+            if (tr.id === trackId && name) return { ...tr, name, role: def.role, color: def.color, bus: effectiveBus({ name, role: def.role }) };
+            return name && ids[i] && name !== tr.name ? { ...tr, name } : tr;
+          }),
+          updatedAt: Date.now(),
+        };
+      });
+      if (fileName) rememberTrackMapping([{ fileName, instrumentId }]);
+      showToast(`Pista cambiada a ${def.label}.`);
+    },
+    [updateCurrentProject, showToast]
   );
 
   // Atajos globales de teclado (Espacio, V, 1-9)
@@ -649,6 +740,7 @@ export default function App() {
     setImportStatusText,
     setFingerprintPrompt,
     setMissingNativeCache,
+    requestImportWizard,
   });
 
 
@@ -716,12 +808,10 @@ export default function App() {
     handleChangePitch,
     handleChangeQuantize,
     handleToggleClick,
-    handleToggleSplitRouting,
     handleToggleTrackMute,
     handleToggleTrackSolo,
     handleChangeTrackGain,
     handleChangeTrackPan,
-    handleChangeTrackBus,
     handleDeleteTrack,
     handleResetMixer,
     handleSaveSections,
@@ -816,7 +906,7 @@ export default function App() {
   const transportProject = activeView === 'live' ? null : currentProject;
   const remoteTriggerRef = DesktopRemoteBridge && (window.location.origin === 'https://tauri.localhost' || import.meta.env.DEV)
     ? setRemoteTriggerHost : undefined;
-  const audioTriggerRef = DesktopAudioSettings && window.location.origin === 'https://tauri.localhost'
+  const audioTriggerRef = DesktopAudioSettings && (window.location.origin === 'https://tauri.localhost' || import.meta.env.DEV)
     ? setAudioTriggerHost : undefined;
 
   return (
@@ -825,13 +915,8 @@ export default function App() {
       <TopBar
         activeView={activeView}
         setlistCount={setlistQueue.length}
-        engineMode={engineMode}
-        ramBudgetMB={ramBudgetMB}
-        cachedRamMB={audioEngine.getTotalCachedMB()}
         remoteTriggerRef={remoteTriggerRef}
         audioTriggerRef={audioTriggerRef}
-        onChangeEngineMode={handleChangeEngineMode}
-        onChangeRamBudgetMB={handleChangeRamBudgetMB}
         onSelectView={handleSelectView}
         onOpenImportModal={() => setIsImportModalOpen(true)}
       />
@@ -931,7 +1016,6 @@ export default function App() {
           onChangePitch={handleChangePitch}
           onChangeQuantize={handleChangeQuantize}
           onToggleClick={handleToggleClick}
-          onToggleSplitRouting={handleToggleSplitRouting}
           onAddMarkerAtPlayhead={handleAddMarkerAtPlayhead}
           onOpenSectionEditor={() => setIsSectionEditorOpen(true)}
           onCancelQueuedJump={handleCancelQueuedJump}
@@ -1012,6 +1096,7 @@ export default function App() {
               onCancelQueuedJump={handleCancelQueuedJump}
               onAddMarkerAtPlayhead={handleAddMarkerAtPlayhead}
               onOpenSectionEditor={() => setIsSectionEditorOpen(true)}
+              onEditTracks={() => setIsEditTracksOpen(true)}
               onAddStemsToCurrentSong={(files) =>
                 handleInstantImportFiles(files, 'main', 'current-song')
               }
@@ -1028,7 +1113,6 @@ export default function App() {
               onToggleTrackSolo={handleToggleTrackSolo}
               onChangeTrackGain={handleChangeTrackGain}
               onChangeTrackPan={handleChangeTrackPan}
-              onChangeTrackBus={handleChangeTrackBus}
               onChangeClickGain={(gain) =>
                 updateCurrentProject((p) => ({ ...p, clickGain: gain }))
               }
@@ -1039,10 +1123,8 @@ export default function App() {
               onChangeMasterGain={(gain) =>
                 updateCurrentProject((p) => ({ ...p, masterGain: gain }))
               }
-              onChangeCueMasterGain={(gain) =>
-                updateCurrentProject((p) => ({ ...p, cueMasterGain: gain }))
-              }
               onResetMixer={handleResetMixer}
+              onPickInstrument={setInstrumentPickerTrackId}
             />
           )}
 
@@ -1086,7 +1168,6 @@ export default function App() {
                   onToggleTrackSolo={handleToggleTrackSolo}
                   onChangeTrackGain={handleChangeTrackGain}
                   onChangeTrackPan={handleChangeTrackPan}
-                  onChangeTrackBus={handleChangeTrackBus}
                   onDeleteTrack={handleDeleteTrack}
                   onAddStemsToCurrentSong={(files) =>
                     handleInstantImportFiles(files, 'main', 'current-song')
@@ -1097,6 +1178,8 @@ export default function App() {
                   onAddMarkerAtPlayhead={handleAddMarkerAtPlayhead}
                   onOpenImportModal={() => setIsImportModalOpen(true)}
                   onOpenSectionEditor={() => setIsSectionEditorOpen(true)}
+              onEditTracks={() => setIsEditTracksOpen(true)}
+                  onPickInstrument={setInstrumentPickerTrackId}
                 />
 
                 {isDockedMixerOpen && (
@@ -1146,7 +1229,6 @@ export default function App() {
                           onToggleTrackSolo={handleToggleTrackSolo}
                           onChangeTrackGain={handleChangeTrackGain}
                           onChangeTrackPan={handleChangeTrackPan}
-                          onChangeTrackBus={handleChangeTrackBus}
                           onChangeClickGain={(gain) =>
                             updateCurrentProject((p) => ({ ...p, clickGain: gain }))
                           }
@@ -1157,10 +1239,8 @@ export default function App() {
                           onChangeMasterGain={(gain) =>
                             updateCurrentProject((p) => ({ ...p, masterGain: gain }))
                           }
-                          onChangeCueMasterGain={(gain) =>
-                            updateCurrentProject((p) => ({ ...p, cueMasterGain: gain }))
-                          }
                           onResetMixer={handleResetMixer}
+                          onPickInstrument={setInstrumentPickerTrackId}
                         />
                       </div>
                     </div>
@@ -1198,7 +1278,6 @@ export default function App() {
                 onToggleTrackSolo={handleToggleTrackSolo}
                 onChangeTrackGain={handleChangeTrackGain}
                 onChangeTrackPan={handleChangeTrackPan}
-                onChangeTrackBus={handleChangeTrackBus}
                 onChangeClickGain={(gain) =>
                   updateCurrentProject((p) => ({ ...p, clickGain: gain }))
                 }
@@ -1209,10 +1288,9 @@ export default function App() {
                 onChangeMasterGain={(gain) =>
                   updateCurrentProject((p) => ({ ...p, masterGain: gain }))
                 }
-                onChangeCueMasterGain={(gain) =>
-                  updateCurrentProject((p) => ({ ...p, cueMasterGain: gain }))
-                }
                 onResetMixer={handleResetMixer}
+                onPickInstrument={setInstrumentPickerTrackId}
+                onEditTracks={() => setIsEditTracksOpen(true)}
               />
             ) : (
               <div className="flex-1 flex flex-col items-center justify-center p-5 text-center">
@@ -1288,6 +1366,70 @@ export default function App() {
             const cb = fingerprintPrompt.resolve;
             setFingerprintPrompt(null);
             cb('cancel');
+          }}
+        />
+      )}
+
+      {instrumentPickerTrackId && currentProject && (() => {
+        const trk = currentProject.tracks.find((tr) => tr.id === instrumentPickerTrackId);
+        if (!trk) return null;
+        return (
+          <InstrumentPickerModal
+            trackName={trk.name}
+            fileName={trk.fileName}
+            currentInstrumentId={instrumentIdFromName(trk.name)}
+            onPick={(id) => {
+              setInstrumentPickerTrackId(null);
+              handleChangeTrackInstrument(trk.id, id);
+            }}
+            onClose={() => setInstrumentPickerTrackId(null)}
+          />
+        );
+      })()}
+
+      {isEditTracksOpen && currentProject && (
+        <ImportWizardModal
+          mode="edit-tracks"
+          initialMeta={{
+            title: currentProject.title,
+            artist: currentProject.artist,
+            key: currentProject.keySignature,
+            bpm: currentProject.bpm,
+            beatsPerBar: currentProject.beatsPerBar,
+          }}
+          files={orderTracksForDisplay(currentProject.tracks).map((tr) => {
+            const own = instrumentIdFromName(tr.name);
+            const rememberedId = tr.fileName ? loadTrackMapMemory()[memoryKey(tr.fileName)] ?? null : null;
+            return {
+              id: tr.id,
+              fileName: tr.fileName || tr.name,
+              durationSec: tr.durationSec ?? null,
+              instrumentId: own ?? rememberedId,
+              remembered: !own && Boolean(rememberedId),
+            };
+          })}
+          onConfirm={(result) => {
+            setIsEditTracksOpen(false);
+            handleSaveTrackMapping(result);
+          }}
+          onCancel={() => setIsEditTracksOpen(false)}
+        />
+      )}
+
+      {importWizard && (
+        <ImportWizardModal
+          mode={importWizard.mode}
+          initialMeta={importWizard.initialMeta}
+          files={importWizard.files}
+          onConfirm={(result) => {
+            const done = importWizard.resolve;
+            setImportWizard(null);
+            done(result);
+          }}
+          onCancel={() => {
+            const done = importWizard.resolve;
+            setImportWizard(null);
+            done(null);
           }}
         />
       )}

@@ -64,6 +64,8 @@ interface SetlistPageViewProps {
   onCancelQueuedJump: () => void;
   onAddMarkerAtPlayhead: () => void;
   onOpenSectionEditor: () => void;
+  onEditTracks?: () => void;
+  onPickInstrument?: (trackId: string) => void;
   onAddStemsToCurrentSong: (files: FileList | File[]) => void;
   onQuickImportNewSongFiles: (files: FileList | File[]) => void;
   onQuickImportNativeFolder?: (folderPath: string) => void;
@@ -72,12 +74,10 @@ interface SetlistPageViewProps {
   onToggleTrackSolo: (trackId: string) => void;
   onChangeTrackGain: (trackId: string, gain: number) => void;
   onChangeTrackPan: (trackId: string, pan: number) => void;
-  onChangeTrackBus: (trackId: string, bus: OutputBus) => void;
   onChangeClickGain: (gain: number) => void;
   onChangeClickPan?: (pan: number) => void;
   onToggleClick: () => void;
   onChangeMasterGain: (gain: number) => void;
-  onChangeCueMasterGain: (gain: number) => void;
   onResetMixer: () => void;
   onOptimizeProject: (song: SongProject) => void;
   /** Guarda las notas de una canción. */
@@ -124,6 +124,8 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
   onJumpSection,
   onAddMarkerAtPlayhead,
   onOpenSectionEditor,
+  onEditTracks,
+  onPickInstrument,
   onAddStemsToCurrentSong,
   onQuickImportNewSongFiles,
   onQuickImportNativeFolder,
@@ -132,12 +134,10 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
   onToggleTrackSolo,
   onChangeTrackGain,
   onChangeTrackPan,
-  onChangeTrackBus,
   onChangeClickGain,
   onChangeClickPan,
   onToggleClick,
   onChangeMasterGain,
-  onChangeCueMasterGain,
   onResetMixer,
   onStartLive,
   onSetSongTransition,
@@ -322,6 +322,11 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
             <button type="button" onClick={onOpenSectionEditor} className="lt-control">
               Editar secciones
             </button>
+            {onEditTracks && (
+              <button type="button" onClick={onEditTracks} className="lt-control">
+                Editar pistas
+              </button>
+            )}
             <button type="button" onClick={() => setIsFloatingMixerOpen(true)} className="lt-control">
               <Sliders size={16} /> Mezcla
             </button>
@@ -587,13 +592,12 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
                 onToggleTrackSolo={onToggleTrackSolo}
                 onChangeTrackGain={onChangeTrackGain}
                 onChangeTrackPan={onChangeTrackPan}
-                onChangeTrackBus={onChangeTrackBus}
                 onChangeClickGain={onChangeClickGain}
                 onChangeClickPan={onChangeClickPan}
                 onToggleClick={onToggleClick}
                 onChangeMasterGain={onChangeMasterGain}
-                onChangeCueMasterGain={onChangeCueMasterGain}
                 onResetMixer={onResetMixer}
+                onPickInstrument={onPickInstrument}
               />
             </div>
           </div>

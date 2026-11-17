@@ -55,6 +55,15 @@ impl ClockJumps {
         self.remap_at.load(Ordering::Acquire) != NO_JUMP
     }
 
+    /// Rango `[inicio, fin)` del bucle de vamp activo, o `None` si no hay bucle.
+    pub fn loop_range(&self) -> Option<(u64, u64)> {
+        let end = self.loop_end.load(Ordering::Acquire);
+        if end == 0 {
+            return None;
+        }
+        Some((self.loop_start.load(Ordering::Acquire), end))
+    }
+
     pub fn set_loop(&self, start: u64, end: u64) {
         self.loop_end.store(0, Ordering::Release);
         self.loop_start.store(start, Ordering::Release);

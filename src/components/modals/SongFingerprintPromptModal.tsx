@@ -36,7 +36,7 @@ export const SongFingerprintPromptModal: React.FC<SongFingerprintPromptModalProp
     candidates.find((c) => c.song.id === selectedCandidateId) || candidates[0];
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/75 flex items-center justify-center p-4">
+    <div className="fixed inset-0 z-[80] bg-black/75 flex items-center justify-center p-4">
       <div className="bg-studio-panel border border-neutral-700 rounded-2xl max-w-lg w-full p-6 space-y-5 shadow-2xl">
         <div className="flex items-start justify-between gap-3">
           <div className="flex items-center gap-3">

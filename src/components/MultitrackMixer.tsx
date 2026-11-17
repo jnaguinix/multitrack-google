@@ -7,6 +7,7 @@ import {
   TransportState,
 } from '../types/project';
 import { useLiveMeters } from '../audio/liveMeters';
+import { isClickTrack, isGuideTrack, sortInstrumentTracks } from '../utils/instrumentCatalog';
 import { computeMixerLevels, trackPeak, activityFromGain, peakPosition } from '../utils/mixerLevels';
 
 const MIN_DB = -40;
@@ -316,6 +317,64 @@ export function formatTrackDisplayName(name: string): string {
   return trimmed || name;
 }
 
+/** Tira fija del panel derecho (Click o Guía): un solo fader, silencio y, si es una pista, solo. */
+const FixedStrip: React.FC<{
+  name: string;
+  sub: string;
+  color: string;
+  live: boolean;
+  gain: number;
+  muted: boolean;
+  dim: boolean;
+  disabled?: boolean;
+  soloed?: boolean;
+  peakOf?: (m: MetersSnapshot) => number;
+  levelsOf?: (m: MetersSnapshot) => MeterLevels;
+  onChangeGain: (gain: number) => void;
+  onToggleMute: () => void;
+  onToggleSolo?: () => void;
+  onRename?: () => void;
+}> = ({ name, sub, color, live, gain, muted, dim, disabled, soloed, peakOf, levelsOf, onChangeGain, onToggleMute, onToggleSolo, onRename }) => (
+  <div
+    style={{ '--c': color } as React.CSSProperties}
+    className={`lt-strip lt-bus ${dim ? 'lt-dim' : ''}`}
+    aria-disabled={disabled || undefined}
+  >
+    <div className="lt-cap" />
+    {onRename ? (
+      <button type="button" className="lt-name lt-name-btn" title="Cambiar instrumento" onClick={onRename}>
+        {name}
+      </button>
+    ) : (
+      <div className="lt-name">{name}</div>
+    )}
+    <div className="lt-sub">{sub}</div>
+    {peakOf ? (
+      <StudioFader name={name} gain={gain} live={live} peakOf={peakOf} onChangeGain={onChangeGain} />
+    ) : (
+      <StudioFader
+        name={name}
+        gain={gain}
+        live={live}
+        levelsOf={levelsOf ?? (() => ({ l: 0, r: 0, dbScale: false }))}
+        onChangeGain={onChangeGain}
+      />
+    )}
+    {!disabled && (
+      <div className="lt-ms">
+        <button type="button" className="lt-m" aria-pressed={muted} aria-label={`Mute ${name}`} onClick={onToggleMute}>
+          M
+        </button>
+        {onToggleSolo && (
+          <button type="button" className="lt-s" aria-pressed={Boolean(soloed)} aria-label={`Solo ${name}`} onClick={onToggleSolo}>
+            S
+          </button>
+        )}
+      </div>
+    )}
+  </div>
+);
+
 export interface MultitrackMixerProps {
   project: SongProject;
   transport: TransportState;
@@ -324,13 +383,14 @@ export interface MultitrackMixerProps {
   onToggleTrackSolo: (trackId: string) => void;
   onChangeTrackGain: (trackId: string, gain: number) => void;
   onChangeTrackPan: (trackId: string, pan: number) => void;
-  onChangeTrackBus: (trackId: string, bus: OutputBus) => void;
   onChangeClickGain: (gain: number) => void;
   onChangeClickPan?: (pan: number) => void;
   onToggleClick: () => void;
   onChangeMasterGain: (gain: number) => void;
-  onChangeCueMasterGain: (gain: number) => void;
   onResetMixer: () => void;
+  onEditTracks?: () => void;
+  /** Abre «Cambiar instrumento» para una pista (clic en su nombre). */
+  onPickInstrument?: (trackId: string) => void;
 }
 
 export const MultitrackMixer: React.FC<MultitrackMixerProps> = ({
@@ -341,17 +401,16 @@ export const MultitrackMixer: React.FC<MultitrackMixerProps> = ({
   onToggleTrackSolo,
   onChangeTrackGain,
   onChangeTrackPan,
-  onChangeTrackBus,
   onChangeClickGain,
   onChangeClickPan,
   onToggleClick,
   onChangeMasterGain,
-  onChangeCueMasterGain,
   onResetMixer,
+  onEditTracks,
+  onPickInstrument,
 }) => {
   const anySolo = project.tracks.some((t) => t.soloed);
   const activeSection = project.sections.find((s) => s.id === transport.activeSectionId);
-  const cueMasterGain = project.cueMasterGain ?? 0.708; // -3.0 dB por defecto
   const live = transport.isPlaying;
 
   // Niveles de los buses: cada medidor los calcula con su propia lectura (ver componentes hoja).
@@ -360,12 +419,11 @@ export const MultitrackMixer: React.FC<MultitrackMixerProps> = ({
     return { l: lv[bus].l, r: lv[bus].r, dbScale: lv.nativeScale };
   };
 
-  // Check if user already imported a custom track named "Click" / metronome
-  const hasCustomClickTrack = project.tracks.some((t) => {
-    if (t.role === 'click') return true;
-    const norm = (t.name || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
-    return norm.includes('click') || norm.includes('metro');
-  });
+  // Instrumentos en orden alfabético. Click y Guía no van en la lista: quedan fijos a la derecha, con Main.
+  const instrumentTracks = sortInstrumentTracks(project.tracks);
+  const clickTrack = project.tracks.find(isClickTrack) ?? null;
+  const guideTrack = project.tracks.find(isGuideTrack) ?? null;
+  const trackIsDimmed = (t: TrackChannel) => t.muted || (anySolo && !t.soloed);
   return (
     <div
       className={`lt-mixer-surface flex flex-col select-none ${
@@ -389,13 +447,24 @@ export const MultitrackMixer: React.FC<MultitrackMixerProps> = ({
             </span>
           </div>
 
-          <button
-            type="button"
-            onClick={onResetMixer}
-            className="text-xs font-medium text-studio-muted hover:text-studio-ink underline underline-offset-3 cursor-pointer"
-          >
-            Restablecer mezcla a 0 dB
-          </button>
+          <div className="flex items-center gap-4">
+            {onEditTracks && (
+              <button
+                type="button"
+                onClick={onEditTracks}
+                className="text-xs font-medium text-studio-muted hover:text-studio-ink underline underline-offset-3 cursor-pointer"
+              >
+                Editar pistas
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={onResetMixer}
+              className="text-xs font-medium text-studio-muted hover:text-studio-ink underline underline-offset-3 cursor-pointer"
+            >
+              Restablecer mezcla a 0 dB
+            </button>
+          </div>
         </div>
       )}
 
@@ -403,9 +472,8 @@ export const MultitrackMixer: React.FC<MultitrackMixerProps> = ({
       <main className={`lt-console ${docked ? 'lt-docked' : 'lt-console-full'}`}>
         {/* Left: Scrollable Individual Channel Strips (#channels) */}
         <section className="lt-channels" aria-label="Canales">
-          {project.tracks.map((track: TrackChannel) => {
-            const isDimmed = track.muted || (anySolo && !track.soloed);
-            const isCueRoute = track.bus === 'cue-click';
+          {instrumentTracks.map((track: TrackChannel) => {
+            const isDimmed = trackIsDimmed(track);
             const displayName = formatTrackDisplayName(track.name);
 
             return (
@@ -415,9 +483,20 @@ export const MultitrackMixer: React.FC<MultitrackMixerProps> = ({
                 className={`lt-strip ${isDimmed ? 'lt-dim' : ''}`}
               >
                 <div className="lt-cap" />
-                <div className="lt-name" title={displayName}>
-                  {displayName}
-                </div>
+                {onPickInstrument ? (
+                  <button
+                    type="button"
+                    className="lt-name lt-name-btn"
+                    title={`${displayName}: cambiar instrumento`}
+                    onClick={() => onPickInstrument(track.id)}
+                  >
+                    {displayName}
+                  </button>
+                ) : (
+                  <div className="lt-name" title={displayName}>
+                    {displayName}
+                  </div>
+                )}
 
                 <PanKnob
                   name={displayName}
@@ -453,84 +532,9 @@ export const MultitrackMixer: React.FC<MultitrackMixerProps> = ({
                     S
                   </button>
                 </div>
-
-                <button
-                  type="button"
-                  className="lt-route"
-                  data-bus={isCueRoute ? 'cue-click' : 'main'}
-                  onClick={() =>
-                    onChangeTrackBus(
-                      track.id,
-                      isCueRoute ? 'main' : 'cue-click'
-                    )
-                  }
-                  title="Alternar envío a Main L/R o Click / Cue"
-                >
-                  {isCueRoute ? 'Click / Cue' : 'Main L/R'}
-                </button>
               </div>
             );
           })}
-
-          {/* Built-in Synthesized Click Strip (if no custom Click stem exists) */}
-          {!hasCustomClickTrack && (
-            <div
-              style={{ '--c': '#22d3ee' } as React.CSSProperties}
-              className={`lt-strip ${!project.clickEnabled || anySolo ? 'lt-dim' : ''}`}
-            >
-              <div className="lt-cap" />
-              <div className="lt-name" title="Click Metrónomo">
-                Click
-              </div>
-
-              <PanKnob
-                name="Click"
-                pan={project.clickPan ?? 0}
-                onChangePan={(nextPan) => onChangeClickPan?.(nextPan)}
-              />
-
-              <StudioFader
-                name="Click"
-                gain={project.clickGain}
-                live={live}
-                levelsOf={busLevelsOf('click')}
-                onChangeGain={onChangeClickGain}
-              />
-
-              <div className="lt-ms">
-                <button
-                  type="button"
-                  className="lt-m"
-                  aria-pressed={!project.clickEnabled}
-                  aria-label="Mute Click"
-                  onClick={onToggleClick}
-                >
-                  M
-                </button>
-                <button
-                  type="button"
-                  className="lt-s"
-                  aria-pressed={false}
-                  aria-label="Solo Click"
-                  onClick={() => {
-                    if (!project.clickEnabled) onToggleClick();
-                  }}
-                >
-                  S
-                </button>
-              </div>
-
-              <button
-                type="button"
-                className="lt-route"
-                data-bus="cue-click"
-                title="Ruteado al bus Click / Cue"
-              >
-                Click / Cue
-              </button>
-            </div>
-          )}
-
         </section>
 
         {/* Right: Master Output Buses (#buses — Main L/R & Click / Cue) */}
@@ -553,23 +557,39 @@ export const MultitrackMixer: React.FC<MultitrackMixerProps> = ({
             />
           </div>
 
-          {/* Bus 2: Click / Cue ("Auriculares banda") */}
-          <div
-            style={{ '--c': '#22d3ee' } as React.CSSProperties}
-            className="lt-strip lt-bus"
-          >
-            <div className="lt-cap" />
-            <div className="lt-name">Click / Cue</div>
-            <div className="lt-sub">Auriculares banda</div>
-
-            <StudioFader
-              name="Click / Cue"
-              gain={cueMasterGain}
-              live={live}
-              levelsOf={busLevelsOf('cue')}
-              onChangeGain={onChangeCueMasterGain}
-            />
-          </div>
+          {/* Click y Guía: un solo control cada uno, fijos junto a Main (salen por auriculares / Cue) */}
+          <FixedStrip
+            name="Click"
+            sub={clickTrack ? 'Pista' : 'Metrónomo'}
+            color="#22d3ee"
+            live={live}
+            gain={clickTrack ? clickTrack.gain : project.clickGain}
+            muted={clickTrack ? clickTrack.muted : !project.clickEnabled}
+            dim={clickTrack ? trackIsDimmed(clickTrack) : !project.clickEnabled}
+            soloed={clickTrack ? clickTrack.soloed : undefined}
+            peakOf={clickTrack ? (m) => trackPeak(project, transport, m, clickTrack.id) : undefined}
+            levelsOf={clickTrack ? undefined : busLevelsOf('click')}
+            onChangeGain={(g) => (clickTrack ? onChangeTrackGain(clickTrack.id, g) : onChangeClickGain(g))}
+            onToggleMute={() => (clickTrack ? onToggleTrackMute(clickTrack.id) : onToggleClick())}
+            onToggleSolo={clickTrack ? () => onToggleTrackSolo(clickTrack.id) : undefined}
+            onRename={clickTrack && onPickInstrument ? () => onPickInstrument(clickTrack.id) : undefined}
+          />
+          <FixedStrip
+            name="Guía"
+            sub={guideTrack ? 'Pista' : 'Sin pista de guía'}
+            color="#38bdf8"
+            live={live}
+            disabled={!guideTrack}
+            gain={guideTrack?.gain ?? 1}
+            muted={guideTrack?.muted ?? false}
+            dim={guideTrack ? trackIsDimmed(guideTrack) : true}
+            soloed={guideTrack?.soloed}
+            peakOf={guideTrack ? (m) => trackPeak(project, transport, m, guideTrack.id) : undefined}
+            onChangeGain={(g) => guideTrack && onChangeTrackGain(guideTrack.id, g)}
+            onToggleMute={() => guideTrack && onToggleTrackMute(guideTrack.id)}
+            onToggleSolo={guideTrack ? () => onToggleTrackSolo(guideTrack.id) : undefined}
+            onRename={guideTrack && onPickInstrument ? () => onPickInstrument(guideTrack.id) : undefined}
+          />
         </section>
       </main>
     </div>

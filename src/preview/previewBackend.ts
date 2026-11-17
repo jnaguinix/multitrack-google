@@ -8,6 +8,7 @@
 import type { SongProject } from '../types/project';
 import { createSampleLibrary, PREVIEW_SAMPLE_RATE } from './fixtures';
 import { previewInvoke as remotePreviewInvoke } from '../../desktop/frontend/previewInvoke';
+import { proposeRouting, validateRouting, type RoutingConfig, type RoutingInfo } from '../../desktop/frontend/routing';
 
 type Args = Record<string, any> | undefined;
 
@@ -20,15 +21,81 @@ interface SectionDto {
 
 interface TrackControl {
   gain: number;
+  /** Entero de -100 a 100, como en el motor real. */
   pan: number;
   muted: boolean;
   soloed: boolean;
+  bus: string;
+}
+
+const SCAN_NAMES = [
+  'Diosesamorf#-bajo-Bb-multitrack',
+  'Diosesamorf#-bateria-Bb-multitrack',
+  'Diosesamorf#-guitarra electrica 1-Bb-multitrack',
+  'Diosesamorf#-guitarra electrica 2-Bb-multitrack',
+  'Diosesamorf#-teclado-Bb-multitrack',
+  'Click Track',
+  'Guide',
+  'Bass',
+  'Drums (Live)',
+  'Soprano',
+];
+
+function scannedFolder() {
+  return {
+    folderPath: 'C:\\Vista previa\\Friend of God',
+    folderName: 'Friend of God',
+    title: 'Friend of God',
+    artist: 'Artista Desconocido',
+    bpm: null,
+    key: null,
+    sections: [],
+    files: SCAN_NAMES.map((name, i) => ({
+      filePath: `C:\\Vista previa\\Friend of God\\${name}.wav`,
+      fileName: `${name}.wav`,
+      trackName: name,
+      trackId: `stem-${String(i + 1).padStart(2, '0')}`,
+      estDurationSec: 381.7,
+      fileSize: 67_337_620,
+    })),
+  };
+}
+
+const savedRouting = new Map<string, RoutingConfig>();
+const deviceChannels = (name: string | null) => (name && name.includes('4 salidas') ? 4 : 2);
+
+function routingInfo(name: string | null): RoutingInfo {
+  const channels = deviceChannels(name);
+  const saved = savedRouting.get(name ?? '');
+  const stale = Boolean(saved && saved.channels !== channels);
+  const config = saved && !stale ? saved : proposeRouting(channels);
+  const issues = validateRouting(config, channels);
+  return {
+    deviceName: name,
+    host: 'WASAPI',
+    deviceFound: true,
+    channels,
+    config,
+    proposed: proposeRouting(channels),
+    saved: Boolean(saved && !stale),
+    stale,
+    valid: issues.length === 0,
+    issues,
+    notes:
+      channels <= 2
+        ? ['Windows (WASAPI compartido) solo expone los canales que declara el controlador. Para usar más canales hace falta ASIO o un formato multicanal configurado en Windows.', 'Comprueba cada canal con el tono de prueba antes de un servicio.']
+        : [`Windows expone ${channels} canales de salida en este dispositivo. Una salida de audífonos que solo replica a otra no se distingue por software.`, 'Comprueba cada canal con el tono de prueba antes de un servicio.'],
+    summary: '',
+  };
 }
 
 export function createPreviewBackend() {
   const library = createSampleLibrary();
+  // Solo desarrollo: permite provocar a mano una diferencia entre la interfaz y el "motor" para ver la autocorrección.
+  (globalThis as unknown as { __previewControls?: Map<string, TrackControl> }).__previewControls = undefined;
   const songsById = new Map<string, SongProject>(library.songs.map((s) => [s.id, s]));
   const controls = new Map<string, TrackControl>();
+  (globalThis as unknown as { __previewControls?: Map<string, TrackControl> }).__previewControls = controls;
 
   let loadedId: string | null = null;
   let trackIds: string[] = [];
@@ -115,6 +182,7 @@ export function createPreviewBackend() {
       masterGain,
       cueMasterGain,
       meters: meters(),
+      trackControls: trackIds.map((id) => ({ trackId: id, ...(controls.get(id) as TrackControl) })),
     };
   };
 
@@ -172,7 +240,7 @@ export function createPreviewBackend() {
       queued = null;
       vamping = false;
       loopRange = null;
-      for (const t of song?.tracks ?? []) controls.set(t.id, { gain: t.gain, pan: t.pan, muted: t.muted, soloed: t.soloed });
+      for (const t of song?.tracks ?? []) controls.set(t.id, { gain: t.gain, pan: Math.round(t.pan * 100), muted: t.muted, soloed: t.soloed, bus: 'main' });
       const trackPeaks: Record<string, number[]> = {};
       for (const t of song?.tracks ?? []) trackPeaks[t.id] = t.peaks;
       return {
@@ -232,8 +300,9 @@ export function createPreviewBackend() {
 
     // ---- Motor: mezcla
     audio_set_track_controls: (a) => {
-      const c = controls.get(a?.trackId) ?? { gain: 1, pan: 0, muted: false, soloed: false };
+      const c = controls.get(a?.trackId) ?? { gain: 1, pan: 0, muted: false, soloed: false, bus: 'main' };
       if (a?.gain != null) c.gain = a.gain;
+      if (a?.bus != null) c.bus = a.bus;
       if (a?.pan != null) c.pan = a.pan;
       if (a?.muted != null) c.muted = a.muted;
       if (a?.soloed != null) c.soloed = a.soloed;
@@ -267,7 +336,24 @@ export function createPreviewBackend() {
         id: 'Altavoces (vista previa)', name: 'Altavoces (vista previa)', host: 'WASAPI', isDefault: true, channels: 2,
         defaultSampleRate: 48000, supportedSampleRates: [44100, 48000, 96000], minBufferSize: 64, maxBufferSize: 4096, sampleFormat: 'f32',
       },
+      {
+        id: 'Interfaz 4 salidas (vista previa)', name: 'Interfaz 4 salidas (vista previa)', host: 'WASAPI', isDefault: false, channels: 4,
+        defaultSampleRate: 48000, supportedSampleRates: [44100, 48000, 96000], minBufferSize: 64, maxBufferSize: 4096, sampleFormat: 'f32',
+      },
     ],
+    audio_get_routing: (a) => routingInfo(a?.deviceName ?? null),
+    audio_set_routing: (a) => {
+      const name = a?.deviceName ?? null;
+      const ch = deviceChannels(name);
+      const cfg = { ...(a?.config as RoutingConfig), custom: true };
+      if (validateRouting(cfg, ch).length === 0) savedRouting.set(name ?? '', cfg);
+      const info = routingInfo(name);
+      return validateRouting(cfg, ch).length === 0 ? info : { ...info, config: cfg, valid: false, issues: validateRouting(cfg, ch) };
+    },
+    audio_reset_routing: (a) => {
+      savedRouting.delete(a?.deviceName ?? '');
+      return routingInfo(a?.deviceName ?? null);
+    },
     audio_reopen_stream: () => null,
     audio_test_tone: () => null,
     audio_get_stats: () => ({
@@ -280,6 +366,11 @@ export function createPreviewBackend() {
     audio_delete_project_cache: () => null,
     audio_check_files_exist: (a) => Object.fromEntries((a?.paths ?? []).map((p: string) => [p, true])),
     desktop_update_check: () => null,
+
+    // ---- Importación: selector de carpeta y escaneo simulados (nombres largos como los de un multitrack real)
+    'plugin:dialog|open': () => 'C:\\Vista previa\\Friend of God',
+    audio_scan_folder: () => scannedFolder(),
+    audio_scan_files: () => scannedFolder(),
   };
 
   const invoke = async <T,>(command: string, args?: Args): Promise<T> => {

@@ -32,7 +32,6 @@ interface TransportDeckProps {
   onChangePitch: (semitones: number) => void;
   onChangeQuantize: (mode: QuantizeMode) => void;
   onToggleClick: () => void;
-  onToggleSplitRouting: () => void;
   onAddMarkerAtPlayhead: () => void;
   onOpenSectionEditor: () => void;
   onCancelQueuedJump?: () => void;
@@ -69,7 +68,6 @@ export const TransportDeck: React.FC<TransportDeckProps> = ({
   onChangePitch,
   onChangeQuantize,
   onToggleClick,
-  onToggleSplitRouting,
 
   onCancelQueuedJump,
 }) => {
@@ -77,7 +75,6 @@ export const TransportDeck: React.FC<TransportDeckProps> = ({
   const queuedSection = project.sections.find((s) => s.id === transport.queuedSectionId);
 
   const currentSetlistIdx = setlistQueue.findIndex((song) => song.id === project.id);
-  const split = project.splitRoutingMode === 'split-mono';
   const notice = transport.mountingProgressText || importStatusText;
   const playLabel = transport.isMountingSong ? 'Cargando…' : transport.isPlaying ? 'Pausar' : 'Reproducir';
 
@@ -179,7 +176,6 @@ export const TransportDeck: React.FC<TransportDeckProps> = ({
           </div>
           <div className="flex flex-wrap gap-1.5">
             <button type="button" onClick={onToggleClick} aria-pressed={project.clickEnabled} className="lt-control">Click</button>
-            <button type="button" onClick={onToggleSplitRouting} aria-pressed={split} className="lt-control" title="Alternar entre estéreo y Split-Mono (L: guía y click · R: pistas)">{split ? 'Split-mono' : 'Estéreo'}</button>
           </div>
         </section>
       </div>

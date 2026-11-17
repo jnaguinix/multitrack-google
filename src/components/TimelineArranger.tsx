@@ -15,6 +15,7 @@ import {
   TransportState,
 } from '../types/project';
 import { audioEngine } from '../audio/audioEngine';
+import { orderTracksForDisplay } from '../utils/instrumentCatalog';
 import { useLiveMeters } from '../audio/liveMeters';
 import { formatMmSs } from './TransportDeck';
 import { isDesktopApp, pickNativeFiles } from '../utils/nativeDialog';
@@ -31,13 +32,14 @@ interface TimelineArrangerProps {
   onToggleTrackSolo: (trackId: string) => void;
   onChangeTrackGain: (trackId: string, gain: number) => void;
   onChangeTrackPan: (trackId: string, pan: number) => void;
-  onChangeTrackBus: (trackId: string, bus: OutputBus) => void;
   onDeleteTrack: (trackId: string) => void;
   onAddStemsToCurrentSong: (files: FileList | File[]) => void;
   onAddNativeStemsToCurrentSong?: (filePaths: string[]) => void;
   onAddMarkerAtPlayhead: () => void;
   onOpenImportModal: () => void;
   onOpenSectionEditor: () => void;
+  onEditTracks?: () => void;
+  onPickInstrument?: (trackId: string) => void;
 }
 
 function gainToDbText(gain: number): string {
@@ -244,15 +246,23 @@ export const TimelineArranger: React.FC<TimelineArrangerProps> = ({
   onToggleTrackMute,
   onToggleTrackSolo,
   onChangeTrackGain,
-  onChangeTrackBus,
   onDeleteTrack,
   onAddStemsToCurrentSong,
   onAddNativeStemsToCurrentSong,
   onAddMarkerAtPlayhead,
   onOpenImportModal,
   onOpenSectionEditor,
+  onEditTracks,
+  onPickInstrument,
 }) => {
   const addStemInputRef = useRef<HTMLInputElement | null>(null);
+  // Quitar una pista exige dos clics (el segundo en 3 s): un roce junto a M/S no debe borrar un stem.
+  const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
+  useEffect(() => {
+    if (!pendingDeleteId) return;
+    const timer = window.setTimeout(() => setPendingDeleteId(null), 3000);
+    return () => window.clearTimeout(timer);
+  }, [pendingDeleteId]);
 
   const secPerBar = (60 / (project.bpm || 120)) * (project.beatsPerBar || 4);
   const totalDurationSec = Math.max(
@@ -448,7 +458,7 @@ export const TimelineArranger: React.FC<TimelineArrangerProps> = ({
           </div>
         ) : (
           <div className="divide-y divide-neutral-800/90">
-            {project.tracks.map((track: TrackChannel) => {
+            {orderTracksForDisplay(project.tracks).map((track: TrackChannel) => {
               const isAudible = anySolo ? track.soloed && !track.muted : !track.muted;
 
               return (
@@ -465,16 +475,19 @@ export const TimelineArranger: React.FC<TimelineArrangerProps> = ({
                           style={{ backgroundColor: track.color }}
                           className="w-3 h-3 rounded-xs shrink-0"
                         />
-                        <span
-                          className={`text-[13px] font-bold truncate ${
+                        <button
+                          type="button"
+                          onClick={() => onPickInstrument?.(track.id)}
+                          disabled={!onPickInstrument}
+                          className={`lt-name-btn text-left text-[13px] font-bold truncate ${
                             isAudible
                               ? 'text-neutral-100'
                               : 'text-neutral-400 line-through'
                           }`}
-                          title={track.name}
+                          title={onPickInstrument ? `${track.name}: cambiar instrumento` : track.name}
                         >
                           {track.name}
-                        </span>
+                        </button>
                       </div>
 
                       <div className="flex items-center gap-1 shrink-0">
@@ -504,11 +517,19 @@ export const TimelineArranger: React.FC<TimelineArrangerProps> = ({
                         </button>
                         <button
                           type="button"
-                          onClick={() => onDeleteTrack(track.id)}
-                          title="Quitar pista de esta canción"
-                          className="w-6 h-5.5 rounded bg-neutral-900 hover:bg-red-500/20 text-neutral-400 hover:text-red-400 flex items-center justify-center transition-colors cursor-pointer"
+                          onClick={() => {
+                            if (pendingDeleteId === track.id) {
+                              setPendingDeleteId(null);
+                              onDeleteTrack(track.id);
+                            } else {
+                              setPendingDeleteId(track.id);
+                            }
+                          }}
+                          title={pendingDeleteId === track.id ? 'Pulsa otra vez para quitar la pista' : 'Quitar pista de esta canción'}
+                          aria-label={pendingDeleteId === track.id ? 'Confirmar: quitar pista' : 'Quitar pista de esta canción'}
+                          className={`${pendingDeleteId === track.id ? 'w-auto px-1.5 bg-red-600 text-white' : 'w-6 bg-neutral-900 hover:bg-red-500/20 text-neutral-400 hover:text-red-400'} h-5.5 rounded flex items-center justify-center gap-1 text-xs font-bold transition-colors cursor-pointer`}
                         >
-                          <Trash2 className="w-3.5 h-3.5" />
+                          {pendingDeleteId === track.id ? <span>¿Quitar?</span> : <Trash2 className="w-3.5 h-3.5" />}
                         </button>
                       </div>
                     </div>
@@ -533,18 +554,6 @@ export const TimelineArranger: React.FC<TimelineArrangerProps> = ({
                         {gainToDbText(track.gain)}
                       </span>
 
-                      <select
-                        aria-label={`Bus de salida para ${track.name}`}
-                        value={track.bus}
-                        onChange={(e) =>
-                          onChangeTrackBus(track.id, e.target.value as OutputBus)
-                        }
-                        className="bg-neutral-900 border border-neutral-700 rounded px-1.5 py-0.5 text-xs font-semibold text-neutral-200 focus:outline-none focus:border-studio-line cursor-pointer ml-auto"
-                      >
-                        <option value="main">Main</option>
-                        <option value="cue-click">Cue</option>
-                        <option value="both">Both</option>
-                      </select>
                     </div>
 
                     {/* Mini VU horizontal (componente hoja: solo él se renderiza con cada lectura) */}
@@ -616,6 +625,18 @@ export const TimelineArranger: React.FC<TimelineArrangerProps> = ({
           >
             Editar Secciones ({project.sections.length})
           </button>
+          {onEditTracks && (
+            <>
+              <span aria-hidden="true">·</span>
+              <button
+                type="button"
+                onClick={onEditTracks}
+                className="text-neutral-200 hover:underline font-semibold cursor-pointer"
+              >
+                Editar Pistas ({project.tracks.length})
+              </button>
+            </>
+          )}
         </div>
       </div>
     </div>

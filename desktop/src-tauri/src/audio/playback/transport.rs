@@ -4,7 +4,8 @@ use std::time::Instant;
 use crate::audio::output::AudioEngineState;
 
 use super::fade::FADE_MS;
-use super::types::{LevelPair, MetersSnapshotDto, PlaybackStateSnapshot, TrackLevel};
+use super::bus::TrackBus;
+use super::types::{LevelPair, MetersSnapshotDto, PlaybackStateSnapshot, TrackControlSnapshot, TrackLevel};
 use super::PlaybackEngine;
 
 impl PlaybackEngine {
@@ -106,6 +107,18 @@ impl PlaybackEngine {
             tokio::time::sleep(std::time::Duration::from_millis((FADE_MS * 1.2) as u64)).await;
         }
 
+        // Si el destino cae fuera del bucle de vamp, el bucle ya no tiene sentido: dejarlo activo devolvería
+        // el reloj al inicio de la sección anterior en cuanto pasara su final.
+        if self.is_vamping.load(Ordering::SeqCst) {
+            let outside = match self.clock_jumps.loop_range() {
+                Some((start, end)) => (target_frame as u64) < start || (target_frame as u64) >= end,
+                None => true,
+            };
+            if outside {
+                self.toggle_vamp(Some(false)).await;
+            }
+        }
+
         // Enter buffering/preparation state. La generación sube antes de activar buffering: el callback
         // no debe ver buffering activo con la generación anterior, o daría por bueno el audio viejo.
         let generation = self.seek_generation.fetch_add(1, Ordering::SeqCst) + 1;
@@ -194,6 +207,23 @@ impl PlaybackEngine {
         let met = self.metronome.lock().unwrap();
         let meters = self.take_meters();
 
+        // `tracks` solo lo tocan las órdenes de control y la carga: el callback usa `stream_tracks`, así que esta
+        // lectura no puede quitarle el turno al hilo de audio. Si hay una orden en curso se omite este sondeo.
+        let track_controls: Vec<TrackControlSnapshot> = match self.tracks.try_lock() {
+            Ok(tracks) => tracks
+                .iter()
+                .map(|trk| TrackControlSnapshot {
+                    track_id: trk.track_id.clone(),
+                    gain: f32::from_bits(trk.gain.load(Ordering::Relaxed)),
+                    pan: trk.pan.load(Ordering::Relaxed),
+                    muted: trk.muted.load(Ordering::Relaxed),
+                    soloed: trk.soloed.load(Ordering::Relaxed),
+                    bus: TrackBus::from_u8(trk.bus.load(Ordering::Relaxed)).name().to_string(),
+                })
+                .collect(),
+            Err(_) => Vec::new(),
+        };
+
         PlaybackStateSnapshot {
             is_playing: self.is_playing.load(Ordering::SeqCst),
             is_buffering: self.is_buffering.load(Ordering::SeqCst),
@@ -223,10 +253,10 @@ impl PlaybackEngine {
             click_gain: met.config.gain,
             click_subdivision: met.config.subdivision,
             quantize_mode: self.quantize_mode.lock().unwrap().clone(),
-            split_mono: self.split_mono.load(Ordering::SeqCst),
             master_gain: f32::from_bits(self.master_gain.load(Ordering::Relaxed)),
             cue_master_gain: f32::from_bits(self.cue_master_gain.load(Ordering::Relaxed)),
             meters,
+            track_controls,
         }
     }
 

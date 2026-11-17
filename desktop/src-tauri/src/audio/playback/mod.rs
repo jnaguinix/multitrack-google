@@ -12,6 +12,7 @@ use crate::audio::cache::{get_project_cache_dir, read_track_metadata};
 use crate::audio::metronome::{MetronomeConfig, MetronomeEngine};
 use crate::audio::output::{get_device_name, resolve_output_config, AudioEngineState, AudioStreamStats};
 use crate::audio::resampler::TrackResampler;
+use crate::audio::routing::{self, music_mono, soft_limit, RouteTable, RoutingSlot};
 
 pub mod fade;
 pub use fade::*;
@@ -27,7 +28,7 @@ pub mod types;
 pub use types::*;
 
 pub mod block;
-pub use block::{buffering_ready, consume_track_block, end_of_song_gain, END_FADE_GUARD_FRAMES};
+pub use block::{apply_pan, buffering_ready, consume_track_block, end_of_song_gain, pan_law, END_FADE_GUARD_FRAMES};
 
 pub mod clock;
 pub use clock::{advance_clock, ClockJumps};
@@ -63,7 +64,10 @@ pub struct PlaybackEngine {
     pub bpm: Arc<AtomicU32>,                           // f32 bits
     pub beats_per_bar: Arc<AtomicU32>,
     pub is_vamping: Arc<AtomicBool>,
-    pub split_mono: Arc<AtomicBool>,
+    /// Matriz de ruteo de salidas del dispositivo abierto (la lee el callback; la escribe `ensure_stream`).
+    pub routing: Arc<RoutingSlot>,
+    /// Dispositivo cuyo ruteo está cargado en `routing` (`None` = aún no se abrió ninguno).
+    pub active_routing_key: Arc<std::sync::Mutex<Option<String>>>,
     pub master_gain: Arc<AtomicU32>,                   // f32 bits
     pub cue_master_gain: Arc<AtomicU32>,               // f32 bits
     pub pitch_semitones: Arc<AtomicI32>,
@@ -100,7 +104,8 @@ impl PlaybackEngine {
             bpm: Arc::new(AtomicU32::new(120.0f32.to_bits())),
             beats_per_bar: Arc::new(AtomicU32::new(4)),
             is_vamping: Arc::new(AtomicBool::new(false)),
-            split_mono: Arc::new(AtomicBool::new(false)),
+            routing: Arc::new(RoutingSlot::new()),
+            active_routing_key: Arc::new(std::sync::Mutex::new(None)),
             master_gain: Arc::new(AtomicU32::new(1.0f32.to_bits())),
             cue_master_gain: Arc::new(AtomicU32::new(0.708f32.to_bits())),
             pitch_semitones: Arc::new(AtomicI32::new(0)),
@@ -656,10 +661,19 @@ impl PlaybackEngine {
         met.config = config;
     }
 
-    pub fn set_split_mono(&self, enabled: bool) {
-        self.split_mono.store(enabled, Ordering::SeqCst);
-        let mut met = self.metronome.lock().unwrap();
-        met.config.split_mono = enabled;
+    /// Cambia el ruteo del dispositivo abierto. No se permite mientras suena: mover canales en pleno directo
+    /// produciría un salto brusco. Si el dispositivo no es el que está abierto, no hay nada que aplicar ahora:
+    /// `ensure_stream` leerá el ruteo guardado al abrirlo.
+    pub fn apply_routing(&self, device_key: &str, table: &RouteTable) -> Result<(), String> {
+        let is_active = self.active_routing_key.lock().unwrap().as_deref() == Some(device_key);
+        if !is_active {
+            return Ok(());
+        }
+        if self.is_playing.load(Ordering::SeqCst) {
+            return Err("Detén la reproducción antes de cambiar el ruteo de salidas.".to_string());
+        }
+        self.routing.store(table);
+        Ok(())
     }
 
     pub fn set_master_gains(&self, master_gain: Option<f32>, cue_master_gain: Option<f32>) {
@@ -749,29 +763,42 @@ impl PlaybackEngine {
     async fn ensure_stream(&self, engine_state: &AudioEngineState) -> Result<(), String> {
         let mut stream_guard = self.stream.lock().await;
         if stream_guard.is_some() {
-            return Ok(());
+            // Un stream abierto cuyo dispositivo se desconectó no sirve: se descarta y se vuelve a resolver
+            // (y a validar) el dispositivo antes de reproducir.
+            if !self.device_disconnected.load(Ordering::SeqCst) {
+                return Ok(());
+            }
+            *stream_guard = None;
+            self.device_disconnected.store(false, Ordering::SeqCst);
         }
 
         let settings = engine_state.current_settings.lock().await.clone();
         let host = cpal::default_host();
         let devices = host.output_devices().map_err(|e| e.to_string())?;
 
-        let mut matched_device = None;
-        if let Some(ref name) = settings.device_name {
-            for d in devices {
-                if get_device_name(&d) == *name {
-                    matched_device = Some(d);
-                    break;
+        // Un dispositivo elegido por el usuario que ya no está conectado NO se sustituye por el predeterminado de
+        // Windows: el click y la guía saldrían por unos altavoces que oye el público.
+        let device = match settings.device_name {
+            Some(ref name) => {
+                let mut found = None;
+                for d in devices {
+                    if get_device_name(&d) == *name {
+                        found = Some(d);
+                        break;
+                    }
                 }
+                found.ok_or_else(|| {
+                    format!(
+                        "El dispositivo de salida «{name}» no está disponible. Conéctalo o elige otro en Ajustes de audio: \
+                         OmniTracks no usa otra salida en su lugar para que el click y la guía no lleguen al público."
+                    )
+                })?
             }
-        }
-
-        let device = match matched_device {
-            Some(d) => d,
             None => host
                 .default_output_device()
                 .ok_or_else(|| "No hay dispositivo de salida predeterminado".to_string())?,
         };
+        let device_name = get_device_name(&device);
 
         let default_config = device
             .default_output_config()
@@ -795,6 +822,21 @@ impl PlaybackEngine {
 
         let channels = default_config.channels() as usize;
 
+        // Ruteo de este dispositivo: el guardado si encaja con su cantidad de canales; si no, la propuesta. Se
+        // valida antes de abrir nada: un ruteo inseguro impide reproducir en lugar de aplicarse a medias.
+        let routing_key = routing::device_key(host.id().name(), &device_name);
+        let resolution = engine_state.routing_store.lock().unwrap().resolve(&routing_key, channels as u16);
+        let issues = routing::validate(&resolution.config, channels as u16);
+        if !issues.is_empty() {
+            return Err(format!(
+                "Ruteo de salidas no válido para «{device_name}» ({channels} salidas): {}",
+                issues.iter().map(|i| i.message()).collect::<Vec<_>>().join(" ")
+            ));
+        }
+        self.routing.store(&RouteTable::from_config(&resolution.config));
+        *self.active_routing_key.lock().unwrap() = Some(routing_key);
+        let routing_arc = Arc::clone(&self.routing);
+
         let stream_tracks_arc = Arc::clone(&self.stream_tracks);
         let is_playing = Arc::clone(&self.is_playing);
         let is_buffering_arc = Arc::clone(&self.is_buffering);
@@ -807,7 +849,6 @@ impl PlaybackEngine {
         let fade_arc = Arc::clone(&self.fade);
         let stats = Arc::clone(&self.stats);
         let metronome_arc = Arc::clone(&self.metronome);
-        let split_mono_arc = Arc::clone(&self.split_mono);
         let master_gain_arc = Arc::clone(&self.master_gain);
         let cue_master_gain_arc = Arc::clone(&self.cue_master_gain);
         let pitch_arc = Arc::clone(&self.pitch_semitones);
@@ -831,6 +872,8 @@ impl PlaybackEngine {
         let mut cue_r = vec![0.0f32; MAX_CALLBACK_FRAMES];
         let mut both_l = vec![0.0f32; MAX_CALLBACK_FRAMES];
         let mut both_r = vec![0.0f32; MAX_CALLBACK_FRAMES];
+        let mut guide_l = vec![0.0f32; MAX_CALLBACK_FRAMES];
+        let mut guide_r = vec![0.0f32; MAX_CALLBACK_FRAMES];
         let mut click_buf = vec![0.0f32; MAX_CALLBACK_FRAMES];
         // Fotograma de la canción donde debería empezar el siguiente bloque si el reloj fuera continuo.
         // Si no coincide (seek, salto de sección, vuelta de vamp) el metrónomo se recoloca.
@@ -877,6 +920,8 @@ impl PlaybackEngine {
                     cue_r[..frames].fill(0.0);
                     both_l[..frames].fill(0.0);
                     both_r[..frames].fill(0.0);
+                    guide_l[..frames].fill(0.0);
+                    guide_r[..frames].fill(0.0);
                     click_buf[..frames].fill(0.0);
 
                     let mut fade = match fade_arc.try_lock() {
@@ -933,10 +978,7 @@ impl PlaybackEngine {
                         }
 
                         let g = f32::from_bits(trk.gain.load(Ordering::Relaxed));
-                        let p = trk.pan.load(Ordering::Relaxed) as f32 / 100.0;
-                        let angle = (p + 1.0) * (std::f32::consts::PI / 4.0);
-                        let pan_l = angle.cos() * g;
-                        let pan_r = angle.sin() * g;
+                        let law = pan_law(trk.pan.load(Ordering::Relaxed) as f32 / 100.0, g);
 
                         if let Ok(mut c) = trk.consumer.try_lock() {
                             let unread_frames = (c.slots() / 2) as u64;
@@ -948,8 +990,7 @@ impl PlaybackEngine {
                             let mut pk_l = 0.0f32;
                             let mut pk_r = 0.0f32;
                             let had_underrun = consume_track_block(&mut c, &trk.skip_frames, track_eof, frames, |f, l, r| {
-                                let tl = l * pan_l;
-                                let tr = r * pan_r;
+                                let (tl, tr) = apply_pan(l, r, law);
                                 pk_l = pk_l.max(tl.abs());
                                 pk_r = pk_r.max(tr.abs());
                                 match track_bus {
@@ -964,6 +1005,10 @@ impl PlaybackEngine {
                                     TrackBus::Both => {
                                         both_l[f] += tl;
                                         both_r[f] += tr;
+                                    }
+                                    TrackBus::Guide => {
+                                        guide_l[f] += tl;
+                                        guide_r[f] += tr;
                                     }
                                 }
                             });
@@ -1019,16 +1064,16 @@ impl PlaybackEngine {
                     }
                     expected_start_frame = if metronome_pending_reposition { u64::MAX } else { end_song_f };
 
-                    let is_split = split_mono_arc.load(Ordering::Relaxed);
                     let master_g = f32::from_bits(master_gain_arc.load(Ordering::Relaxed));
                     let cue_g = f32::from_bits(cue_master_gain_arc.load(Ordering::Relaxed));
+                    // Matriz de ruteo del dispositivo: se copia a la pila una vez por bloque (sin bloqueos ni asignaciones).
+                    let route = routing_arc.load();
 
                     // Medidores de bus: acumuladores locales en la pila; se publican una vez por bloque.
-                    let (mut mk_l, mut mk_r, mut ck_l, mut ck_r, mut ok_l, mut ok_r) =
-                        (0.0f32, 0.0f32, 0.0f32, 0.0f32, 0.0f32, 0.0f32);
+                    let (mut mk_l, mut mk_r, mut ck, mut ok_l, mut ok_r) = (0.0f32, 0.0f32, 0.0f32, 0.0f32, 0.0f32);
                     let mut clk_pk = 0.0f32;
 
-                    // Write into output buffer applying the micro-fade envelope and split-mono / stereo routing
+                    // Fuentes lógicas -> canales de salida según la matriz, con el micro-fundido y el limitador.
                     for f in 0..frames {
                         let end_g = if near_end {
                             end_of_song_gain(start_song_f + (f as f64 * pitch_ratio) as u64, total_song, end_fade_frames)
@@ -1038,51 +1083,30 @@ impl PlaybackEngine {
                         let env_gain = fade.next_gain() * end_g;
                         clk_pk = clk_pk.max((click_buf[f] * cue_g * env_gain).abs());
 
-                        if is_split {
-                            // Split-Mono mode:
-                            // Output channel 0 (Left / In-Ear) -> pure Cue/Click bus: cue tracks + both tracks + click + guide
-                            // Output channel 1 (Right / Main)  -> Main bus tracks + both tracks summed to mono
-                            let cue_sum = ((cue_l[f] + cue_r[f] + both_l[f] + both_r[f]) * 0.5 + click_buf[f]) * cue_g * env_gain;
-                            let main_sum = ((main_l[f] + main_r[f] + both_l[f] + both_r[f]) * 0.5) * master_g * env_gain;
+                        let m_l = (main_l[f] + both_l[f]) * master_g;
+                        let m_r = (main_r[f] + both_r[f]) * master_g;
+                        let click_src = ((cue_l[f] + cue_r[f] + both_l[f] + both_r[f]) * 0.5 + click_buf[f]) * cue_g;
+                        let guide_src = (guide_l[f] + guide_r[f]) * 0.5 * cue_g;
+                        let src = [m_l, m_r, music_mono(m_l, m_r), click_src, guide_src];
 
-                            mk_l = mk_l.max(main_sum.abs());
-                            ck_l = ck_l.max(cue_sum.abs());
-                            ok_l = ok_l.max(cue_sum.abs());
-                            ok_r = ok_r.max(main_sum.abs());
+                        let frame = &mut data[f * channels..(f + 1) * channels];
+                        route.mix_frame(&src, frame);
 
-                            data[f * channels] = cue_sum.clamp(-1.0, 1.0);
-                            if channels > 1 {
-                                data[f * channels + 1] = main_sum.clamp(-1.0, 1.0);
+                        mk_l = mk_l.max((m_l * env_gain).abs());
+                        mk_r = mk_r.max((m_r * env_gain).abs());
+                        ck = ck.max(click_src.abs().max(guide_src.abs()) * env_gain);
+                        for (ch, v) in frame.iter_mut().enumerate() {
+                            let o = *v * env_gain;
+                            if ch == 0 {
+                                ok_l = ok_l.max(o.abs());
+                            } else {
+                                ok_r = ok_r.max(o.abs());
                             }
-                        } else {
-                            // Standard Stereo mode (misma suma que antes, separada por bus para medirla):
-                            let bus_main_l = (main_l[f] + both_l[f]) * master_g;
-                            let bus_main_r = (main_r[f] + both_r[f]) * master_g;
-                            let bus_cue_l = (cue_l[f] + both_l[f] + click_buf[f]) * cue_g;
-                            let bus_cue_r = (cue_r[f] + both_r[f] + click_buf[f]) * cue_g;
-                            let out_l = (bus_main_l + bus_cue_l) * env_gain;
-                            let out_r = (bus_main_r + bus_cue_r) * env_gain;
-
-                            mk_l = mk_l.max((bus_main_l * env_gain).abs());
-                            mk_r = mk_r.max((bus_main_r * env_gain).abs());
-                            ck_l = ck_l.max((bus_cue_l * env_gain).abs());
-                            ck_r = ck_r.max((bus_cue_r * env_gain).abs());
-                            ok_l = ok_l.max(out_l.abs());
-                            ok_r = ok_r.max(out_r.abs());
-
-                            data[f * channels] = out_l.clamp(-1.0, 1.0);
-                            if channels > 1 {
-                                data[f * channels + 1] = out_r.clamp(-1.0, 1.0);
-                            }
+                            *v = soft_limit(o);
                         }
                     }
-                    if is_split {
-                        // En split cada bus sale por un solo canal: se muestra igual en L y R.
-                        mk_r = mk_l;
-                        ck_r = ck_l;
-                    }
                     bus_meters_arc.main.record(mk_l, mk_r);
-                    bus_meters_arc.cue.record(ck_l, ck_r);
+                    bus_meters_arc.cue.record(ck, ck);
                     bus_meters_arc.out.record(ok_l, ok_r);
                     bus_meters_arc.click.record(clk_pk, clk_pk);
 
@@ -1173,6 +1197,8 @@ impl PlaybackEngine {
         let mut cue_r = vec![0.0f32; frames];
         let mut both_l = vec![0.0f32; frames];
         let mut both_r = vec![0.0f32; frames];
+        let mut guide_l = vec![0.0f32; frames];
+        let mut guide_r = vec![0.0f32; frames];
 
         for trk in tracks_guard.iter() {
             let is_muted = trk.muted.load(Ordering::Relaxed);
@@ -1187,17 +1213,13 @@ impl PlaybackEngine {
             }
 
             let g = f32::from_bits(trk.gain.load(Ordering::Relaxed));
-            let p = trk.pan.load(Ordering::Relaxed) as f32 / 100.0;
-            let angle = (p + 1.0) * (std::f32::consts::PI / 4.0);
-            let pan_l = angle.cos() * g;
-            let pan_r = angle.sin() * g;
+            let law = pan_law(trk.pan.load(Ordering::Relaxed) as f32 / 100.0, g);
 
             if let Ok(mut c) = trk.consumer.lock() {
                 let mut pk_l = 0.0f32;
                 let mut pk_r = 0.0f32;
                 consume_track_block(&mut c, &trk.skip_frames, trk.eof.load(Ordering::Relaxed), frames, |f, l, r| {
-                    let tl = l * pan_l;
-                    let tr = r * pan_r;
+                    let (tl, tr) = apply_pan(l, r, law);
                     pk_l = pk_l.max(tl.abs());
                     pk_r = pk_r.max(tr.abs());
                     match track_bus {
@@ -1213,6 +1235,10 @@ impl PlaybackEngine {
                             both_l[f] += tl;
                             both_r[f] += tr;
                         }
+                        TrackBus::Guide => {
+                            guide_l[f] += tl;
+                            guide_r[f] += tr;
+                        }
                     }
                 });
                 trk.meter.record(pk_l, pk_r);
@@ -1221,8 +1247,8 @@ impl PlaybackEngine {
 
         let master_g = f32::from_bits(self.master_gain.load(Ordering::Relaxed));
         let cue_g = f32::from_bits(self.cue_master_gain.load(Ordering::Relaxed));
-        let (mut mk_l, mut mk_r, mut ck_l, mut ck_r, mut ok_l, mut ok_r) =
-            (0.0f32, 0.0f32, 0.0f32, 0.0f32, 0.0f32, 0.0f32);
+        let (mut mk_l, mut mk_r, mut ck, mut ok_l, mut ok_r) = (0.0f32, 0.0f32, 0.0f32, 0.0f32, 0.0f32);
+        let route = self.routing.load();
         let start_song_f = self.current_frame.load(Ordering::Relaxed);
         let sim_pitch_ratio = 2.0f64.powf(self.pitch_semitones.load(Ordering::Relaxed) as f64 / 12.0);
         let total_song = self.total_frames.load(Ordering::Relaxed);
@@ -1238,25 +1264,28 @@ impl PlaybackEngine {
                 1.0
             };
             let env_gain = fade.next_gain() * end_g;
-            let bus_main_l = (main_l[f] + both_l[f]) * master_g;
-            let bus_main_r = (main_r[f] + both_r[f]) * master_g;
-            let bus_cue_l = (cue_l[f] + both_l[f]) * cue_g;
-            let bus_cue_r = (cue_r[f] + both_r[f]) * cue_g;
-            let out_l = (bus_main_l + bus_cue_l) * env_gain;
-            let out_r = (bus_main_r + bus_cue_r) * env_gain;
-            mk_l = mk_l.max((bus_main_l * env_gain).abs());
-            mk_r = mk_r.max((bus_main_r * env_gain).abs());
-            ck_l = ck_l.max((bus_cue_l * env_gain).abs());
-            ck_r = ck_r.max((bus_cue_r * env_gain).abs());
-            ok_l = ok_l.max(out_l.abs());
-            ok_r = ok_r.max(out_r.abs());
-            data[f * channels] = out_l.clamp(-1.0, 1.0);
-            if channels > 1 {
-                data[f * channels + 1] = out_r.clamp(-1.0, 1.0);
+            let m_l = (main_l[f] + both_l[f]) * master_g;
+            let m_r = (main_r[f] + both_r[f]) * master_g;
+            let click_src = ((cue_l[f] + cue_r[f] + both_l[f] + both_r[f]) * 0.5) * cue_g;
+            let guide_src = (guide_l[f] + guide_r[f]) * 0.5 * cue_g;
+            let src = [m_l, m_r, music_mono(m_l, m_r), click_src, guide_src];
+            let frame = &mut data[f * channels..(f + 1) * channels];
+            route.mix_frame(&src, frame);
+            mk_l = mk_l.max((m_l * env_gain).abs());
+            mk_r = mk_r.max((m_r * env_gain).abs());
+            ck = ck.max(click_src.abs().max(guide_src.abs()) * env_gain);
+            for (ch, v) in frame.iter_mut().enumerate() {
+                let o = *v * env_gain;
+                if ch == 0 {
+                    ok_l = ok_l.max(o.abs());
+                } else {
+                    ok_r = ok_r.max(o.abs());
+                }
+                *v = soft_limit(o);
             }
         }
         self.bus_meters.main.record(mk_l, mk_r);
-        self.bus_meters.cue.record(ck_l, ck_r);
+        self.bus_meters.cue.record(ck, ck);
         self.bus_meters.out.record(ok_l, ok_r);
 
         let pitch_st = self.pitch_semitones.load(Ordering::Relaxed);

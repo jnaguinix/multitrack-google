@@ -2,6 +2,7 @@ import { logAsyncError } from '../utils/asyncErrors';
 import { SongProject, SongSection, TrackChannel } from '../types/project';
 import { isDesktopApp } from '../utils/nativeDialog';
 import { deleteDesktopSong, loadDesktopLibrary, saveDesktopSong } from './desktopLibrary';
+import { migrateTrackNames } from '../utils/instrumentCatalog';
 import {
   collectAudioFromDirectory,
   getRegisteredHandle,
@@ -461,8 +462,17 @@ function scheduleProjectSidecarSync(project: SongProject): void {
   sidecarDebounceTimers.set(project.id, timer);
 }
 
+/**
+ * El solo es una escucha momentánea, no parte de la mezcla: guardarlo hacía que al reabrir la canción solo sonara
+ * una pista (y que pareciera que «no suena nada»). Mute, volumen y paneo sí se conservan.
+ */
+export function withoutSolos(project: SongProject): SongProject {
+  if (!project.tracks.some((t) => t.soloed)) return project;
+  return { ...project, tracks: project.tracks.map((t) => (t.soloed ? { ...t, soloed: false } : t)) };
+}
+
 export async function saveProjectToDb(project: SongProject): Promise<void> {
-  const updatedProject = { ...project, updatedAt: Date.now() };
+  const updatedProject = { ...withoutSolos(project), updatedAt: Date.now() };
   if (isDesktopApp()) {
     await saveDesktopSong(updatedProject);
     return;
@@ -485,10 +495,12 @@ export async function loadAllProjectsFromDb(): Promise<SongProject[]> {
     const activeSet = new Set(lib.activeSetlist || []);
     const userProjects: SongProject[] = lib.songs.map((item: any) => {
       const inSet = item.inSetlist !== undefined ? Boolean(item.inSetlist) : activeSet.has(item.id);
-      return normalizeProjectSectionsToTime({
+      const loaded = withoutSolos({
         ...item,
         inSetlist: inSet,
       });
+      // Los nombres de pista de versiones anteriores del catálogo pasan a los actuales (Guitarra, Piano, Pad, Strings).
+      return normalizeProjectSectionsToTime({ ...loaded, tracks: migrateTrackNames(loaded.tracks || []) });
     });
     userProjects.sort((a, b) => b.updatedAt - a.updatedAt);
     return userProjects;

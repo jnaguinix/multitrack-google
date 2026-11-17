@@ -611,45 +611,6 @@
     }
 
     #[test]
-    fn test_split_mono_routing_by_bus() {
-        // cue-click bus strictly ch 0 (Left), main bus strictly ch 1 (Right), both bus in both ch 0 and ch 1
-        let frames = 256;
-        let cue_l = vec![1.0f32; frames];
-        let cue_r = vec![1.0f32; frames];
-        let main_l = vec![0.8f32; frames];
-        let main_r = vec![0.8f32; frames];
-        let both_l = vec![0.5f32; frames];
-        let both_r = vec![0.5f32; frames];
-        let click_buf = vec![0.2f32; frames];
-
-        let master_g = 1.0f32;
-        let cue_g = 1.0f32;
-        let env_gain = 1.0f32;
-
-        let mut data = vec![0.0f32; frames * 2];
-
-        for f in 0..frames {
-            let cue_sum = ((cue_l[f] + cue_r[f] + both_l[f] + both_r[f]) * 0.5 + click_buf[f]) * cue_g * env_gain;
-            let main_sum = ((main_l[f] + main_r[f] + both_l[f] + both_r[f]) * 0.5) * master_g * env_gain;
-
-            data[f * 2] = cue_sum.clamp(-1.0, 1.0);
-            data[f * 2 + 1] = main_sum.clamp(-1.0, 1.0);
-        }
-
-        // Isolated test: only Cue bus playing -> channel 1 (Main) is strictly 0.0
-        let isolated_cue_sum = ((1.0 + 1.0) * 0.5) * cue_g;
-        let isolated_main_sum = 0.0f32;
-        assert_eq!(isolated_main_sum, 0.0, "Cue leaked into Main bus!");
-        assert_eq!(isolated_cue_sum, 1.0);
-
-        // Isolated test: only Main bus playing -> channel 0 (Cue) is strictly 0.0
-        let iso_cue_sum = 0.0f32;
-        let iso_main_sum = ((0.8 + 0.8) * 0.5) * master_g;
-        assert_eq!(iso_cue_sum, 0.0, "Main leaked into Cue bus!");
-        assert_eq!(iso_main_sum, 0.8);
-    }
-
-    #[test]
     fn test_feeder_output_staging_limit() {
         let chunk_frames = 1024usize;
         let staging_limit = chunk_frames * 2; // 2048 samples
@@ -914,6 +875,10 @@
                                 both_l[f] += l * g;
                                 both_r[f] += r * g;
                             }
+                            TrackBus::Guide => {
+                                cue_l[f] += l * g;
+                                cue_r[f] += r * g;
+                            }
                         }
                     }
                 }
@@ -1026,6 +991,10 @@
                             TrackBus::Both => {
                                 both_l[f] += l * g;
                                 both_r[f] += r * g;
+                            }
+                            TrackBus::Guide => {
+                                cue_l[f] += l * g;
+                                cue_r[f] += r * g;
                             }
                         }
                     }
@@ -1638,6 +1607,243 @@
         }
         assert!(vueltas >= 1, "el reloj nunca dio la vuelta del bucle");
         assert!(desajustes <= 4, "el reloj no sigue al audio en las vueltas del vamp ({desajustes} bloques)");
+    }
+
+    // ----- Ruteo de salidas por dispositivo -----
+
+    use crate::audio::routing::{propose as proponer_ruteo, RouteTable, RoutingConfig, Source};
+
+    /// Motor con una pista de música, una de click y otra de guía (cada una con su bus), listo para sonar.
+    async fn motor_con_buses(nombre: &str, ruteo: &RoutingConfig) -> PlaybackEngine {
+        let engine = motor_real(nombre, &[("musica", 288_000), ("click", 288_000), ("guia", 288_000)], vec![seccion("a", 0.0, 6.0)]).await;
+        engine.set_track_controls("guia", None, None, None, None, Some("guide")).await;
+        engine.routing.store(&RouteTable::from_config(ruteo));
+        reproducir(&engine).await;
+        engine
+    }
+
+    /// Pico por canal de salida durante `bloques` bloques de 480 fotogramas.
+    fn picos_por_canal(engine: &PlaybackEngine, canales: usize, bloques: usize) -> Vec<f32> {
+        let mut picos = vec![0.0f32; canales];
+        for _ in 0..bloques {
+            let mut buf = vec![0.0f32; 480 * canales];
+            engine.simulate_callback_block(&mut buf, canales);
+            std::thread::sleep(std::time::Duration::from_millis(5));
+            for (i, v) in buf.iter().enumerate() {
+                let ch = i % canales;
+                picos[ch] = picos[ch].max(v.abs());
+            }
+        }
+        picos
+    }
+
+    #[tokio::test]
+    async fn test_ruteo_4_salidas_separa_musica_click_y_guia_sin_filtraciones() {
+        let engine = motor_con_buses("ruteo4", &proponer_ruteo(4)).await;
+        let todas = picos_por_canal(&engine, 4, 80);
+        assert!(todas[0] > 1e-3 && todas[1] > 1e-3, "música en las salidas 1 y 2: {todas:?}");
+        assert!(todas[2] > 1e-3, "click en la salida 3: {todas:?}");
+        assert!(todas[3] > 1e-3, "guía en la salida 4: {todas:?}");
+
+        // Sin click ni guía: no puede sonar nada en sus salidas (y la música sigue en las suyas).
+        engine.set_track_controls("click", None, None, Some(true), None, None).await;
+        engine.set_track_controls("guia", None, None, Some(true), None, None).await;
+        let solo_musica = picos_por_canal(&engine, 4, 40);
+        assert!(solo_musica[0] > 1e-3 && solo_musica[1] > 1e-3, "{solo_musica:?}");
+        assert_eq!(solo_musica[2], 0.0, "la música se coló en la salida del click");
+        assert_eq!(solo_musica[3], 0.0, "la música se coló en la salida de la guía");
+
+        // Sin música: el click y la guía no pueden aparecer en las salidas musicales.
+        engine.set_track_controls("click", None, None, Some(false), None, None).await;
+        engine.set_track_controls("guia", None, None, Some(false), None, None).await;
+        engine.set_track_controls("musica", None, None, Some(true), None, None).await;
+        let solo_cue = picos_por_canal(&engine, 4, 40);
+        assert_eq!(solo_cue[0], 0.0, "el click/guía se coló en la música izquierda: {solo_cue:?}");
+        assert_eq!(solo_cue[1], 0.0, "el click/guía se coló en la música derecha: {solo_cue:?}");
+        assert!(solo_cue[2] > 1e-3 && solo_cue[3] > 1e-3, "{solo_cue:?}");
+    }
+
+    #[tokio::test]
+    async fn test_ruteo_2_salidas_musica_en_mono_y_click_con_guia_aparte() {
+        let engine = motor_con_buses("ruteo2", &proponer_ruteo(2)).await;
+        let todas = picos_por_canal(&engine, 2, 80);
+        assert!(todas[0] > 1e-3, "música (mono) en la salida 1: {todas:?}");
+        assert!(todas[1] > 1e-3, "click y guía en la salida 2: {todas:?}");
+
+        engine.set_track_controls("click", None, None, Some(true), None, None).await;
+        engine.set_track_controls("guia", None, None, Some(true), None, None).await;
+        let solo_musica = picos_por_canal(&engine, 2, 40);
+        assert!(solo_musica[0] > 1e-3);
+        assert_eq!(solo_musica[1], 0.0, "la música se coló en la salida de click y guía");
+
+        engine.set_track_controls("click", None, None, Some(false), None, None).await;
+        engine.set_track_controls("guia", None, None, Some(false), None, None).await;
+        engine.set_track_controls("musica", None, None, Some(true), None, None).await;
+        let solo_cue = picos_por_canal(&engine, 2, 40);
+        assert_eq!(solo_cue[0], 0.0, "el click o la guía se colaron en la salida de música: {solo_cue:?}");
+        assert!(solo_cue[1] > 1e-3);
+    }
+
+    #[tokio::test]
+    async fn test_ruteo_3_salidas_conserva_el_estereo_de_la_musica() {
+        let engine = motor_con_buses("ruteo3", &proponer_ruteo(3)).await;
+        // La música a la izquierda del todo: solo debe sonar la salida 1; la 2 (música derecha) queda en silencio.
+        engine.set_track_controls("musica", None, Some(-100), None, None, None).await;
+        engine.set_track_controls("click", None, None, Some(true), None, None).await;
+        engine.set_track_controls("guia", None, None, Some(true), None, None).await;
+        let izq = picos_por_canal(&engine, 3, 80);
+        assert!(izq[0] > 1e-3, "{izq:?}");
+        assert!(izq[1] < 1e-5, "con 3 salidas la música izquierda y derecha son salidas distintas, sin downmix: {izq:?}");
+        assert_eq!(izq[2], 0.0);
+
+        engine.set_track_controls("musica", None, Some(100), None, None, None).await;
+        let der = picos_por_canal(&engine, 3, 40);
+        assert!(der[1] > 1e-3 && der[0] < 1e-5, "{der:?}");
+    }
+
+    #[tokio::test]
+    async fn test_ruteo_los_canales_extra_quedan_en_silencio() {
+        let engine = motor_con_buses("ruteo6", &proponer_ruteo(6)).await;
+        let p = picos_por_canal(&engine, 6, 80);
+        assert!(p[0] > 1e-3 && p[2] > 1e-3 && p[3] > 1e-3);
+        assert_eq!(p[4], 0.0, "las salidas libres no reciben nada");
+        assert_eq!(p[5], 0.0);
+    }
+
+    #[tokio::test]
+    async fn test_ruteo_no_se_puede_cambiar_mientras_suena_y_solo_afecta_al_dispositivo_activo() {
+        let engine = motor_con_buses("ruteo_cambio", &proponer_ruteo(2)).await;
+        let tabla4 = RouteTable::from_config(&proponer_ruteo(4));
+        *engine.active_routing_key.lock().unwrap() = Some("wasapi|Interfaz A".to_string());
+
+        // Suena: no se permite cambiar el ruteo del dispositivo activo.
+        assert!(engine.apply_routing("wasapi|Interfaz A", &tabla4).is_err());
+        assert_eq!(engine.routing.load().channels, 2, "el ruteo no debe cambiar mientras suena");
+        // Otro dispositivo: no hay nada que aplicar ahora.
+        assert!(engine.apply_routing("wasapi|Otra", &tabla4).is_ok());
+        assert_eq!(engine.routing.load().channels, 2);
+        // Parado: se aplica.
+        engine.pause().await;
+        assert!(engine.apply_routing("wasapi|Interfaz A", &tabla4).is_ok());
+        assert_eq!(engine.routing.load().channels, 4);
+        assert_eq!(engine.routing.load().gains[3][Source::Guide.index()], 1.0);
+    }
+
+    // ----- Estado de los controles de pista (red de seguridad contra órdenes perdidas) -----
+
+    #[tokio::test]
+    async fn test_el_estado_incluye_los_controles_reales_de_cada_pista() {
+        let engine = motor_real("estado_controles", &[("bajo", 48_000), ("click", 48_000)], vec![seccion("a", 0.0, 1.0)]).await;
+        engine.set_track_controls("bajo", Some(0.5), Some(-40), Some(true), Some(true), None).await;
+        engine.set_track_controls("click", None, None, None, None, Some("guide")).await;
+        let s = engine.get_playback_state();
+        let bajo = s.track_controls.iter().find(|t| t.track_id == "bajo").expect("bajo en el estado");
+        assert_eq!((bajo.gain, bajo.pan, bajo.muted, bajo.soloed), (0.5, -40, true, true));
+        assert_eq!(bajo.bus, "main");
+        let click = s.track_controls.iter().find(|t| t.track_id == "click").expect("click en el estado");
+        assert_eq!(click.bus, "guide", "el bus se informa con el nombre que usa la interfaz");
+        assert!(!click.soloed && !click.muted);
+    }
+
+    // ----- Paneo de pistas estéreo -----
+
+    #[test]
+    fn test_pan_estereo_al_extremo_manda_todo_el_contenido_a_ese_lado() {
+        // Una pista estéreo con contenido distinto en cada canal (un bajo con la guitarra abierta a un lado).
+        let (l, r) = (0.8f32, 0.2f32);
+        let izq = apply_pan(l, r, pan_law(-1.0, 1.0));
+        assert!((izq.0 - 0.5).abs() < 1e-5, "a la izquierda debe sonar la media de L y R, no solo L: {}", izq.0);
+        assert!(izq.1.abs() < 1e-5, "el lado contrario debe quedar en silencio: {}", izq.1);
+        let der = apply_pan(l, r, pan_law(1.0, 1.0));
+        assert!((der.1 - 0.5).abs() < 1e-5 && der.0.abs() < 1e-5, "simétrico a la derecha: {der:?}");
+    }
+
+    #[test]
+    fn test_pan_al_centro_no_toca_la_imagen_estereo() {
+        let law = pan_law(0.0, 1.0);
+        let (tl, tr) = apply_pan(0.9, -0.3, law);
+        let k = std::f32::consts::FRAC_1_SQRT_2;
+        assert!((tl - 0.9 * k).abs() < 1e-5 && (tr + 0.3 * k).abs() < 1e-5, "{tl} {tr}");
+    }
+
+    #[test]
+    fn test_pan_de_una_fuente_mono_es_igual_que_el_paneo_clasico() {
+        // Una pista mono llega con L == R: el cambio no debe alterar su nivel en ningún punto del paneo.
+        for i in -10..=10 {
+            let pan = i as f32 / 10.0;
+            let g = 0.7f32;
+            let law = pan_law(pan, g);
+            let angle = (pan + 1.0) * (std::f32::consts::PI / 4.0);
+            let (tl, tr) = apply_pan(0.6, 0.6, law);
+            assert!((tl - 0.6 * angle.cos() * g).abs() < 1e-5, "pan {pan}: L {tl}");
+            assert!((tr - 0.6 * angle.sin() * g).abs() < 1e-5, "pan {pan}: R {tr}");
+        }
+    }
+
+    #[test]
+    fn test_pan_es_continuo_sin_saltos_al_salir_del_centro() {
+        let (l, r) = (0.8f32, 0.2f32);
+        let mut previo = apply_pan(l, r, pan_law(-1.0, 1.0));
+        for i in -99..=100 {
+            let actual = apply_pan(l, r, pan_law(i as f32 / 100.0, 1.0));
+            assert!((actual.0 - previo.0).abs() < 0.03 && (actual.1 - previo.1).abs() < 0.03, "salto brusco en {i}: {previo:?} -> {actual:?}");
+            previo = actual;
+        }
+    }
+
+    // ----- Auditoría: vamp y saltos tardíos -----
+
+    #[tokio::test]
+    async fn test_encolar_un_salto_con_vamp_activo_desactiva_el_vamp() {
+        let secciones = vec![seccion("a", 0.0, 2.0), seccion("b", 2.0, 4.0), seccion("c", 4.0, 6.0)];
+        let engine = motor_real("aud_vamp_salto", &[("pista", 288_000)], secciones).await;
+        engine.seek(2.5).await;
+        assert!(engine.toggle_vamp(Some(true)).await);
+        assert!(engine.clock_jumps.loop_range().is_some());
+        engine.queue_section_jump("c", Some("section-end")).await.unwrap();
+        assert!(!engine.is_vamping.load(Ordering::SeqCst), "el vamp debe quedar desactivado al saltar");
+        assert!(engine.clock_jumps.loop_range().is_none(), "el reloj no debe conservar el bucle del vamp");
+    }
+
+    #[tokio::test]
+    async fn test_seek_fuera_del_bucle_desactiva_el_vamp_y_dentro_lo_mantiene() {
+        let secciones = vec![seccion("a", 0.0, 2.0), seccion("b", 2.0, 4.0), seccion("c", 4.0, 6.0)];
+        let engine = motor_real("aud_vamp_seek", &[("pista", 288_000)], secciones).await;
+        engine.seek(2.5).await;
+        assert!(engine.toggle_vamp(Some(true)).await);
+        engine.seek(3.0).await; // dentro de B
+        assert!(engine.is_vamping.load(Ordering::SeqCst), "un seek dentro del bucle conserva el vamp");
+        engine.seek(5.0).await; // fuera, en C
+        assert!(!engine.is_vamping.load(Ordering::SeqCst), "un seek fuera del bucle desactiva el vamp");
+        assert!(engine.clock_jumps.loop_range().is_none());
+    }
+
+    #[tokio::test]
+    async fn test_cancelar_un_salto_antes_de_empalmar_lo_cancela() {
+        let secciones = vec![seccion("a", 0.0, 2.0), seccion("b", 2.0, 4.0), seccion("c", 4.0, 6.0)];
+        let engine = motor_real("aud_cancel_ok", &[("pista", 288_000)], secciones).await;
+        engine.seek(0.5).await;
+        engine.queue_section_jump("c", Some("section-end")).await.unwrap();
+        assert!(engine.clock_jumps.jump_pending());
+        engine.cancel_queued_jump().await;
+        assert!(!engine.clock_jumps.jump_pending(), "ningún feeder empalmó: debe poder cancelarse");
+    }
+
+    #[tokio::test]
+    async fn test_cancelar_o_cambiar_un_salto_ya_empalmado_se_rechaza() {
+        let secciones = vec![seccion("a", 0.0, 2.0), seccion("b", 2.0, 4.0), seccion("c", 4.0, 6.0)];
+        let engine = motor_real("aud_cancel_tarde", &[("pista", 288_000)], secciones).await;
+        engine.seek(0.5).await;
+        engine.queue_section_jump("c", Some("section-end")).await.unwrap();
+        // Un feeder ya consumió la petición: el audio de la sección destino está en su anillo.
+        {
+            let tracks = engine.tracks.lock().await;
+            *tracks[0].jump_request.lock().unwrap() = None;
+        }
+        engine.cancel_queued_jump().await;
+        assert!(engine.clock_jumps.jump_pending(), "el salto ya empalmado no puede cancelarse solo en el reloj");
+        assert!(engine.queue_section_jump("a", Some("section-end")).await.is_err(), "no se puede reprogramar un salto ya empalmado");
+        assert!(engine.clock_jumps.jump_pending());
     }
 
     // ----- A03: pista terminada y buffering -----

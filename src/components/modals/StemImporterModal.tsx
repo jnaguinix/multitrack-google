@@ -35,7 +35,8 @@ export const StemImporterModal: React.FC<StemImporterModalProps> = ({
   onImportNativeFolder,
   onImportNativeFiles,
 }) => {
-  const [defaultBus, setDefaultBus] = useState<OutputBus>('main');
+  // Los instrumentos van siempre a Main; solo Click y Guía van a Cue (lo decide el asistente por el instrumento).
+  const defaultBus: OutputBus = 'main';
   const [importMode, setImportMode] = useState<'new-song' | 'current-song'>('new-song');
   const folderInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -92,21 +93,6 @@ export const StemImporterModal: React.FC<StemImporterModalProps> = ({
           <code className="text-neutral-200">.flac</code>,{' '}
           <code className="text-neutral-200">.m4a</code>). La canción se cargará limpia con su duración real en minutos y segundos.
         </p>
-
-        <div>
-          <label className="block text-xs font-medium text-neutral-300 mb-1.5">
-            Bus de Salida Predeterminado
-          </label>
-          <select
-            value={defaultBus}
-            onChange={(e) => setDefaultBus(e.target.value as OutputBus)}
-            className="w-full bg-studio-ground border border-neutral-800 rounded-lg px-3 py-2 text-xs text-neutral-100 focus:outline-none focus:border-studio-line"
-          >
-            <option value="main">Main L/R (Pistas Click/Guide van a Cue automáticamente)</option>
-            <option value="cue-click">Click / Cue Bus (Solo Monitoreo)</option>
-            <option value="both">Ambos Buses (Main + Cue)</option>
-          </select>
-        </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           {/* Multi-file Picker */}

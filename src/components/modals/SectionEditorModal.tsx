@@ -1,5 +1,5 @@
 import React, { useRef, useState } from 'react';
-import { Plus, Trash2, X, Repeat, Flag, Clock } from 'lucide-react';
+import { Plus, Trash2, X, Flag, Clock } from 'lucide-react';
 import { SongProject, SongSection } from '../../types/project';
 import { formatMmSs } from '../TransportDeck';
 
@@ -346,22 +346,6 @@ export const SectionEditorModal: React.FC<SectionEditorModalProps> = ({
                     title="Formato mm:ss o mm:ss.d (ej. 01:45.5)"
                   />
                 </div>
-
-                <button
-                  type="button"
-                  onClick={() =>
-                    handleUpdateField(sec.id, 'vampByDefault', !sec.vampByDefault)
-                  }
-                  title="Repetir esta sección en bucle automáticamente"
-                  className={`px-2 py-1 rounded text-xs font-medium flex items-center gap-1 border cursor-pointer ${
-                    sec.vampByDefault
-                      ? 'bg-amber-500/20 border-amber-500 text-amber-300'
-                      : 'bg-neutral-900 border-neutral-800 text-neutral-400'
-                  }`}
-                >
-                  <Repeat className="w-3 h-3" />
-                  <span>Loop</span>
-                </button>
 
                 <button
                   type="button"

@@ -23,6 +23,9 @@ import {
   parseWavHeaderFast,
 } from '../utils/fileImportHelper';
 import { inferTrackRoleAndColor } from '../utils/trackRole';
+import { effectiveBus, getInstrument, instrumentIdFromName, numberedNames } from '../utils/instrumentCatalog';
+import { loadTrackMapMemory, memoryKey, rememberTrackMapping } from '../utils/trackMapMemory';
+import type { ImportWizardMode, WizardFile, WizardMeta, WizardResult } from '../components/modals/ImportWizardModal';
 import {
   findSongFingerprintMatches,
   FingerprintCandidate,
@@ -55,6 +58,12 @@ interface UseImportFlowDeps {
     } | null>
   >;
   setMissingNativeCache: React.Dispatch<React.SetStateAction<boolean>>;
+  /** Abre el asistente de importación y devuelve lo que el usuario eligió (`null` si cancela). */
+  requestImportWizard: (request: {
+    mode: ImportWizardMode;
+    initialMeta: WizardMeta;
+    files: WizardFile[];
+  }) => Promise<WizardResult | null>;
 }
 
 export function useImportFlow({
@@ -67,6 +76,7 @@ export function useImportFlow({
   setImportStatusText,
   setFingerprintPrompt,
   setMissingNativeCache,
+  requestImportWizard,
 }: UseImportFlowDeps) {
   /**
    * INSTANT NON-BLOCKING STEM & FOLDER IMPORT PIPELINE
@@ -642,36 +652,84 @@ export function useImportFlow({
           }
         }
 
-        const bpm = scanned.bpm || (effectiveMode === 'current-song' ? currentProjectRef.current?.bpm || 120 : 120);
-        const beatsPerBar = 4;
+        // ---- Asistente: el usuario escribe los datos de la canción y elige a mano el instrumento de cada pista.
+        const current = effectiveMode === 'current-song' ? currentProjectRef.current : null;
+        const memory = loadTrackMapMemory();
+        const wizardFiles: WizardFile[] = scanned.files.map((f) => {
+          const prevTrack = existingCandidate?.tracks.find(
+            (pt) => pt.fileName && f.fileName && pt.fileName.toLowerCase() === f.fileName.toLowerCase()
+          );
+          const prevId = prevTrack ? instrumentIdFromName(prevTrack.name) : null;
+          const rememberedId = memory[memoryKey(f.fileName)] ?? null;
+          return {
+            id: f.trackId,
+            fileName: f.fileName,
+            durationSec: f.estDurationSec ?? null,
+            instrumentId: prevId ?? rememberedId,
+            remembered: !prevId && Boolean(rememberedId),
+          };
+        });
+        const wizardMeta: WizardMeta = {
+          title: existingCandidate?.title || current?.title || scanned.title || '',
+          // «Artista Desconocido» es un relleno de la app, no un dato: se deja vacío para que lo escriba el usuario.
+          artist: [existingCandidate?.artist, current?.artist, scanned.artist].find((a) => a && !/^(Artista Desconocido|Sesión Importada)$/i.test(a)) || '',
+          key: existingCandidate?.keySignature || current?.keySignature || scanned.key || 'C Major',
+          bpm: existingCandidate?.bpm || current?.bpm || scanned.bpm || 120,
+          beatsPerBar: existingCandidate?.beatsPerBar || current?.beatsPerBar || 4,
+        };
+        const wizard = await requestImportWizard({
+          mode: effectiveMode === 'new-song' ? 'new-song' : 'add-tracks',
+          initialMeta: wizardMeta,
+          files: wizardFiles,
+        });
+        if (!wizard) return;
+        const meta = wizard.meta;
+        rememberTrackMapping(
+          wizard.rows.map((r, i) => ({ fileName: scanned.files[i].fileName, instrumentId: r.instrumentId }))
+        );
+
+        // Al añadir a una canción que ya tiene pistas, la numeración cuenta también las existentes.
+        const existingTracks = current?.tracks ?? [];
+        const existingIds = existingTracks.map((tr) => instrumentIdFromName(tr.name));
+        const newIds = wizard.rows.map((r) => r.instrumentId);
+        const allNames = numberedNames([...existingIds, ...newIds]);
+        const newNames = allNames.slice(existingTracks.length);
+        const renamedExisting: TrackChannel[] = existingTracks.map((tr, i) =>
+          allNames[i] ? { ...tr, name: allNames[i] as string } : tr
+        );
+
+        const bpm = effectiveMode === 'new-song' ? meta.bpm : current?.bpm || 120;
+        const beatsPerBar = effectiveMode === 'new-song' ? meta.beatsPerBar : current?.beatsPerBar || 4;
         const secPerBar = (60 / bpm) * beatsPerBar;
 
         let maxDurationSec = 0;
-        const initialTracks: TrackChannel[] = scanned.files.map((file, idx) => {
-          const trackLabel = file.trackName;
-          const inferred = inferTrackRoleAndColor(trackLabel, idx);
+        const initialTracks: TrackChannel[] = [];
+        scanned.files.forEach((file, idx) => {
+          const def = getInstrument(wizard.rows[idx].instrumentId);
+          const trackName = newNames[idx];
+          if (!def || !trackName) return; // pista ignorada en el asistente
           const estDuration = file.estDurationSec || 0;
           if (estDuration > maxDurationSec) {
             maxDurationSec = estDuration;
           }
 
-          return {
+          initialTracks.push({
             id: file.trackId,
-            name: trackLabel,
-            role: inferred.role,
-            color: inferred.color,
+            name: trackName,
+            role: def.role,
+            color: def.color,
             gain: 1.0,
             pan: 0,
             muted: false,
             soloed: false,
-            bus: inferred.bus === 'cue-click' ? 'cue-click' : defaultBus,
+            bus: effectiveBus({ name: trackName, role: def.role }),
             peaks: [],
             isCustomAudio: true,
             fileName: file.fileName,
             filePath: file.filePath,
             fileSize: file.fileSize ?? undefined,
             durationSec: estDuration > 0 ? estDuration : undefined,
-          };
+          });
         });
 
         const initialDurationSec = maxDurationSec > 1 ? maxDurationSec : 180;
@@ -707,9 +765,6 @@ export function useImportFlow({
                   pan: prev.pan,
                   muted: prev.muted,
                   soloed: prev.soloed,
-                  bus: prev.bus,
-                  role: prev.role,
-                  color: prev.color,
                   filePath: it.filePath || prev.filePath,
                   fileName: it.fileName || prev.fileName,
                   fileSize: it.fileSize ?? prev.fileSize,
@@ -721,10 +776,12 @@ export function useImportFlow({
 
             newSongProject = {
               ...existingCandidate,
-              title: existingCandidate.isTitleCustom ? existingCandidate.title : (scanned.title || existingCandidate.title),
-              artist: existingCandidate.isTitleCustom ? existingCandidate.artist : (scanned.artist || existingCandidate.artist),
-              keySignature: existingCandidate.isTitleCustom ? existingCandidate.keySignature : (scanned.key || existingCandidate.keySignature),
-              bpm: existingCandidate.isTitleCustom ? existingCandidate.bpm : bpm,
+              title: meta.title,
+              artist: meta.artist,
+              keySignature: meta.key,
+              bpm: meta.bpm,
+              beatsPerBar: meta.beatsPerBar,
+              isTitleCustom: true,
               totalBars: initialBars,
               durationSec: initialDurationSec,
               tracks: mergedTracks,
@@ -747,8 +804,9 @@ export function useImportFlow({
           } else {
             newSongProject = {
               id: targetProjectId,
-              title: scanned.title || 'Nueva Sesión',
-              artist: scanned.artist || 'Sesión Importada',
+              title: meta.title,
+              artist: meta.artist,
+              isTitleCustom: true,
               folderPath: scanned.folderPath,
               folder: 'imported',
               inSetlist: false,
@@ -756,7 +814,7 @@ export function useImportFlow({
               bpm,
               beatsPerBar,
               beatUnit: 4,
-              keySignature: scanned.key || 'C Major',
+              keySignature: meta.key,
               totalBars: initialBars,
               durationSec: initialDurationSec,
               quantizeMode: 'section-end',
@@ -781,13 +839,12 @@ export function useImportFlow({
             saveProjectToDb(newSongProject).catch(logAsyncError('guardar la canción'));
           }
         } else {
-          const current = currentProjectRef.current!;
-          const combinedTracks = [...current.tracks, ...initialTracks];
-          const nextDurationSec = Math.max(current.durationSec || 0, initialDurationSec);
-          const nextTotalBars = Math.max(current.totalBars, initialBars);
+          const combinedTracks = [...renamedExisting, ...initialTracks];
+          const nextDurationSec = Math.max(current!.durationSec || 0, initialDurationSec);
+          const nextTotalBars = Math.max(current!.totalBars, initialBars);
 
           newSongProject = {
-            ...current,
+            ...current!,
             totalBars: nextTotalBars,
             durationSec: nextDurationSec,
             tracks: combinedTracks,
@@ -832,10 +889,13 @@ export function useImportFlow({
         });
         showToast(`"${newSongProject.title}": montada en biblioteca. Decodificando pistas...`);
 
-        const filesToImport = scanned.files.map((f) => ({
-          filePath: f.filePath,
-          trackId: f.trackId,
-        }));
+        const importedIds = new Set(initialTracks.map((tr) => tr.id));
+        const filesToImport = scanned.files
+          .filter((f) => importedIds.has(f.trackId))
+          .map((f) => ({
+            filePath: f.filePath,
+            trackId: f.trackId,
+          }));
 
         invoke('audio_import_tracks', {
           projectId: targetProjectId,

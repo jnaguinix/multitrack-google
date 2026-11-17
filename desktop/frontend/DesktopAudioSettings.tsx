@@ -1,5 +1,8 @@
 import React, { memo, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
+import { logAsyncError } from '../../src/utils/asyncErrors';
+import { AudioRoutingPanel } from './AudioRoutingPanel';
+import { flightRecorder } from '../../src/utils/flightRecorder';
 import {
   Sliders,
   Volume2,
@@ -73,7 +76,6 @@ interface PlaybackStateSnapshot {
   clickGain?: number;
   clickSubdivision?: number;
   quantizeMode?: string;
-  splitMono?: boolean;
   masterGain?: number;
   cueMasterGain?: number;
 }
@@ -95,6 +97,8 @@ const invoke = host.__TAURI__?.core.invoke;
 
 export default memo(function DesktopAudioSettings({ triggerHost }: Props) {
   const dialogRef = useRef<HTMLDialogElement>(null);
+  // El sondeo del estado solo corre con el diálogo abierto: consultar el motor también pone a cero los picos de los medidores.
+  const [isOpen, setIsOpen] = useState(false);
   const [hosts, setHosts] = useState<string[]>(['WASAPI']);
   const [devices, setDevices] = useState<AudioDeviceInfo[]>([]);
   const [selectedHost, setSelectedHost] = useState('WASAPI');
@@ -147,21 +151,35 @@ export default memo(function DesktopAudioSettings({ triggerHost }: Props) {
   });
   const [isNativeLoaded, setIsNativeLoaded] = useState(false);
   const [nativeNotice, setNativeNotice] = useState('');
-  const [isStressTesting, setIsStressTesting] = useState(false);
-  const [stressNotice, setStressNotice] = useState('');
   const [seekInputSec, setSeekInputSec] = useState(0);
   const [isDraggingSeek, setIsDraggingSeek] = useState(false);
-  const [preloadProjectId, setPreloadProjectId] = useState<string>('');
-  const [isPreloading, setIsPreloading] = useState(false);
-  const [switchDurationMs, setSwitchDurationMs] = useState<number | null>(null);
 
   const [loadErrorDetails, setLoadErrorDetails] = useState<string | null>(null);
   const [isGeneratingCache, setIsGeneratingCache] = useState(false);
   const [cacheProgressText, setCacheProgressText] = useState('');
   const [cacheProgressPercent, setCacheProgressPercent] = useState(0);
 
-  const [splitMono, setSplitMono] = useState(() => localStorage.getItem('omnitracks_split_mono') === 'true');
   const [isDiagnosticsOpen, setIsDiagnosticsOpen] = useState(false);
+  const [diagNotice, setDiagNotice] = useState('');
+
+  // Caja negra: los últimos eventos de control y las discrepancias corregidas, listos para pegar en un mensaje.
+  const copyDiagnostic = async () => {
+    const text = flightRecorder.report({
+      navegador: navigator.userAgent,
+      dispositivo: activeDevice?.name,
+      salidas: activeDevice?.channels,
+      reproduciendo: playbackState.isPlaying,
+      posicionSeg: Math.round(playbackState.positionSec * 10) / 10,
+    });
+    try {
+      await navigator.clipboard.writeText(text);
+      setDiagNotice('Diagnóstico copiado: pégalo en un mensaje.');
+    } catch (err) {
+      logAsyncError('copiar el diagnóstico')(err);
+      console.info(text);
+      setDiagNotice('No se pudo copiar; el texto quedó en la consola.');
+    }
+  };
   const [cacheStats, setCacheStats] = useState<{ totalBytes: number; projectCount: number; projectIds: string[] }>({
     totalBytes: 0,
     projectCount: 0,
@@ -289,7 +307,7 @@ export default memo(function DesktopAudioSettings({ triggerHost }: Props) {
 
   useEffect(() => {
     let timer: number | null = null;
-    if (invoke) {
+    if (invoke && isOpen) {
       timer = window.setInterval(async () => {
         try {
           const pb = await invoke<PlaybackStateSnapshot>('audio_get_playback_state');
@@ -315,15 +333,15 @@ export default memo(function DesktopAudioSettings({ triggerHost }: Props) {
           }
           const s = await invoke<AudioStreamStatsSnapshot>('audio_get_stats');
           if (s) setStats(s);
-        } catch {
-          // ignore
+        } catch (err) {
+          logAsyncError('sondeo del estado en Ajustes de audio')(err);
         }
       }, 250);
     }
     return () => {
       if (timer) clearInterval(timer);
     };
-  }, [isDraggingSeek]);
+  }, [isDraggingSeek, isOpen]);
 
   const handleNativeLoad = async () => {
     if (!invoke || !selectedProjectId) return;
@@ -353,7 +371,6 @@ export default memo(function DesktopAudioSettings({ triggerHost }: Props) {
         setSelectedSectionId(currentProj.sections[0].id);
       }
 
-      await invoke('audio_set_split_mono', { enabled: splitMono });
       pollStats();
     } catch (err: any) {
       const errMsg = String(err);
@@ -397,43 +414,6 @@ export default memo(function DesktopAudioSettings({ triggerHost }: Props) {
     }
   };
 
-  const handlePreloadSong = async () => {
-    if (!invoke || !preloadProjectId) return;
-    setIsPreloading(true);
-    setNativeNotice('Precargando siguiente canción...');
-    try {
-      await invoke('audio_preload_project', { projectId: preloadProjectId });
-      const pTitle = songProjects.find((p) => p.id === preloadProjectId)?.title || preloadProjectId;
-      setNativeNotice(`Precargada: ${pTitle}`);
-    } catch (err: any) {
-      const errMsg = `Error precargando: ${String(err)}`;
-      setNativeNotice(errMsg);
-      setLoadErrorDetails(errMsg);
-    } finally {
-      setIsPreloading(false);
-    }
-  };
-
-  const handleSwitchToPreloaded = async () => {
-    if (!invoke) return;
-    setNativeNotice('Cambiando a canción precargada...');
-    const t0 = performance.now();
-    try {
-      const res: any = await invoke('audio_switch_to_preloaded');
-      const dur = Math.round(performance.now() - t0);
-      setSwitchDurationMs(dur);
-      if (res?.projectId) {
-        setSelectedProjectId(res.projectId);
-      }
-      setIsNativeLoaded(true);
-      setNativeNotice(`Cambio instantáneo en ${dur} ms (${res?.trackCount || 0} pistas)`);
-    } catch (err: any) {
-      const errMsg = `Error cambiando a precargada: ${String(err)}`;
-      setNativeNotice(errMsg);
-      setLoadErrorDetails(errMsg);
-    }
-  };
-
   const handlePitchChange = async (st: number) => {
     setPitchSemitones(st);
     if (!invoke) return;
@@ -457,23 +437,10 @@ export default memo(function DesktopAudioSettings({ triggerHost }: Props) {
           beatsPerBar: currentProject?.beatsPerBar || 4,
           subdivision,
           gain,
-          splitMono,
         },
       });
     } catch (err) {
       console.warn('Error configurando metrónomo:', err);
-    }
-  };
-
-  const handleSplitMonoChange = async (enabled: boolean) => {
-    setSplitMono(enabled);
-    localStorage.setItem('omnitracks_split_mono', String(enabled));
-    if (invoke) {
-      try {
-        await invoke('audio_set_split_mono', { enabled });
-      } catch (err) {
-        console.warn('Error cambiando split-mono:', err);
-      }
     }
   };
 
@@ -617,22 +584,6 @@ export default memo(function DesktopAudioSettings({ triggerHost }: Props) {
     }
   };
 
-  const handleStressTest = () => {
-    setIsStressTesting(true);
-    setStressNotice('Probando aislamiento de hilo UI (3s)...');
-    setTimeout(() => {
-      const t0 = performance.now();
-      let operations = 0;
-      while (performance.now() - t0 < 3000) {
-        operations += Math.sqrt(Math.random());
-      }
-      pollStats().then(() => {
-        setIsStressTesting(false);
-        setStressNotice(`Carga completada (${Math.round(operations).toLocaleString()} ops). Comprueba si hubo cortes.`);
-      });
-    }, 60);
-  };
-
   const formatTime = (sec: number) => {
     const m = Math.floor(sec / 60);
     const s = Math.floor(sec % 60);
@@ -640,15 +591,16 @@ export default memo(function DesktopAudioSettings({ triggerHost }: Props) {
     return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}.${ms}`;
   };
 
-  const handleTestTone = async () => {
+  const handleTestTone = async (channel: number = selectedChannel) => {
     if (!invoke || !activeDevice) return;
+    setSelectedChannel(channel);
     setIsPlayingTestTone(true);
-    setStatusNotice(`Tono 440 Hz en Salida ${selectedChannel + 1}...`);
+    setStatusNotice(`Tono 440 Hz en Salida ${channel + 1}...`);
 
     try {
       await invoke<TestToneResult>('audio_test_tone', {
         deviceName: activeDevice.name,
-        channel: selectedChannel,
+        channel,
         frequency: 440.0,
         durationMs: 1200,
       });
@@ -657,7 +609,7 @@ export default memo(function DesktopAudioSettings({ triggerHost }: Props) {
 
       setTimeout(() => {
         setIsPlayingTestTone(false);
-        setStatusNotice(`Tono completado en Salida ${selectedChannel + 1}.`);
+        setStatusNotice(`Tono completado en Salida ${channel + 1}.`);
         void pollStats();
       }, 1250);
     } catch (err) {
@@ -686,35 +638,6 @@ export default memo(function DesktopAudioSettings({ triggerHost }: Props) {
     }
   };
 
-  const isCaseA = Boolean(activeDevice && activeDevice.channels >= 4);
-
-  const isCaseB = (() => {
-    if (isCaseA || !activeDevice || devices.length < 2) return false;
-
-    const pairRegex = /(?:(?:\b(?:out|ch|line|salida)\s*)?(?:[1-9]\s*[-/]\s*[1-9]))/i;
-
-    const getBaseHardwareName = (name: string) => {
-      return name
-        .replace(/\((?:[^)]*?(?:1\/2|3\/4|5\/6|7\/8|1-2|3-4|5-6|7-8|out|ch|line)[^)]*?)\)/gi, '')
-        .replace(/(?:out|line|salida|ch|canales)?\s*[1-9]\s*[-/]\s*[1-9]/gi, '')
-        .replace(/\s+/g, ' ')
-        .trim()
-        .toLowerCase();
-    };
-
-    const activeBase = getBaseHardwareName(activeDevice.name);
-    if (!activeBase || activeBase.length < 3) return false;
-
-    const matchingSiblings = devices.filter((d) => {
-      const dBase = getBaseHardwareName(d.name);
-      return dBase === activeBase && (pairRegex.test(d.name) || pairRegex.test(activeDevice.name));
-    });
-
-    return matchingSiblings.length >= 2;
-  })();
-
-  const isCaseC = !isCaseA && !isCaseB && Boolean(activeDevice && activeDevice.channels === 2);
-
   return (
     <>
       {triggerHost &&
@@ -726,6 +649,7 @@ export default memo(function DesktopAudioSettings({ triggerHost }: Props) {
             title="Audio"
             onClick={() => {
               dialogRef.current?.showModal();
+              setIsOpen(true);
               void loadAudioConfig();
             }}
           >
@@ -737,8 +661,9 @@ export default memo(function DesktopAudioSettings({ triggerHost }: Props) {
       <dialog
         ref={dialogRef}
         id="desktop-audio-dialog"
-        className="fixed inset-0 m-auto z-50 bg-studio-panel border border-neutral-800 rounded-2xl w-full max-w-xl p-5 space-y-3 shadow-2xl backdrop:bg-black/70 text-neutral-100 overflow-hidden"
+        className="fixed inset-0 m-auto z-50 bg-studio-panel border border-neutral-800 rounded-2xl w-full max-w-xl p-5 space-y-3 shadow-2xl backdrop:bg-black/70 text-neutral-100 max-h-[92dvh] overflow-y-auto"
         aria-labelledby="desktop-audio-title"
+        onClose={() => setIsOpen(false)}
         onKeyDown={(e) => e.stopPropagation()}
       >
         {/* 1. Cabecera: título «Audio» y botón de cerrar */}
@@ -804,42 +729,15 @@ export default memo(function DesktopAudioSettings({ triggerHost }: Props) {
           </div>
         )}
 
-        {/* 4. Aviso del caso A, B o C: una sola línea con icono pequeño */}
+        {/* 4. Ruteo de salidas: se propone según los canales independientes del dispositivo y se guarda por dispositivo */}
         {activeDevice && (
-          <div className="flex items-center justify-between text-xs text-neutral-300 min-h-[22px]">
-            {isCaseA && (
-              <div className="flex items-center gap-1.5">
-                <Check size={13} className="text-emerald-400 shrink-0" />
-                <span>Caso A: Dispositivo multicanal unificado ({activeDevice.channels} salidas disponibles).</span>
-              </div>
-            )}
-            {isCaseB && (
-              <div className="flex items-center gap-1.5">
-                <AlertTriangle size={13} className="text-amber-400 shrink-0" />
-                <span>Caso B: Salidas estéreo separadas. Usa ASIO para todas simultáneas.</span>
-              </div>
-            )}
-            {isCaseC && (
-              <>
-                <div className="flex items-center gap-1.5">
-                  <Info size={13} className="text-neutral-400 shrink-0" />
-                  <span>Caso C: Salida estéreo (2 canales).</span>
-                </div>
-                <label className="flex items-center gap-1.5 text-xs text-neutral-300 cursor-pointer select-none ml-auto">
-                  <input
-                    type="checkbox"
-                    checked={splitMono}
-                    onChange={(e) => {
-                      const checked = e.target.checked;
-                      void handleSplitMonoChange(checked);
-                    }}
-                    className="rounded border-neutral-700 bg-neutral-900 text-studio-ink focus:ring-0 cursor-pointer"
-                  />
-                  <span>Split-Mono</span>
-                </label>
-              </>
-            )}
-          </div>
+          <AudioRoutingPanel
+            invoke={invoke}
+            deviceName={activeDevice.name}
+            isPlaying={Boolean(playbackState?.isPlaying)}
+            onTestChannel={(ch) => void handleTestTone(ch)}
+            testingChannel={isPlayingTestTone ? selectedChannel : null}
+          />
         )}
 
         {/* 5. Prueba de salida: en la misma fila, selector de canal y botón «Probar» */}
@@ -859,7 +757,7 @@ export default memo(function DesktopAudioSettings({ triggerHost }: Props) {
             </select>
             <button
               type="button"
-              onClick={() => void handleTestTone()}
+              onClick={() => void handleTestTone(selectedChannel)}
               disabled={isPlayingTestTone}
               className="px-3 py-1 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-neutral-200 text-xs font-medium flex items-center gap-1.5 cursor-pointer disabled:opacity-50 transition-colors shrink-0"
             >
@@ -895,6 +793,17 @@ export default memo(function DesktopAudioSettings({ triggerHost }: Props) {
 
           {isDiagnosticsOpen && (
             <div className="space-y-2 pt-1">
+              {/* Caja negra de los controles de la mezcla */}
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => void copyDiagnostic()}
+                  className="px-3 py-1 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-neutral-200 text-xs font-medium cursor-pointer transition-colors shrink-0"
+                >
+                  Copiar diagnóstico
+                </button>
+                {diagNotice && <span className="text-[11px] text-neutral-400 truncate">{diagNotice}</span>}
+              </div>
               {/* Alerta si el hardware de audio fue desconectado */}
               {playbackState.deviceDisconnected && (
                 <div className="flex items-center justify-between p-2 rounded-lg bg-rose-950/80 border border-rose-800 text-rose-200 text-xs">
@@ -943,66 +852,6 @@ export default memo(function DesktopAudioSettings({ triggerHost }: Props) {
                   {cleanCacheNotice}
                 </div>
               )}
-
-              {/* Fila: Prueba de aislamiento del hilo UI */}
-              <div className="flex items-center justify-between gap-2 p-2 rounded-lg bg-neutral-900/60 border border-neutral-800 text-xs">
-                <span className="text-neutral-400 text-[11px]">Prueba de aislamiento de hilo:</span>
-                <button
-                  type="button"
-                  onClick={handleStressTest}
-                  disabled={isStressTesting}
-                  className="px-2.5 py-1 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-neutral-200 text-[11px] font-medium cursor-pointer disabled:opacity-50 shrink-0"
-                  title="Congela el hilo de la interfaz por 3s para verificar que el audio no sufre ningún corte"
-                >
-                  {isStressTesting ? 'Probando...' : 'Carga pesada UI (3s)'}
-                </button>
-              </div>
-              {stressNotice && (
-                <div className="text-[10px] text-neutral-400 px-1 truncate">
-                  {stressNotice}
-                </div>
-              )}
-
-              {/* Fila: Precarga y conmutación de canción (Setlist) */}
-              <div className="flex items-center gap-2 p-2 rounded-lg bg-neutral-900/60 border border-neutral-800 text-xs">
-                <span className="text-[10px] text-neutral-400 uppercase tracking-wider shrink-0">Precarga:</span>
-                <select
-                  value={preloadProjectId}
-                  onChange={(e) => setPreloadProjectId(e.target.value)}
-                  className="bg-studio-strip border border-studio-line rounded px-2 py-0.5 text-xs text-neutral-200 truncate cursor-pointer flex-1"
-                >
-                  <option value="">Canción a precargar...</option>
-                  {songProjects
-                    .filter((p) => p.id !== selectedProjectId)
-                    .map((p) => (
-                      <option key={p.id} value={p.id}>
-                        {p.title}
-                      </option>
-                    ))}
-                </select>
-                <button
-                  type="button"
-                  onClick={handlePreloadSong}
-                  disabled={!preloadProjectId || isPreloading}
-                  className="px-2.5 py-0.5 rounded bg-neutral-800 hover:bg-neutral-700 text-neutral-200 text-[11px] font-medium cursor-pointer disabled:opacity-40 shrink-0"
-                  title="Precargar pistas de la siguiente canción en memoria/disco"
-                >
-                  {isPreloading ? 'Cargando...' : 'Precargar'}
-                </button>
-                <button
-                  type="button"
-                  onClick={handleSwitchToPreloaded}
-                  className="px-2.5 py-0.5 rounded bg-studio-ink hover:bg-neutral-200 text-studio-ground text-[11px] font-semibold cursor-pointer shrink-0 transition-colors"
-                  title="Cambia a la canción precargada sin latencia y mide duración"
-                >
-                  Cambiar
-                </button>
-                {switchDurationMs != null && (
-                  <span className="font-mono text-[10px] text-emerald-400 shrink-0">
-                    {switchDurationMs} ms
-                  </span>
-                )}
-              </div>
 
               {/* Fila de contadores de telemetría + botón reiniciar */}
               <div className="p-2 rounded-lg bg-studio-strip border border-studio-line text-xs space-y-1.5">
