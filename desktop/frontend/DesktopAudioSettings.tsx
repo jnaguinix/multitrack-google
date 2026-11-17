@@ -98,8 +98,8 @@ export default memo(function DesktopAudioSettings({ triggerHost }: Props) {
     try {
       const s = await invoke<AudioStreamStatsSnapshot>('audio_get_stats');
       if (s) setStats(s);
-    } catch {
-      // ignore
+    } catch (err) {
+      logAsyncError('leer las estadísticas de audio')(err);
     }
   };
 
@@ -109,8 +109,8 @@ export default memo(function DesktopAudioSettings({ triggerHost }: Props) {
       await invoke('audio_reset_stats');
       const s = await invoke<AudioStreamStatsSnapshot>('audio_get_stats');
       if (s) setStats(s);
-    } catch {
-      // ignore
+    } catch (err) {
+      logAsyncError('reiniciar las estadísticas de audio')(err);
     }
   };
 
@@ -150,8 +150,8 @@ export default memo(function DesktopAudioSettings({ triggerHost }: Props) {
       try {
         const projs = await loadAllProjectsFromDb();
         setSongProjects(projs);
-      } catch {
-        // ignore
+      } catch (err) {
+        logAsyncError('leer la biblioteca en Ajustes de audio')(err);
       }
 
       if (savedConfig.deviceName && availableDevices.some((d) => d.name === savedConfig.deviceName)) {
@@ -182,8 +182,9 @@ export default memo(function DesktopAudioSettings({ triggerHost }: Props) {
       setDevices(devList);
       const def = devList.find((d) => d.isDefault) || devList[0];
       if (def) setSelectedDeviceName(def.name);
-    } catch {
-      // ignore
+    } catch (err) {
+      logAsyncError('listar los dispositivos de audio')(err);
+      setStatusNotice(`No se pudieron listar los dispositivos de ${hostName}.`);
     }
   };
 

@@ -4,6 +4,7 @@ import { isContinuousOnly } from '../audio/controlSync';
 import { loadAllProjectsFromDb } from '../storage/projectDb';
 import { projectSaves } from '../storage/projectSaves';
 import { flightRecorder } from '../utils/flightRecorder';
+import { logAsyncError } from '../utils/asyncErrors';
 import { findDuplicateTrackIds } from '../utils/trackIds';
 import type { SongProject } from '../types/project';
 
@@ -37,8 +38,10 @@ export function useProjectPersistence({
         if (!mounted) return;
         setProjects(saved);
         projectsRef.current = saved;
-      } catch {
-        // Keep empty repertoire if IndexedDB unavailable
+      } catch (err) {
+        // La biblioteca queda vacía, pero el fallo no puede pasar en silencio: parecería que se perdieron las canciones.
+        logAsyncError('cargar la biblioteca')(err);
+        showToast('No se pudo cargar la biblioteca. Revisa la consola o reinicia la app.');
       }
     })();
 

@@ -89,8 +89,8 @@ export const AudioDiagnostics: React.FC<Props> = ({ invoke, stats, playbackState
     try {
       const s = await invoke<any>('audio_get_cache_stats');
       if (s) setCacheStats(s);
-    } catch {
-      // ignore
+    } catch (err) {
+      logAsyncError('leer el tamaño de la caché nativa')(err);
     }
   };
 
