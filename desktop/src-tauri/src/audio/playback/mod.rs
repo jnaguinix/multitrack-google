@@ -12,7 +12,7 @@ use crate::audio::cache::{get_project_cache_dir, read_track_metadata};
 use crate::audio::metronome::{MetronomeConfig, MetronomeEngine};
 use crate::audio::output::{get_device_name, resolve_output_config, AudioEngineState, AudioStreamStats};
 use crate::audio::resampler::TrackResampler;
-use crate::audio::routing::{self, music_mono, soft_limit, RouteTable, RoutingSlot, LIMITER_KNEE};
+use crate::audio::routing::{self, RouteTable, RoutingSlot};
 
 pub mod fade;
 pub use fade::*;
@@ -36,9 +36,8 @@ pub use clock::{advance_clock, ClockJumps};
 pub mod jumps;
 pub mod transport;
 
-/// Fotogramas máximos por bloque del callback. Los búferes de mezcla se reservan con este tamaño al abrir la
-/// salida; WASAPI en modo compartido entrega bloques de unos pocos miles como mucho.
-const MAX_CALLBACK_FRAMES: usize = 32_768;
+pub mod callback;
+pub use callback::{BlockMixer, CallbackShared, MAX_CALLBACK_FRAMES};
 
 pub struct PlaybackEngine {
     pub loaded_project_id: TokioMutex<Option<String>>,
@@ -79,6 +78,8 @@ pub struct PlaybackEngine {
     pub device_disconnected: Arc<AtomicBool>,
     /// Picos de los buses Main, Cue y salida (los escribe el hilo de audio).
     pub bus_meters: Arc<BusMeters>,
+    /// Mezclador de `simulate_callback_block` (pruebas): se crea al primer bloque simulado.
+    simulated_mixer: std::sync::Mutex<Option<BlockMixer>>,
 }
 
 
@@ -119,6 +120,7 @@ impl PlaybackEngine {
             preloaded_project_id: TokioMutex::new(None),
             device_disconnected: Arc::new(AtomicBool::new(false)),
             bus_meters: Arc::new(BusMeters::default()),
+            simulated_mixer: std::sync::Mutex::new(None),
         }
     }
 
@@ -879,26 +881,6 @@ impl PlaybackEngine {
         }
         self.routing.store(&RouteTable::from_config(&resolution.config));
         *self.active_routing_key.lock().unwrap() = Some(routing_key);
-        let routing_arc = Arc::clone(&self.routing);
-
-        let stream_tracks_arc = Arc::clone(&self.stream_tracks);
-        let is_playing = Arc::clone(&self.is_playing);
-        let is_buffering_arc = Arc::clone(&self.is_buffering);
-        let buffering_start_arc = Arc::clone(&self.buffering_start_time);
-        let prefill_dur_arc = Arc::clone(&self.last_prefill_duration_ms);
-        let current_frame = Arc::clone(&self.current_frame);
-        let clock_jumps = Arc::clone(&self.clock_jumps);
-        let seek_generation_arc = Arc::clone(&self.seek_generation);
-        let total_frames = Arc::clone(&self.total_frames);
-        let fade_arc = Arc::clone(&self.fade);
-        let stats = Arc::clone(&self.stats);
-        let metronome_arc = Arc::clone(&self.metronome);
-        let master_gain_arc = Arc::clone(&self.master_gain);
-        let cue_master_gain_arc = Arc::clone(&self.cue_master_gain);
-        let monitor_gain_arc = Arc::clone(&self.monitor_gain);
-        let pitch_arc = Arc::clone(&self.pitch_semitones);
-        let vamping_arc = Arc::clone(&self.is_vamping);
-        let bus_meters_arc = Arc::clone(&self.bus_meters);
 
         let dev_disconnected_arc = Arc::clone(&self.device_disconnected);
         let is_playing_arc_err = Arc::clone(&self.is_playing);
@@ -910,320 +892,13 @@ impl PlaybackEngine {
         };
         let stream_config: cpal::StreamConfig = default_config.into();
 
-        // Pre-allocated scratch buffers for callback (avoids heap allocation in audio thread)
-        let mut main_l = vec![0.0f32; MAX_CALLBACK_FRAMES];
-        let mut main_r = vec![0.0f32; MAX_CALLBACK_FRAMES];
-        let mut cue_l = vec![0.0f32; MAX_CALLBACK_FRAMES];
-        let mut cue_r = vec![0.0f32; MAX_CALLBACK_FRAMES];
-        let mut both_l = vec![0.0f32; MAX_CALLBACK_FRAMES];
-        let mut both_r = vec![0.0f32; MAX_CALLBACK_FRAMES];
-        let mut guide_l = vec![0.0f32; MAX_CALLBACK_FRAMES];
-        let mut guide_r = vec![0.0f32; MAX_CALLBACK_FRAMES];
-        let mut mon_l = vec![0.0f32; MAX_CALLBACK_FRAMES];
-        let mut mon_r = vec![0.0f32; MAX_CALLBACK_FRAMES];
-        let mut click_buf = vec![0.0f32; MAX_CALLBACK_FRAMES];
-        // Fotograma de la canción donde debería empezar el siguiente bloque si el reloj fuera continuo.
-        // Si no coincide (seek, salto de sección, vuelta de vamp) el metrónomo se recoloca.
-        let mut expected_start_frame = u64::MAX;
-
+        // Búferes de mezcla preasignados aquí, fuera del hilo de audio (el callback no asigna memoria).
+        let mut mixer = BlockMixer::new(self.callback_shared());
         let stream = device
             .build_output_stream(
                 stream_config,
                 move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
-                    let t0 = Instant::now();
-                    stats.callbacks.fetch_add(1, Ordering::Relaxed);
-
-                    // Silence output if not playing
-                    if !is_playing.load(Ordering::Relaxed) {
-                        data.fill(0.0);
-                        return;
-                    }
-
-                    let tracks_guard = match stream_tracks_arc.try_lock() {
-                        Ok(g) => g,
-                        Err(_) => {
-                            data.fill(0.0);
-                            return;
-                        }
-                    };
-
-                    if tracks_guard.is_empty() {
-                        data.fill(0.0);
-                        return;
-                    }
-
-                    let frames = data.len() / channels;
-
-                    // Los búferes de mezcla se dimensionaron al crear el stream (MAX_CALLBACK_FRAMES): un bloque
-                    // mayor no se procesa (silencio y aviso en las estadísticas) en vez de reasignar aquí (A10).
-                    if frames > MAX_CALLBACK_FRAMES {
-                        data.fill(0.0);
-                        stats.underruns.fetch_add(1, Ordering::Relaxed);
-                        return;
-                    }
-                    main_l[..frames].fill(0.0);
-                    main_r[..frames].fill(0.0);
-                    cue_l[..frames].fill(0.0);
-                    cue_r[..frames].fill(0.0);
-                    both_l[..frames].fill(0.0);
-                    both_r[..frames].fill(0.0);
-                    guide_l[..frames].fill(0.0);
-                    guide_r[..frames].fill(0.0);
-                    mon_l[..frames].fill(0.0);
-                    mon_r[..frames].fill(0.0);
-                    click_buf[..frames].fill(0.0);
-
-                    let mut fade = match fade_arc.try_lock() {
-                        Ok(f) => f,
-                        Err(_) => {
-                            data.fill(0.0);
-                            return;
-                        }
-                    };
-
-                    // Check buffering state BEFORE popping any frames from track consumers
-                    if is_buffering_arc.load(Ordering::SeqCst) {
-                        if !buffering_ready(
-                            &tracks_guard,
-                            seek_generation_arc.load(Ordering::SeqCst),
-                            sample_rate_u32 as u64,
-                        ) {
-                            data.fill(0.0);
-                            return;
-                        } else {
-                            is_buffering_arc.store(false, Ordering::SeqCst);
-                            let dur_ms = if let Ok(mut guard) = buffering_start_arc.try_lock() {
-                                guard.take().map(|t| t.elapsed().as_millis() as u64).unwrap_or(0)
-                            } else {
-                                0
-                            };
-                            prefill_dur_arc.store(dur_ms, Ordering::Relaxed);
-                            stats.min_ring_buffer_level_ms.store(u64::MAX, Ordering::Relaxed);
-                            fade.start_fade_in();
-                        }
-                    }
-
-                    // Check if any track has solo
-                    let any_solo = tracks_guard.iter().any(|t| t.soloed.load(Ordering::Relaxed));
-                    let mut callback_min_track_frames = u64::MAX;
-
-                    for trk in tracks_guard.iter() {
-                        let is_muted = trk.muted.load(Ordering::Relaxed);
-                        let is_solo = trk.soloed.load(Ordering::Relaxed);
-                        let track_bus = TrackBus::from_u8(trk.bus.load(Ordering::Relaxed));
-                        let monitor_on = trk.monitor.load(Ordering::Relaxed);
-                        let split_on = trk.split.load(Ordering::Relaxed);
-                        let solo_silent = any_solo && !is_solo;
-                        // Secuencia dividida: el mute de la pista apaga la música (canal derecho); el click y la guía del canal
-                        // izquierdo tienen su propio mute y volumen (fader Click). Una pista normal nunca tiene `cue_on`.
-                        let music_on = !is_muted && !solo_silent;
-                        let cue_on = split_on && !trk.cue_muted.load(Ordering::Relaxed) && !solo_silent;
-                        let cue_g_trk = f32::from_bits(trk.cue_gain.load(Ordering::Relaxed));
-
-                        if !music_on && !cue_on {
-                            // Una pista silenciada también avanza: se consume (y se resincroniza) igual.
-                            if let Ok(mut c) = trk.consumer.try_lock() {
-                                let unread_frames = (c.slots() / 2) as u64;
-                                if unread_frames < callback_min_track_frames {
-                                    callback_min_track_frames = unread_frames;
-                                }
-                                consume_track_block(&mut c, &trk.skip_frames, trk.eof.load(Ordering::Relaxed), frames, |_, _, _| {});
-                            } else {
-                                trk.skip_frames.fetch_add(frames as u64, Ordering::Relaxed);
-                            }
-                            continue;
-                        }
-
-                        let g = f32::from_bits(trk.gain.load(Ordering::Relaxed));
-                        let law = pan_law(trk.pan.load(Ordering::Relaxed) as f32 / 100.0, g);
-
-                        if let Ok(mut c) = trk.consumer.try_lock() {
-                            let unread_frames = (c.slots() / 2) as u64;
-                            if unread_frames < callback_min_track_frames {
-                                callback_min_track_frames = unread_frames;
-                            }
-
-                            let track_eof = trk.eof.load(Ordering::Relaxed);
-                            let mut pk_l = 0.0f32;
-                            let mut pk_r = 0.0f32;
-                            let had_underrun = consume_track_block(&mut c, &trk.skip_frames, track_eof, frames, |f, l, r| {
-                                if split_on {
-                                    // Canal izquierdo (click y guía) → auriculares; canal derecho (instrumentos) → música.
-                                    if cue_on {
-                                        let cl = l * cue_g_trk;
-                                        cue_l[f] += cl;
-                                        cue_r[f] += cl;
-                                    }
-                                    if music_on {
-                                        let (ml, mr) = apply_pan(r, r, law);
-                                        pk_l = pk_l.max(ml.abs());
-                                        pk_r = pk_r.max(mr.abs());
-                                        main_l[f] += ml;
-                                        main_r[f] += mr;
-                                        if monitor_on {
-                                            mon_l[f] += ml;
-                                            mon_r[f] += mr;
-                                        }
-                                    }
-                                    return;
-                                }
-                                let (tl, tr) = apply_pan(l, r, law);
-                                pk_l = pk_l.max(tl.abs());
-                                pk_r = pk_r.max(tr.abs());
-                                match track_bus {
-                                    TrackBus::Main => {
-                                        main_l[f] += tl;
-                                        main_r[f] += tr;
-                                    }
-                                    TrackBus::CueClick => {
-                                        cue_l[f] += tl;
-                                        cue_r[f] += tr;
-                                    }
-                                    TrackBus::Both => {
-                                        both_l[f] += tl;
-                                        both_r[f] += tr;
-                                    }
-                                    TrackBus::Guide => {
-                                        guide_l[f] += tl;
-                                        guide_r[f] += tr;
-                                    }
-                                }
-                                if monitor_on {
-                                    mon_l[f] += tl;
-                                    mon_r[f] += tr;
-                                }
-                            });
-                            trk.meter.record(pk_l, pk_r);
-                            if had_underrun && !track_eof && !is_buffering_arc.load(Ordering::Relaxed) {
-                                stats.underruns.fetch_add(1, Ordering::Relaxed);
-                            }
-                        } else {
-                            // El transporte tiene el anillo: este bloque no se leyó, la pista queda un bloque
-                            // atrás respecto al reloj y se recupera descartando esa cantidad después.
-                            trk.skip_frames.fetch_add(frames as u64, Ordering::Relaxed);
-                        }
-                    }
-
-                    if callback_min_track_frames != u64::MAX {
-                        let sr = (sample_rate_u32.max(1)) as u64;
-                        let track_level_ms = (callback_min_track_frames * 1000) / sr;
-                        let mut current_min = stats.min_ring_buffer_level_ms.load(Ordering::Relaxed);
-                        while track_level_ms < current_min {
-                            match stats.min_ring_buffer_level_ms.compare_exchange_weak(
-                                current_min,
-                                track_level_ms,
-                                Ordering::Relaxed,
-                                Ordering::Relaxed,
-                            ) {
-                                Ok(_) => break,
-                                Err(actual) => current_min = actual,
-                            }
-                        }
-                    }
-
-                    // Render synthesized click metronome
-                    let start_song_f = current_frame.load(Ordering::Relaxed);
-                    let pitch_st = pitch_arc.load(Ordering::Relaxed);
-                    let pitch_ratio = 2.0f64.powf(pitch_st as f64 / 12.0);
-                    let end_song_f = start_song_f + (frames as f64 * pitch_ratio).round() as u64;
-
-                    // Fundido de 8 ms al final natural de la canción (no en el vamp, que no termina).
-                    let total_song = total_frames.load(Ordering::Relaxed);
-                    let end_fade_frames = fade.fade_frames;
-                    let near_end = !vamping_arc.load(Ordering::Relaxed)
-                        && total_song > 0
-                        && end_song_f + END_FADE_GUARD_FRAMES + end_fade_frames as u64 >= total_song;
-
-                    let mut metronome_pending_reposition = false;
-                    if let Ok(mut met) = metronome_arc.try_lock() {
-                        if start_song_f != expected_start_frame {
-                            met.seek_to_frame(start_song_f, sample_rate_u32);
-                        }
-                        met.render_block(start_song_f, end_song_f, frames, sample_rate_u32, &mut click_buf[..frames]);
-                    } else if start_song_f != expected_start_frame {
-                        metronome_pending_reposition = true;
-                    }
-                    expected_start_frame = if metronome_pending_reposition { u64::MAX } else { end_song_f };
-
-                    let master_g = f32::from_bits(master_gain_arc.load(Ordering::Relaxed));
-                    let cue_g = f32::from_bits(cue_master_gain_arc.load(Ordering::Relaxed));
-                    let monitor_g = f32::from_bits(monitor_gain_arc.load(Ordering::Relaxed));
-                    // Matriz de ruteo del dispositivo: se copia a la pila una vez por bloque (sin bloqueos ni asignaciones).
-                    let route = routing_arc.load();
-
-                    // Medidores de bus: acumuladores locales en la pila; se publican una vez por bloque.
-                    let (mut mk_l, mut mk_r, mut ck, mut ok_l, mut ok_r) = (0.0f32, 0.0f32, 0.0f32, 0.0f32, 0.0f32);
-                    let mut clk_pk = 0.0f32;
-                    // Muestras que tocaron el limitador en este bloque (se publican una vez al final).
-                    let mut limited: u64 = 0;
-
-                    // Fuentes lógicas -> canales de salida según la matriz, con el micro-fundido y el limitador.
-                    for f in 0..frames {
-                        let end_g = if near_end {
-                            end_of_song_gain(start_song_f + (f as f64 * pitch_ratio) as u64, total_song, end_fade_frames)
-                        } else {
-                            1.0
-                        };
-                        let env_gain = fade.next_gain() * end_g;
-                        clk_pk = clk_pk.max((click_buf[f] * cue_g * env_gain).abs());
-
-                        let m_l = (main_l[f] + both_l[f]) * master_g;
-                        let m_r = (main_r[f] + both_r[f]) * master_g;
-                        let click_src = ((cue_l[f] + cue_r[f] + both_l[f] + both_r[f]) * 0.5 + click_buf[f]) * cue_g;
-                        let guide_src = (guide_l[f] + guide_r[f]) * 0.5 * cue_g;
-                        let monitor_src = (mon_l[f] + mon_r[f]) * 0.5 * monitor_g;
-                        let src = [m_l, m_r, music_mono(m_l, m_r), click_src, guide_src, monitor_src];
-
-                        let frame = &mut data[f * channels..(f + 1) * channels];
-                        route.mix_frame(&src, frame);
-
-                        mk_l = mk_l.max((m_l * env_gain).abs());
-                        mk_r = mk_r.max((m_r * env_gain).abs());
-                        ck = ck.max(click_src.abs().max(guide_src.abs()).max(monitor_src.abs()) * env_gain);
-                        for (ch, v) in frame.iter_mut().enumerate() {
-                            let o = *v * env_gain;
-                            if ch == 0 {
-                                ok_l = ok_l.max(o.abs());
-                            } else {
-                                ok_r = ok_r.max(o.abs());
-                            }
-                            limited += (o.abs() > LIMITER_KNEE) as u64;
-                            *v = soft_limit(o);
-                        }
-                    }
-                    if limited > 0 {
-                        stats.limited_samples.fetch_add(limited, Ordering::Relaxed);
-                    }
-                    stats.output_samples.fetch_add((frames * channels) as u64, Ordering::Relaxed);
-                    bus_meters_arc.main.record(mk_l, mk_r);
-                    bus_meters_arc.cue.record(ck, ck);
-                    bus_meters_arc.out.record(ok_l, ok_r);
-                    bus_meters_arc.click.record(clk_pk, clk_pk);
-
-                    let vamping_now = vamping_arc.load(Ordering::Relaxed);
-                    let clock_now = advance_clock(
-                        &current_frame,
-                        &clock_jumps,
-                        (frames as f64 * pitch_ratio).round() as u64,
-                        vamping_now,
-                    );
-                    if clock_now >= total_frames.load(Ordering::Relaxed) && !vamping_now {
-                        is_playing.store(false, Ordering::Relaxed);
-                    }
-
-                    let dur_us = t0.elapsed().as_micros() as u64;
-                    let mut max_us = stats.max_callback_duration_us.load(Ordering::Relaxed);
-                    while dur_us > max_us {
-                        match stats.max_callback_duration_us.compare_exchange_weak(
-                            max_us,
-                            dur_us,
-                            Ordering::Relaxed,
-                            Ordering::Relaxed,
-                        ) {
-                            Ok(_) => break,
-                            Err(actual) => max_us = actual,
-                        }
-                    }
+                    mixer.process(data, channels, sample_rate_u32);
                 },
                 err_fn,
                 None,
@@ -1236,202 +911,39 @@ impl PlaybackEngine {
         Ok(())
     }
 
-    /// Simulates one real-time CPAL audio callback block using the shared `stream_tracks`
-    /// and atomic engine state (used for deterministic multi-song integration testing).
+    /// Los `Arc` del motor que lee el callback de audio (los mismos que cambia el transporte).
+    fn callback_shared(&self) -> CallbackShared {
+        CallbackShared {
+            stream_tracks: Arc::clone(&self.stream_tracks),
+            is_playing: Arc::clone(&self.is_playing),
+            is_buffering: Arc::clone(&self.is_buffering),
+            buffering_start_time: Arc::clone(&self.buffering_start_time),
+            last_prefill_duration_ms: Arc::clone(&self.last_prefill_duration_ms),
+            seek_generation: Arc::clone(&self.seek_generation),
+            current_frame: Arc::clone(&self.current_frame),
+            clock_jumps: Arc::clone(&self.clock_jumps),
+            total_frames: Arc::clone(&self.total_frames),
+            fade: Arc::clone(&self.fade),
+            stats: Arc::clone(&self.stats),
+            metronome: Arc::clone(&self.metronome),
+            master_gain: Arc::clone(&self.master_gain),
+            cue_master_gain: Arc::clone(&self.cue_master_gain),
+            monitor_gain: Arc::clone(&self.monitor_gain),
+            pitch_semitones: Arc::clone(&self.pitch_semitones),
+            is_vamping: Arc::clone(&self.is_vamping),
+            routing: Arc::clone(&self.routing),
+            bus_meters: Arc::clone(&self.bus_meters),
+        }
+    }
+
+    /// Procesa un bloque igual que el callback real de CPAL (el mismo `BlockMixer`), sin abrir ningún
+    /// dispositivo. Lo usan las pruebas de integración para reproducir de forma determinista. El mezclador se
+    /// crea en la primera llamada y se conserva, como el del stream, para que el metrónomo siga el reloj.
     pub fn simulate_callback_block(&self, data: &mut [f32], channels: usize) {
-        let sample_rate_u32 = self.sample_rate.load(Ordering::Relaxed).max(1);
-        self.stats.callbacks.fetch_add(1, Ordering::Relaxed);
-
-        if !self.is_playing.load(Ordering::Relaxed) {
-            data.fill(0.0);
-            return;
-        }
-
-        let tracks_guard = match self.stream_tracks.try_lock() {
-            Ok(g) => g,
-            Err(_) => {
-                data.fill(0.0);
-                return;
-            }
-        };
-
-        if tracks_guard.is_empty() {
-            data.fill(0.0);
-            return;
-        }
-
-        let frames = data.len() / channels.max(1);
-        let mut fade = self.fade.lock().unwrap();
-
-        if self.is_buffering.load(Ordering::SeqCst) {
-            if !buffering_ready(&tracks_guard, self.seek_generation.load(Ordering::SeqCst), sample_rate_u32 as u64) {
-                data.fill(0.0);
-                return;
-            } else {
-                self.is_buffering.store(false, Ordering::SeqCst);
-                let dur_ms = if let Some(t_start) = self.buffering_start_time.lock().unwrap().take() {
-                    t_start.elapsed().as_millis() as u64
-                } else {
-                    0
-                };
-                self.last_prefill_duration_ms.store(dur_ms, Ordering::Relaxed);
-                self.stats.min_ring_buffer_level_ms.store(u64::MAX, Ordering::Relaxed);
-                fade.start_fade_in();
-            }
-        }
-
-        let any_solo = tracks_guard.iter().any(|t| t.soloed.load(Ordering::Relaxed));
-        let mut main_l = vec![0.0f32; frames];
-        let mut main_r = vec![0.0f32; frames];
-        let mut cue_l = vec![0.0f32; frames];
-        let mut cue_r = vec![0.0f32; frames];
-        let mut both_l = vec![0.0f32; frames];
-        let mut both_r = vec![0.0f32; frames];
-        let mut guide_l = vec![0.0f32; frames];
-        let mut guide_r = vec![0.0f32; frames];
-        let mut mon_l = vec![0.0f32; frames];
-        let mut mon_r = vec![0.0f32; frames];
-
-        for trk in tracks_guard.iter() {
-            let is_muted = trk.muted.load(Ordering::Relaxed);
-            let is_solo = trk.soloed.load(Ordering::Relaxed);
-            let track_bus = TrackBus::from_u8(trk.bus.load(Ordering::Relaxed));
-            let monitor_on = trk.monitor.load(Ordering::Relaxed);
-            let split_on = trk.split.load(Ordering::Relaxed);
-            let solo_silent = any_solo && !is_solo;
-            // Secuencia dividida: el mute de la pista apaga la música (canal derecho); el click y la guía del canal
-            // izquierdo tienen su propio mute y volumen (fader Click). Una pista normal nunca tiene `cue_on`.
-            let music_on = !is_muted && !solo_silent;
-            let cue_on = split_on && !trk.cue_muted.load(Ordering::Relaxed) && !solo_silent;
-            let cue_g_trk = f32::from_bits(trk.cue_gain.load(Ordering::Relaxed));
-
-            if !music_on && !cue_on {
-                if let Ok(mut c) = trk.consumer.lock() {
-                    consume_track_block(&mut c, &trk.skip_frames, trk.eof.load(Ordering::Relaxed), frames, |_, _, _| {});
-                }
-                continue;
-            }
-
-            let g = f32::from_bits(trk.gain.load(Ordering::Relaxed));
-            let law = pan_law(trk.pan.load(Ordering::Relaxed) as f32 / 100.0, g);
-
-            if let Ok(mut c) = trk.consumer.lock() {
-                let mut pk_l = 0.0f32;
-                let mut pk_r = 0.0f32;
-                consume_track_block(&mut c, &trk.skip_frames, trk.eof.load(Ordering::Relaxed), frames, |f, l, r| {
-                    if split_on {
-                        // Canal izquierdo (click y guía) → auriculares; canal derecho (instrumentos) → música.
-                        if cue_on {
-                            let cl = l * cue_g_trk;
-                            cue_l[f] += cl;
-                            cue_r[f] += cl;
-                        }
-                        if music_on {
-                            let (ml, mr) = apply_pan(r, r, law);
-                            pk_l = pk_l.max(ml.abs());
-                            pk_r = pk_r.max(mr.abs());
-                            main_l[f] += ml;
-                            main_r[f] += mr;
-                            if monitor_on {
-                                mon_l[f] += ml;
-                                mon_r[f] += mr;
-                            }
-                        }
-                        return;
-                    }
-                    let (tl, tr) = apply_pan(l, r, law);
-                    pk_l = pk_l.max(tl.abs());
-                    pk_r = pk_r.max(tr.abs());
-                    match track_bus {
-                        TrackBus::Main => {
-                            main_l[f] += tl;
-                            main_r[f] += tr;
-                        }
-                        TrackBus::CueClick => {
-                            cue_l[f] += tl;
-                            cue_r[f] += tr;
-                        }
-                        TrackBus::Both => {
-                            both_l[f] += tl;
-                            both_r[f] += tr;
-                        }
-                        TrackBus::Guide => {
-                            guide_l[f] += tl;
-                            guide_r[f] += tr;
-                        }
-                    }
-                    if monitor_on {
-                        mon_l[f] += tl;
-                        mon_r[f] += tr;
-                    }
-                });
-                trk.meter.record(pk_l, pk_r);
-            }
-        }
-
-        let master_g = f32::from_bits(self.master_gain.load(Ordering::Relaxed));
-        let cue_g = f32::from_bits(self.cue_master_gain.load(Ordering::Relaxed));
-        let monitor_g = f32::from_bits(self.monitor_gain.load(Ordering::Relaxed));
-        let (mut mk_l, mut mk_r, mut ck, mut ok_l, mut ok_r) = (0.0f32, 0.0f32, 0.0f32, 0.0f32, 0.0f32);
-        let route = self.routing.load();
-        let start_song_f = self.current_frame.load(Ordering::Relaxed);
-        let sim_pitch_ratio = 2.0f64.powf(self.pitch_semitones.load(Ordering::Relaxed) as f64 / 12.0);
-        let total_song = self.total_frames.load(Ordering::Relaxed);
-        let end_fade_frames = fade.fade_frames;
-        let near_end = !self.is_vamping.load(Ordering::Relaxed)
-            && total_song > 0
-            && start_song_f + (frames as f64 * sim_pitch_ratio).round() as u64 + END_FADE_GUARD_FRAMES + end_fade_frames as u64
-                >= total_song;
-        let mut limited: u64 = 0;
-        for f in 0..frames {
-            let end_g = if near_end {
-                end_of_song_gain(start_song_f + (f as f64 * sim_pitch_ratio) as u64, total_song, end_fade_frames)
-            } else {
-                1.0
-            };
-            let env_gain = fade.next_gain() * end_g;
-            let m_l = (main_l[f] + both_l[f]) * master_g;
-            let m_r = (main_r[f] + both_r[f]) * master_g;
-            let click_src = ((cue_l[f] + cue_r[f] + both_l[f] + both_r[f]) * 0.5) * cue_g;
-            let guide_src = (guide_l[f] + guide_r[f]) * 0.5 * cue_g;
-            let monitor_src = (mon_l[f] + mon_r[f]) * 0.5 * monitor_g;
-            let src = [m_l, m_r, music_mono(m_l, m_r), click_src, guide_src, monitor_src];
-            let frame = &mut data[f * channels..(f + 1) * channels];
-            route.mix_frame(&src, frame);
-            mk_l = mk_l.max((m_l * env_gain).abs());
-            mk_r = mk_r.max((m_r * env_gain).abs());
-            ck = ck.max(click_src.abs().max(guide_src.abs()).max(monitor_src.abs()) * env_gain);
-            for (ch, v) in frame.iter_mut().enumerate() {
-                let o = *v * env_gain;
-                if ch == 0 {
-                    ok_l = ok_l.max(o.abs());
-                } else {
-                    ok_r = ok_r.max(o.abs());
-                }
-                limited += (o.abs() > LIMITER_KNEE) as u64;
-                *v = soft_limit(o);
-            }
-        }
-        if limited > 0 {
-            self.stats.limited_samples.fetch_add(limited, Ordering::Relaxed);
-        }
-        self.stats.output_samples.fetch_add((frames * channels) as u64, Ordering::Relaxed);
-        self.bus_meters.main.record(mk_l, mk_r);
-        self.bus_meters.cue.record(ck, ck);
-        self.bus_meters.out.record(ok_l, ok_r);
-
-        let pitch_st = self.pitch_semitones.load(Ordering::Relaxed);
-        let pitch_ratio = 2.0f64.powf(pitch_st as f64 / 12.0);
-        let vamping_now = self.is_vamping.load(Ordering::Relaxed);
-        let clock_now = advance_clock(
-            &self.current_frame,
-            &self.clock_jumps,
-            (frames as f64 * pitch_ratio).round() as u64,
-            vamping_now,
-        );
-        if clock_now >= self.total_frames.load(Ordering::Relaxed) && !vamping_now {
-            self.is_playing.store(false, Ordering::Relaxed);
-        }
+        let sample_rate = self.sample_rate.load(Ordering::Relaxed).max(1);
+        let mut slot = self.simulated_mixer.lock().unwrap();
+        let mixer = slot.get_or_insert_with(|| BlockMixer::new(self.callback_shared()));
+        mixer.process(data, channels, sample_rate);
     }
 }
 

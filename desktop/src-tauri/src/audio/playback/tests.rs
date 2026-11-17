@@ -1097,8 +1097,17 @@
     }
 
     /// Crea un motor con pistas sintéticas de amplitud constante (L = R = amplitud) en el bus Main.
-    fn engine_con_pistas(amplitudes: &[(&str, f32)], frames: usize) -> PlaybackEngine {
+    /// Motor para las pruebas que simulan bloques del callback. El callback real siempre mezcla el metrónomo
+    /// (su configuración por defecto lo tiene activo), así que aquí arranca apagado: las pruebas que miden niveles,
+    /// ruteo o posición del audio no deben oír un click que no pusieron. Las que miden el click lo activan.
+    fn motor_de_prueba() -> PlaybackEngine {
         let engine = PlaybackEngine::new(Arc::new(AudioStreamStats::default()));
+        engine.metronome.lock().unwrap().config.enabled = false;
+        engine
+    }
+
+    fn engine_con_pistas(amplitudes: &[(&str, f32)], frames: usize) -> PlaybackEngine {
+        let engine = motor_de_prueba();
         let mut active = Vec::new();
         let mut handles = Vec::new();
         for (id, amp) in amplitudes {
@@ -1159,6 +1168,24 @@
         engine.total_frames.store(frames as u64, Ordering::SeqCst);
         engine.is_playing.store(true, Ordering::SeqCst);
         engine
+    }
+
+    /// El bloque que ejecuta el callback real (`BlockMixer::process`) es el mismo que usan las pruebas, así que
+    /// aquí se vigila la regla de tiempo real: con pistas, metrónomo, ruteo y limitador, un bloque no asigna memoria.
+    #[test]
+    fn test_el_bloque_del_callback_no_asigna_memoria() {
+        let engine = engine_con_pistas(&[("a", 0.5), ("b", 0.25)], 16_384);
+        engine.metronome.lock().unwrap().config.enabled = true;
+        let mut buf = vec![0.0f32; 480 * 2];
+        // El primer bloque crea el mezclador (reserva sus búferes, como al abrir el stream); no cuenta.
+        engine.simulate_callback_block(&mut buf, 2);
+        let asignaciones = crate::alloc_probe::count_allocs(|| {
+            for _ in 0..20 {
+                engine.simulate_callback_block(&mut buf, 2);
+            }
+        });
+        assert_eq!(asignaciones, 0, "el callback no debe asignar memoria al mezclar un bloque");
+        assert!(buf.iter().any(|v| v.abs() > 1e-3), "el bloque contado sí llevaba audio");
     }
 
     fn nivel(state: &PlaybackStateSnapshot, id: &str) -> (f32, f32) {
@@ -1241,7 +1268,7 @@
 
     #[test]
     fn test_medidores_click_y_guia_llegan_al_estado() {
-        let engine = PlaybackEngine::new(Arc::new(AudioStreamStats::default()));
+        let engine = motor_de_prueba();
         engine.bus_meters.click.record(0.3, 0.3);
         let s = engine.get_playback_state();
         assert!((s.meters.click.l - 0.3).abs() < 1e-6, "click: {}", s.meters.click.l);
@@ -1326,7 +1353,8 @@
 
     #[tokio::test]
     async fn test_a06_stop_reposiciona_el_metronomo_y_suena_el_primer_pulso() {
-        let engine = PlaybackEngine::new(Arc::new(AudioStreamStats::default()));
+        let engine = motor_de_prueba();
+        engine.metronome.lock().unwrap().config.enabled = true; // estas pruebas miden el metrónomo del motor
         // Reproduce 5 s: el metrónomo avanza hasta el pulso 10.
         assert_eq!(contar_clics(&mut engine.metronome.lock().unwrap(), 0, 240_000, 480), 10);
         engine.stop().await;
@@ -1341,7 +1369,8 @@
 
     #[tokio::test]
     async fn test_a06_seek_atras_reposiciona_el_metronomo() {
-        let engine = PlaybackEngine::new(Arc::new(AudioStreamStats::default()));
+        let engine = motor_de_prueba();
+        engine.metronome.lock().unwrap().config.enabled = true; // estas pruebas miden el metrónomo del motor
         assert_eq!(contar_clics(&mut engine.metronome.lock().unwrap(), 0, 240_000, 480), 10);
         engine.seek(1.0).await; // frame 48 000, justo un pulso
         let mut buf = vec![0.0f32; 480];
@@ -1355,7 +1384,7 @@
 
     #[tokio::test]
     async fn test_a14_si_falla_abrir_la_salida_no_queda_reproduciendo() {
-        let engine = PlaybackEngine::new(Arc::new(AudioStreamStats::default()));
+        let engine = motor_de_prueba();
         let resultado = engine
             .begin_playback(|| async { Err::<(), String>("sin dispositivo".to_string()) })
             .await;
@@ -1422,7 +1451,7 @@
     /// callback se simula con `simulate_callback_block`.
     async fn motor_real(nombre: &str, pistas: &[(&str, usize)], secciones: Vec<NativeSongSection>) -> PlaybackEngine {
         let dir = escribir_cache_rampa(nombre, pistas);
-        let engine = PlaybackEngine::new(Arc::new(AudioStreamStats::default()));
+        let engine = motor_de_prueba();
         engine
             .load_project(&dir, nombre, SR_PRUEBA, Some(120.0), Some(4), Some(secciones), Some("1-bar".to_string()))
             .await
@@ -1793,7 +1822,7 @@
     /// Motor con una sola pista «secuencia» (canal izquierdo `l`, derecho `r`), dividida o no.
     async fn motor_secuencia(nombre: &str, l: i16, r: i16, dividida: bool, ruteo: &RoutingConfig) -> PlaybackEngine {
         let dir = escribir_cache_lr(nombre, &[("secuencia", 288_000, l, r)]);
-        let engine = PlaybackEngine::new(Arc::new(AudioStreamStats::default()));
+        let engine = motor_de_prueba();
         engine
             .load_project(&dir, nombre, SR_PRUEBA, Some(120.0), Some(4), Some(vec![seccion("a", 0.0, 6.0)]), Some("1-bar".to_string()))
             .await
@@ -2174,7 +2203,7 @@
         // Una descarga en curso tiene `loaded_project_id` y pide `tracks`. Si la carga retuviera `tracks`
         // mientras espera `loaded_project_id`, ambas se bloquearían para siempre.
         let dir = escribir_cache_rampa("a05_orden", &[("p", 48_000)]);
-        let engine = Arc::new(PlaybackEngine::new(Arc::new(AudioStreamStats::default())));
+        let engine = Arc::new(motor_de_prueba());
         let loaded_guard = engine.loaded_project_id.lock().await;
 
         let carga = {
@@ -2201,7 +2230,7 @@
     #[tokio::test]
     async fn test_a05_cargas_y_descargas_simultaneas_terminan() {
         let dir = escribir_cache_rampa("a05_stress", &[("p", 48_000)]);
-        let engine = Arc::new(PlaybackEngine::new(Arc::new(AudioStreamStats::default())));
+        let engine = Arc::new(motor_de_prueba());
         let mut tareas = Vec::new();
         for i in 0..8 {
             let engine = Arc::clone(&engine);
@@ -2305,7 +2334,7 @@
     async fn test_clics_pasar_de_una_seccion_a_otra_sin_salto_no_produce_clics() {
         let secciones = vec![seccion("a", 0.0, 2.0), seccion("b", 2.0, 4.0), seccion("c", 4.0, 6.0)];
         let dir = escribir_cache_seno("natural", &[("p", 288_000)]);
-        let engine = PlaybackEngine::new(Arc::new(AudioStreamStats::default()));
+        let engine = motor_de_prueba();
         engine
             .load_project(&dir, "natural", SR_PRUEBA, Some(120.0), Some(4), Some(secciones), Some("section-end".to_string()))
             .await
@@ -2321,7 +2350,7 @@
         for modo in ["1-bar", "section-end"] {
             let secciones = vec![seccion("a", 0.0, 2.0), seccion("b", 2.0, 4.0), seccion("c", 4.0, 6.0)];
             let dir = escribir_cache_seno(&format!("salto_{modo}"), &[("p", 288_000)]);
-            let engine = PlaybackEngine::new(Arc::new(AudioStreamStats::default()));
+            let engine = motor_de_prueba();
             engine
                 .load_project(&dir, &format!("salto_{modo}"), SR_PRUEBA, Some(120.0), Some(4), Some(secciones), Some(modo.to_string()))
                 .await
@@ -2339,7 +2368,7 @@
     async fn test_clics_la_vuelta_del_vamp_no_produce_clics() {
         let secciones = vec![seccion("a", 0.0, 2.0), seccion("b", 2.0, 4.0), seccion("c", 4.0, 6.0)];
         let dir = escribir_cache_seno("vamp", &[("p", 288_000)]);
-        let engine = PlaybackEngine::new(Arc::new(AudioStreamStats::default()));
+        let engine = motor_de_prueba();
         engine
             .load_project(&dir, "vamp", SR_PRUEBA, Some(120.0), Some(4), Some(secciones), Some("section-end".to_string()))
             .await
@@ -2382,7 +2411,7 @@
         // 48 136 fotogramas: el archivo acaba cerca de un pico del seno (sin pasar por cero), como una
         // canción masterizada que se corta de golpe.
         let dir = escribir_cache_seno("final", &[("p", 48_136)]);
-        let engine = PlaybackEngine::new(Arc::new(AudioStreamStats::default()));
+        let engine = motor_de_prueba();
         engine
             .load_project(&dir, "final", SR_PRUEBA, Some(120.0), Some(4), Some(vec![seccion("a", 0.0, 1.0)]), Some("section-end".to_string()))
             .await
@@ -2431,7 +2460,7 @@
     /// Motor con pistas de anillo manual: el test decide qué fotogramas entrega el «feeder» y cuándo.
     /// Devuelve los productores de cada pista.
     fn engine_con_productores(ids: &[&str], capacidad_frames: usize) -> (PlaybackEngine, Vec<rtrb::Producer<f32>>) {
-        let engine = PlaybackEngine::new(Arc::new(AudioStreamStats::default()));
+        let engine = motor_de_prueba();
         let (mut activas, mut handles, mut productores) = (Vec::new(), Vec::new(), Vec::new());
         for id in ids {
             let (prod, cons) = rtrb::RingBuffer::<f32>::new(capacidad_frames * 2);
