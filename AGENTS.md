@@ -34,6 +34,7 @@ Reproductor de multitracks optimizado para cultos y música en vivo. Dispone de 
 - `desktop/src-tauri/src/library/`: Gestión de `library.json`, persistencia atómica y sidecars `omnitracks.project.json` (comandos `library_*`).
 - `desktop/src-tauri/src/lan.rs`: Servidor HTTP/WebSocket local para control remoto desde móviles (músicos y sonidistas) en la LAN (puerto 8765 definido como `const PORT` en `desktop/src-tauri/src/main.rs:14`).
 - `desktop/src-tauri/tests/`: Pruebas de integración de Rust (`lan_protocol.rs`, `verify_manual_flow.rs`, `import_flow.rs`, `benchmark_import.rs`).
+- `scripts/verify-ipc.ts` (`npm run verify:ipc`, también dentro de `npm test`): comprueba sin compilar el contrato interfaz-motor: cada `invoke('x', {…})` contra el `#[tauri::command]` de Rust (existe, nombres y argumentos, enteros), los campos de las respuestas (`PlaybackStateSnapshot`…) y el registro triple de comandos. Un `i32` de Rust con un valor no entero es error salvo que esté en `REVIEWED_INTEGER`. No detecta estado duplicado ni payloads que no son objetos en línea.
 - `docs/AUDITORIA.md`: Guía para auditar el código (orden, reglas, lo ya conocido, formato del informe).
 - `test/`: Pruebas unitarias en Node/TypeScript (`titleCleaning.test.ts`, `trackFingerprint.test.ts`, `nativeCacheGeneration.test.ts`, `meterBallistics.test.ts`, `setlistPlan.test.ts`, `songSearch.test.ts`, `statePoller.test.ts`, `liveMeters.test.ts`).
 
