@@ -101,6 +101,10 @@ pub struct AudioStreamStats {
     pub max_callback_duration_us: AtomicU64,
     pub min_ring_buffer_level_ms: AtomicU64,
     pub max_feeder_block_duration_us: AtomicU64,
+    /// Muestras de salida que pasaron del umbral del limitador (`routing::LIMITER_KNEE`) y se suavizaron.
+    pub limited_samples: AtomicU64,
+    /// Muestras de salida escritas en total (para dar el porcentaje del limitador).
+    pub output_samples: AtomicU64,
 }
 
 impl Default for AudioStreamStats {
@@ -111,6 +115,8 @@ impl Default for AudioStreamStats {
             max_callback_duration_us: AtomicU64::new(0),
             min_ring_buffer_level_ms: AtomicU64::new(u64::MAX),
             max_feeder_block_duration_us: AtomicU64::new(0),
+            limited_samples: AtomicU64::new(0),
+            output_samples: AtomicU64::new(0),
         }
     }
 }
@@ -122,6 +128,8 @@ impl AudioStreamStats {
         self.max_callback_duration_us.store(0, Ordering::Relaxed);
         self.min_ring_buffer_level_ms.store(u64::MAX, Ordering::Relaxed);
         self.max_feeder_block_duration_us.store(0, Ordering::Relaxed);
+        self.limited_samples.store(0, Ordering::Relaxed);
+        self.output_samples.store(0, Ordering::Relaxed);
     }
 }
 
@@ -133,6 +141,8 @@ pub struct AudioStreamStatsSnapshot {
     pub max_callback_duration_us: u64,
     pub min_ring_buffer_level_ms: Option<u64>,
     pub max_feeder_block_duration_us: u64,
+    pub limited_samples: u64,
+    pub output_samples: u64,
 }
 
 pub struct AudioEngineState {
@@ -195,6 +205,8 @@ impl AudioEngineState {
             max_callback_duration_us: self.stats.max_callback_duration_us.load(Ordering::Relaxed),
             min_ring_buffer_level_ms,
             max_feeder_block_duration_us: self.stats.max_feeder_block_duration_us.load(Ordering::Relaxed),
+            limited_samples: self.stats.limited_samples.load(Ordering::Relaxed),
+            output_samples: self.stats.output_samples.load(Ordering::Relaxed),
         }
     }
 

@@ -52,6 +52,8 @@ interface AudioStreamStatsSnapshot {
   maxCallbackDurationUs: number;
   minRingBufferLevelMs?: number | null;
   maxFeederBlockDurationUs?: number;
+  limitedSamples?: number;
+  outputSamples?: number;
 }
 
 interface PlaybackStateSnapshot {
@@ -94,6 +96,25 @@ interface Props {
 
 const host = window as Window & { __TAURI__?: { core: { invoke: Invoke } } };
 const invoke = host.__TAURI__?.core.invoke;
+
+/** Porcentaje de muestras de salida que pasaron por el limitador. */
+function limiterShare(s: AudioStreamStatsSnapshot): number | null {
+  if (!s.outputSamples) return null;
+  return ((s.limitedSamples ?? 0) / s.outputSamples) * 100;
+}
+
+function limiterLabel(s: AudioStreamStatsSnapshot): string {
+  const share = limiterShare(s);
+  if (share == null) return '—';
+  if (share === 0) return '0 %';
+  return share < 0.01 ? '< 0,01 %' : `${share.toLocaleString('es', { maximumFractionDigits: 2 })} %`;
+}
+
+function limiterTone(s: AudioStreamStatsSnapshot): string {
+  const share = limiterShare(s);
+  if (!share) return 'text-emerald-400';
+  return share < 0.1 ? 'text-amber-300' : 'text-rose-400 font-bold';
+}
 
 export default memo(function DesktopAudioSettings({ triggerHost }: Props) {
   const dialogRef = useRef<HTMLDialogElement>(null);
@@ -856,7 +877,7 @@ export default memo(function DesktopAudioSettings({ triggerHost }: Props) {
               {/* Fila de contadores de telemetría + botón reiniciar */}
               <div className="p-2 rounded-lg bg-studio-strip border border-studio-line text-xs space-y-1.5">
                 <div className="flex items-center justify-between">
-                  <div className="grid grid-cols-3 sm:grid-cols-6 gap-2 flex-1 text-[10px]">
+                  <div className="grid grid-cols-3 sm:grid-cols-7 gap-2 flex-1 text-[10px]">
                     <div>
                       <span className="text-neutral-400 uppercase tracking-wider block">Callbacks</span>
                       <span className="font-mono text-neutral-200 text-xs">{stats.callbacks.toLocaleString()}</span>
@@ -886,6 +907,10 @@ export default memo(function DesktopAudioSettings({ triggerHost }: Props) {
                       <span className="font-mono text-emerald-400 text-xs">
                         {stats.minRingBufferLevelMs != null ? `${stats.minRingBufferLevelMs} ms` : '—'}
                       </span>
+                    </div>
+                    <div title="Parte del audio de salida que pasó por el limitador (picos suavizados). Debería quedar en 0 %; si sube, baja el volumen de las pistas o el Main.">
+                      <span className="text-neutral-400 uppercase tracking-wider block">Limitador</span>
+                      <span className={`font-mono text-xs ${limiterTone(stats)}`}>{limiterLabel(stats)}</span>
                     </div>
                     <div>
                       <span className="text-neutral-400 uppercase tracking-wider block">Prefill</span>

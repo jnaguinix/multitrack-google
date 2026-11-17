@@ -1693,6 +1693,24 @@
     }
 
     #[tokio::test]
+    async fn test_el_contador_del_limitador_solo_sube_cuando_actua() {
+        let engine = motor_con_buses("limitador", &proponer_ruteo(2)).await;
+        engine.stats.reset();
+        let p = picos_por_canal(&engine, 2, 80);
+        assert!(p[1] > 1e-3, "suena la música: {p:?}");
+        // Solo cuenta los bloques que llegaron a mezclarse (los de espera de búfer salen en silencio antes).
+        let escritas = engine.stats.output_samples.load(Ordering::Relaxed);
+        assert!(escritas > 0 && escritas % 2 == 0, "cuenta las muestras de salida mezcladas: {escritas}");
+        assert_eq!(engine.stats.limited_samples.load(Ordering::Relaxed), 0, "a nivel normal el limitador no actúa");
+
+        // Fader de la música muy arriba: la salida pasa del umbral y el contador lo registra.
+        engine.set_track_controls("musica", Some(20.0), None, None, None, None).await;
+        let p = picos_por_canal(&engine, 2, 40);
+        assert!(p[1] <= 1.0, "el limitador evita el recorte duro: {p:?}");
+        assert!(engine.stats.limited_samples.load(Ordering::Relaxed) > 0, "el contador registra cuando el limitador actúa");
+    }
+
+    #[tokio::test]
     async fn test_ruteo_3_salidas_conserva_el_estereo_de_la_musica() {
         let engine = motor_con_buses("ruteo3", &proponer_ruteo(3)).await;
         // La música a la izquierda del todo: solo debe sonar la salida 1; la 2 (música derecha) queda en silencio.

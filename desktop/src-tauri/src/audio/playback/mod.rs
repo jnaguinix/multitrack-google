@@ -12,7 +12,7 @@ use crate::audio::cache::{get_project_cache_dir, read_track_metadata};
 use crate::audio::metronome::{MetronomeConfig, MetronomeEngine};
 use crate::audio::output::{get_device_name, resolve_output_config, AudioEngineState, AudioStreamStats};
 use crate::audio::resampler::TrackResampler;
-use crate::audio::routing::{self, music_mono, soft_limit, RouteTable, RoutingSlot};
+use crate::audio::routing::{self, music_mono, soft_limit, RouteTable, RoutingSlot, LIMITER_KNEE};
 
 pub mod fade;
 pub use fade::*;
@@ -1154,6 +1154,8 @@ impl PlaybackEngine {
                     // Medidores de bus: acumuladores locales en la pila; se publican una vez por bloque.
                     let (mut mk_l, mut mk_r, mut ck, mut ok_l, mut ok_r) = (0.0f32, 0.0f32, 0.0f32, 0.0f32, 0.0f32);
                     let mut clk_pk = 0.0f32;
+                    // Muestras que tocaron el limitador en este bloque (se publican una vez al final).
+                    let mut limited: u64 = 0;
 
                     // Fuentes lógicas -> canales de salida según la matriz, con el micro-fundido y el limitador.
                     for f in 0..frames {
@@ -1185,9 +1187,14 @@ impl PlaybackEngine {
                             } else {
                                 ok_r = ok_r.max(o.abs());
                             }
+                            limited += (o.abs() > LIMITER_KNEE) as u64;
                             *v = soft_limit(o);
                         }
                     }
+                    if limited > 0 {
+                        stats.limited_samples.fetch_add(limited, Ordering::Relaxed);
+                    }
+                    stats.output_samples.fetch_add((frames * channels) as u64, Ordering::Relaxed);
                     bus_meters_arc.main.record(mk_l, mk_r);
                     bus_meters_arc.cue.record(ck, ck);
                     bus_meters_arc.out.record(ok_l, ok_r);
@@ -1375,6 +1382,7 @@ impl PlaybackEngine {
             && total_song > 0
             && start_song_f + (frames as f64 * sim_pitch_ratio).round() as u64 + END_FADE_GUARD_FRAMES + end_fade_frames as u64
                 >= total_song;
+        let mut limited: u64 = 0;
         for f in 0..frames {
             let end_g = if near_end {
                 end_of_song_gain(start_song_f + (f as f64 * sim_pitch_ratio) as u64, total_song, end_fade_frames)
@@ -1400,9 +1408,14 @@ impl PlaybackEngine {
                 } else {
                     ok_r = ok_r.max(o.abs());
                 }
+                limited += (o.abs() > LIMITER_KNEE) as u64;
                 *v = soft_limit(o);
             }
         }
+        if limited > 0 {
+            self.stats.limited_samples.fetch_add(limited, Ordering::Relaxed);
+        }
+        self.stats.output_samples.fetch_add((frames * channels) as u64, Ordering::Relaxed);
         self.bus_meters.main.record(mk_l, mk_r);
         self.bus_meters.cue.record(ck, ck);
         self.bus_meters.out.record(ok_l, ok_r);
