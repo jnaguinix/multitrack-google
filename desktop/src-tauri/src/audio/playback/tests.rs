@@ -1729,6 +1729,22 @@
         assert_eq!(engine.routing.load().gains[3][Source::Guide.index()], 1.0);
     }
 
+    // ----- Estado de los controles de pista (red de seguridad contra órdenes perdidas) -----
+
+    #[tokio::test]
+    async fn test_el_estado_incluye_los_controles_reales_de_cada_pista() {
+        let engine = motor_real("estado_controles", &[("bajo", 48_000), ("click", 48_000)], vec![seccion("a", 0.0, 1.0)]).await;
+        engine.set_track_controls("bajo", Some(0.5), Some(-40), Some(true), Some(true), None).await;
+        engine.set_track_controls("click", None, None, None, None, Some("guide")).await;
+        let s = engine.get_playback_state();
+        let bajo = s.track_controls.iter().find(|t| t.track_id == "bajo").expect("bajo en el estado");
+        assert_eq!((bajo.gain, bajo.pan, bajo.muted, bajo.soloed), (0.5, -40, true, true));
+        assert_eq!(bajo.bus, "main");
+        let click = s.track_controls.iter().find(|t| t.track_id == "click").expect("click en el estado");
+        assert_eq!(click.bus, "guide", "el bus se informa con el nombre que usa la interfaz");
+        assert!(!click.soloed && !click.muted);
+    }
+
     // ----- Paneo de pistas estéreo -----
 
     #[test]

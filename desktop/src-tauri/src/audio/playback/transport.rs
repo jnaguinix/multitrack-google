@@ -4,7 +4,8 @@ use std::time::Instant;
 use crate::audio::output::AudioEngineState;
 
 use super::fade::FADE_MS;
-use super::types::{LevelPair, MetersSnapshotDto, PlaybackStateSnapshot, TrackLevel};
+use super::bus::TrackBus;
+use super::types::{LevelPair, MetersSnapshotDto, PlaybackStateSnapshot, TrackControlSnapshot, TrackLevel};
 use super::PlaybackEngine;
 
 impl PlaybackEngine {
@@ -206,6 +207,23 @@ impl PlaybackEngine {
         let met = self.metronome.lock().unwrap();
         let meters = self.take_meters();
 
+        // `tracks` solo lo tocan las órdenes de control y la carga: el callback usa `stream_tracks`, así que esta
+        // lectura no puede quitarle el turno al hilo de audio. Si hay una orden en curso se omite este sondeo.
+        let track_controls: Vec<TrackControlSnapshot> = match self.tracks.try_lock() {
+            Ok(tracks) => tracks
+                .iter()
+                .map(|trk| TrackControlSnapshot {
+                    track_id: trk.track_id.clone(),
+                    gain: f32::from_bits(trk.gain.load(Ordering::Relaxed)),
+                    pan: trk.pan.load(Ordering::Relaxed),
+                    muted: trk.muted.load(Ordering::Relaxed),
+                    soloed: trk.soloed.load(Ordering::Relaxed),
+                    bus: TrackBus::from_u8(trk.bus.load(Ordering::Relaxed)).name().to_string(),
+                })
+                .collect(),
+            Err(_) => Vec::new(),
+        };
+
         PlaybackStateSnapshot {
             is_playing: self.is_playing.load(Ordering::SeqCst),
             is_buffering: self.is_buffering.load(Ordering::SeqCst),
@@ -238,6 +256,7 @@ impl PlaybackEngine {
             master_gain: f32::from_bits(self.master_gain.load(Ordering::Relaxed)),
             cue_master_gain: f32::from_bits(self.cue_master_gain.load(Ordering::Relaxed)),
             meters,
+            track_controls,
         }
     }
 

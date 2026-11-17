@@ -8,6 +8,16 @@ pub enum TrackBus {
 }
 
 impl TrackBus {
+    /// Nombre con el que la interfaz reconoce el bus (el mismo que acepta `from_str`).
+    pub fn name(self) -> &'static str {
+        match self {
+            TrackBus::Main => "main",
+            TrackBus::CueClick => "click",
+            TrackBus::Both => "both",
+            TrackBus::Guide => "guide",
+        }
+    }
+
     pub fn from_u8(val: u8) -> Self {
         match val {
             1 => TrackBus::CueClick,

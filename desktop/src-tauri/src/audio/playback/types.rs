@@ -205,4 +205,21 @@ pub struct PlaybackStateSnapshot {
     pub cue_master_gain: f32,
     #[serde(default)]
     pub meters: MetersSnapshotDto,
+    /// Lo que el motor tiene REALMENTE en cada pista (volumen, paneo, mute, solo y bus). La interfaz lo compara con
+    /// lo que muestra y corrige cualquier diferencia: es la red de seguridad contra órdenes perdidas o desordenadas.
+    /// Vacío si en ese instante el motor estaba aplicando una orden (se vuelve a leer en el siguiente sondeo).
+    #[serde(default)]
+    pub track_controls: Vec<TrackControlSnapshot>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct TrackControlSnapshot {
+    pub track_id: String,
+    pub gain: f32,
+    /// Entero de -100 a 100 (la misma escala que `audio_set_track_controls`).
+    pub pan: i32,
+    pub muted: bool,
+    pub soloed: bool,
+    pub bus: String,
 }
