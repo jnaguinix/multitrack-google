@@ -5,6 +5,7 @@ pub mod metronome;
 pub mod output;
 pub mod playback;
 pub mod resampler;
+pub mod routing;
 pub mod track_ids;
 
 use cache::{read_track_metadata, ImportProgressEvent, ProjectCacheStatus};
