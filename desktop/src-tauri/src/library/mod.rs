@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Mutex, MutexGuard};
 use tauri::{AppHandle, Manager, State};
 
 use crate::audio::output::AudioEngineState;
@@ -10,6 +12,37 @@ pub const SIDECAR_FALLBACK_FILENAME: &str = ".omnitracks.json";
 pub const LIBRARY_FILENAME: &str = "library.json";
 pub const LIBRARY_BACKUP_FILENAME: &str = "library.backup.json";
 pub const LIBRARY_TMP_FILENAME: &str = "library.json.tmp";
+
+/// Serializa todo acceso a `library.json`. Los comandos de Tauri se ejecutan en paralelo: sin este cerrojo,
+/// dos guardados a la vez (p. ej. al mover un fader) se pisaban el archivo temporal y dejaban basura al final
+/// del JSON, y el ciclo leer-modificar-escribir de dos canciones perdía el cambio de una de ellas.
+static LIBRARY_LOCK: Mutex<()> = Mutex::new(());
+static TMP_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+/// Toma el cerrojo de la biblioteca. Un hilo que falló con el cerrojo tomado no lo deja inutilizable.
+fn lock_library() -> MutexGuard<'static, ()> {
+    LIBRARY_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// Nombre de archivo temporal único por escritura: dos escrituras nunca comparten archivo.
+fn unique_tmp_name(base: &str) -> String {
+    format!("{base}.{}.{}.tmp", std::process::id(), TMP_COUNTER.fetch_add(1, Ordering::Relaxed))
+}
+
+/// Lee el primer valor JSON del texto e ignora lo que venga después. Un archivo con basura al final (la
+/// consecuencia de una escritura interrumpida o solapada) sigue siendo recuperable. Devuelve también si había
+/// algo más que espacios tras el valor.
+fn parse_library_lenient(content: &str) -> Result<(LibraryFile, bool), serde_json::Error> {
+    let mut stream = serde_json::Deserializer::from_str(content).into_iter::<LibraryFile>();
+    match stream.next() {
+        Some(Ok(lib)) => {
+            let has_trailing = !content[stream.byte_offset()..].trim().is_empty();
+            Ok((lib, has_trailing))
+        }
+        Some(Err(e)) => Err(e),
+        None => serde_json::from_str::<LibraryFile>(content).map(|l| (l, false)),
+    }
+}
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -199,7 +232,7 @@ pub fn write_sidecar(folder_path: &Path, song: &LibrarySong) -> Result<(), Strin
     let json_str = serde_json::to_string_pretty(song)
         .map_err(|e| format!("Error serializando sidecar: {e}"))?;
 
-    let tmp = folder_path.join("omnitracks.project.json.tmp");
+    let tmp = folder_path.join(unique_tmp_name("omnitracks.project.json"));
     if let Err(e) = fs::write(&tmp, &json_str) {
         tracing::warn!(
             "[Sidecar] No se pudo escribir archivo temporal en '{}': {}",
@@ -243,7 +276,7 @@ pub fn load_library_internal(local_data: &Path) -> Result<LibraryFile, String> {
     if !lib_path.exists() {
         if backup_path.exists() {
             if let Ok(content) = fs::read_to_string(&backup_path) {
-                if let Ok(lib) = serde_json::from_str::<LibraryFile>(&content) {
+                if let Ok((lib, _)) = parse_library_lenient(&content) {
                     tracing::warn!("[Library] library.json ausente; restaurado desde backup");
                     let _ = save_library_internal(local_data, &lib);
                     return Ok(lib);
@@ -256,8 +289,16 @@ pub fn load_library_internal(local_data: &Path) -> Result<LibraryFile, String> {
     }
 
     match fs::read_to_string(&lib_path) {
-        Ok(content) => match serde_json::from_str::<LibraryFile>(&content) {
-            Ok(lib) => Ok(lib),
+        Ok(content) => match parse_library_lenient(&content) {
+            Ok((lib, has_trailing)) => {
+                if has_trailing {
+                    tracing::warn!(
+                        "[Library] library.json tenía caracteres sobrantes al final; se ignoran y se reescribe limpio"
+                    );
+                    let _ = save_library_internal(local_data, &lib);
+                }
+                Ok(lib)
+            }
             Err(parse_err) => {
                 tracing::error!(
                     "[Library] Error parseando {}: {}. Intentando backup...",
@@ -266,7 +307,7 @@ pub fn load_library_internal(local_data: &Path) -> Result<LibraryFile, String> {
                 );
                 if backup_path.exists() {
                     if let Ok(backup_content) = fs::read_to_string(&backup_path) {
-                        if let Ok(lib) = serde_json::from_str::<LibraryFile>(&backup_content) {
+                        if let Ok((lib, _)) = parse_library_lenient(&backup_content) {
                             tracing::warn!("[Library] Recuperado exitosamente desde backup");
                             return Ok(lib);
                         }
@@ -290,7 +331,7 @@ pub fn save_library_internal(local_data: &Path, library: &LibraryFile) -> Result
 
     let lib_path = local_data.join(LIBRARY_FILENAME);
     let backup_path = local_data.join(LIBRARY_BACKUP_FILENAME);
-    let tmp_path = local_data.join(LIBRARY_TMP_FILENAME);
+    let tmp_path = local_data.join(unique_tmp_name(LIBRARY_TMP_FILENAME));
 
     let json_str = serde_json::to_string_pretty(library)
         .map_err(|e| format!("Error serializando library.json: {e}"))?;
@@ -299,9 +340,15 @@ pub fn save_library_internal(local_data: &Path, library: &LibraryFile) -> Result
     fs::write(&tmp_path, json_str.as_bytes())
         .map_err(|e| format!("Error escribiendo en {}: {e}", tmp_path.display()))?;
 
-    // 2. If lib_path exists, backup before replacing
+    // 2. Si hay un library.json válido, se copia como respaldo antes de reemplazarlo. Uno corrupto no pisa un
+    //    respaldo bueno.
     if lib_path.exists() {
-        let _ = fs::copy(&lib_path, &backup_path);
+        let current_is_valid = fs::read_to_string(&lib_path)
+            .map(|s| parse_library_lenient(&s).map(|(_, trailing)| !trailing).unwrap_or(false))
+            .unwrap_or(false);
+        if current_is_valid {
+            let _ = fs::copy(&lib_path, &backup_path);
+        }
     }
 
     // 3. Atomically replace lib_path
@@ -325,6 +372,7 @@ pub async fn library_load(app: AppHandle) -> Result<LibraryFile, String> {
         .path()
         .app_local_data_dir()
         .map_err(|e| format!("Error resolviendo app_local_data_dir: {e}"))?;
+    let _guard = lock_library();
     load_library_internal(&local_data)
 }
 
@@ -334,6 +382,7 @@ pub async fn library_save(app: AppHandle, library: LibraryFile) -> Result<(), St
         .path()
         .app_local_data_dir()
         .map_err(|e| format!("Error resolviendo app_local_data_dir: {e}"))?;
+    let _guard = lock_library();
     save_library_internal(&local_data, &library)
 }
 
@@ -344,25 +393,29 @@ pub async fn library_save_song(app: AppHandle, song: LibrarySong) -> Result<(), 
         .app_local_data_dir()
         .map_err(|e| format!("Error resolviendo app_local_data_dir: {e}"))?;
 
-    let mut lib = load_library_internal(&local_data)?;
-    if let Some(idx) = lib.songs.iter().position(|s| s.id == song.id) {
-        lib.songs[idx] = song.clone();
-    } else {
-        lib.songs.push(song.clone());
-    }
-
-    if let Some(in_set) = song.in_setlist {
-        if in_set {
-            if !lib.active_setlist.contains(&song.id) {
-                lib.active_setlist.push(song.id.clone());
-            }
+    {
+        // Leer, modificar y escribir como una sola operación: dos guardados a la vez no se pisan.
+        let _guard = lock_library();
+        let mut lib = load_library_internal(&local_data)?;
+        if let Some(idx) = lib.songs.iter().position(|s| s.id == song.id) {
+            lib.songs[idx] = song.clone();
         } else {
-            lib.active_setlist.retain(|id| id != &song.id);
+            lib.songs.push(song.clone());
         }
-    }
 
-    lib.updated_at = current_timestamp_ms();
-    save_library_internal(&local_data, &lib)?;
+        if let Some(in_set) = song.in_setlist {
+            if in_set {
+                if !lib.active_setlist.contains(&song.id) {
+                    lib.active_setlist.push(song.id.clone());
+                }
+            } else {
+                lib.active_setlist.retain(|id| id != &song.id);
+            }
+        }
+
+        lib.updated_at = current_timestamp_ms();
+        save_library_internal(&local_data, &lib)?;
+    }
 
     // Attempt sidecar write if folder path is available
     if let Some(ref folder) = song.folder_path {
@@ -387,11 +440,14 @@ pub async fn library_delete_song(
         .map_err(|e| format!("Error resolviendo app_local_data_dir: {e}"))?;
 
     // 1. Remove from library.json
-    let mut lib = load_library_internal(&local_data)?;
-    lib.songs.retain(|s| s.id != song_id);
-    lib.active_setlist.retain(|id| id != &song_id);
-    lib.updated_at = current_timestamp_ms();
-    save_library_internal(&local_data, &lib)?;
+    {
+        let _guard = lock_library();
+        let mut lib = load_library_internal(&local_data)?;
+        lib.songs.retain(|s| s.id != song_id);
+        lib.active_setlist.retain(|id| id != &song_id);
+        lib.updated_at = current_timestamp_ms();
+        save_library_internal(&local_data, &lib)?;
+    }
 
     // 2. Unload from audio playback engine if currently loaded
     state.playback.unload_project_if_matches(&song_id).await;
@@ -419,6 +475,7 @@ pub async fn library_update_song_folder(
         .app_local_data_dir()
         .map_err(|e| format!("Error resolviendo app_local_data_dir: {e}"))?;
 
+    let _guard = lock_library();
     let mut lib = load_library_internal(&local_data)?;
     if let Some(song) = lib.songs.iter_mut().find(|s| s.id == song_id) {
         song.folder_path = Some(new_folder_path);
@@ -736,6 +793,87 @@ mod tests {
         assert_eq!(current.songs[0].title, "Version 2");
 
         let _ = fs::remove_dir_all(&tmp_dir);
+    }
+
+    fn song(id: &str, title: &str) -> LibrarySong {
+        LibrarySong {
+            id: id.to_string(),
+            title: title.to_string(),
+            artist: "A".to_string(),
+            bpm: 120.0,
+            key_signature: "C Major".to_string(),
+            updated_at: 1,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn test_library_con_basura_al_final_se_recupera_y_se_reescribe_limpia() {
+        let dir = std::env::temp_dir().join(format!("omnitracks_test_basura_{}", current_timestamp_ms()));
+        let _ = fs::create_dir_all(&dir);
+        let mut lib = LibraryFile::default();
+        lib.songs.push(song("a", "Una"));
+        lib.songs.push(song("b", "Dos"));
+        let json = serde_json::to_string_pretty(&lib).unwrap();
+        // El fallo real: un JSON válido seguido de un trozo del contenido anterior («]\n}»).
+        fs::write(dir.join(LIBRARY_FILENAME), format!("{json}]\n}}")).unwrap();
+        fs::write(dir.join(LIBRARY_BACKUP_FILENAME), format!("{json}]\n}}")).unwrap();
+
+        let loaded = load_library_internal(&dir).expect("debe recuperar las canciones sin perderlas");
+        assert_eq!(loaded.songs.len(), 2);
+        assert_eq!(loaded.songs[1].title, "Dos");
+        // Se reescribió limpio: ya no hay nada tras el JSON.
+        let on_disk = fs::read_to_string(dir.join(LIBRARY_FILENAME)).unwrap();
+        assert!(serde_json::from_str::<LibraryFile>(&on_disk).is_ok(), "library.json debe quedar como JSON estricto");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_un_library_corrupto_no_pisa_el_respaldo_bueno() {
+        let dir = std::env::temp_dir().join(format!("omnitracks_test_respaldo_{}", current_timestamp_ms()));
+        let _ = fs::create_dir_all(&dir);
+        let mut good = LibraryFile::default();
+        good.songs.push(song("a", "Buena"));
+        save_library_internal(&dir, &good).unwrap();
+        save_library_internal(&dir, &good).unwrap(); // ahora existe el respaldo con «Buena»
+        // El principal queda ilegible (ni siquiera un JSON).
+        fs::write(dir.join(LIBRARY_FILENAME), "{ esto no es json").unwrap();
+        let mut next = good.clone();
+        next.songs[0].title = "Nueva".to_string();
+        save_library_internal(&dir, &next).unwrap();
+        let backup = fs::read_to_string(dir.join(LIBRARY_BACKUP_FILENAME)).unwrap();
+        assert!(backup.contains("Buena"), "el respaldo bueno no debe sustituirse por el archivo corrupto");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_guardados_simultaneos_no_corrompen_ni_pierden_canciones() {
+        let dir = std::env::temp_dir().join(format!("omnitracks_test_concurrente_{}", current_timestamp_ms()));
+        let _ = fs::create_dir_all(&dir);
+        save_library_internal(&dir, &LibraryFile::default()).unwrap();
+        let handles: Vec<_> = (0..8)
+            .map(|t| {
+                let dir = dir.clone();
+                std::thread::spawn(move || {
+                    for i in 0..25 {
+                        // Misma operación que `library_save_song`: leer, modificar y escribir bajo el cerrojo.
+                        let _guard = lock_library();
+                        let mut lib = load_library_internal(&dir).expect("la biblioteca no debe corromperse");
+                        let id = format!("t{t}-{i}");
+                        lib.songs.push(song(&id, &id));
+                        save_library_internal(&dir, &lib).unwrap();
+                    }
+                })
+            })
+            .collect();
+        for h in handles {
+            h.join().unwrap();
+        }
+        let final_lib = load_library_internal(&dir).expect("el archivo final debe ser válido");
+        assert_eq!(final_lib.songs.len(), 8 * 25, "ningún guardado simultáneo debe perder su canción");
+        let on_disk = fs::read_to_string(dir.join(LIBRARY_FILENAME)).unwrap();
+        assert!(serde_json::from_str::<LibraryFile>(&on_disk).is_ok());
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
