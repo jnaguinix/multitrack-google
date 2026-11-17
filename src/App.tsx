@@ -58,6 +58,7 @@ import { ConfirmSongActionModal } from './components/modals/ConfirmSongActionMod
 import { SectionEditorModal } from './components/modals/SectionEditorModal';
 import { SongFingerprintPromptModal } from './components/modals/SongFingerprintPromptModal';
 import { StemImporterModal } from './components/modals/StemImporterModal';
+import { InstrumentPickerModal } from './components/modals/InstrumentPickerModal';
 import {
   ImportWizardModal,
   type ImportWizardMode,
@@ -178,6 +179,7 @@ export default function App() {
   );
   const [isSectionEditorOpen, setIsSectionEditorOpen] = useState(false);
   const [isEditTracksOpen, setIsEditTracksOpen] = useState(false);
+  const [instrumentPickerTrackId, setInstrumentPickerTrackId] = useState<string | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
   const currentProjectRef = useRef<SongProject | null>(currentProject);
@@ -631,6 +633,33 @@ export default function App() {
         }))
       );
       showToast('Pistas actualizadas.');
+    },
+    [updateCurrentProject, showToast]
+  );
+
+  // «Cambiar instrumento» de una pista: renombra con el catálogo, recalcula la numeración de las demás
+  // («Guitarra eléctrica 1» y «2» pasan a «Guitarra eléctrica» si una se convierte en otra cosa) y ajusta rol, color y bus.
+  const handleChangeTrackInstrument = useCallback(
+    (trackId: string, instrumentId: string) => {
+      const def = getInstrument(instrumentId);
+      if (!def) return;
+      const cur = currentProjectRef.current;
+      const fileName = cur?.tracks.find((tr) => tr.id === trackId)?.fileName;
+      updateCurrentProject((p) => {
+        const ids = p.tracks.map((tr) => (tr.id === trackId ? instrumentId : instrumentIdFromName(tr.name)));
+        const names = numberedNames(ids);
+        return {
+          ...p,
+          tracks: p.tracks.map((tr, i) => {
+            const name = names[i];
+            if (tr.id === trackId && name) return { ...tr, name, role: def.role, color: def.color, bus: effectiveBus({ name, role: def.role }) };
+            return name && ids[i] && name !== tr.name ? { ...tr, name } : tr;
+          }),
+          updatedAt: Date.now(),
+        };
+      });
+      if (fileName) rememberTrackMapping([{ fileName, instrumentId }]);
+      showToast(`Pista cambiada a ${def.label}.`);
     },
     [updateCurrentProject, showToast]
   );
@@ -1095,6 +1124,7 @@ export default function App() {
                 updateCurrentProject((p) => ({ ...p, masterGain: gain }))
               }
               onResetMixer={handleResetMixer}
+              onPickInstrument={setInstrumentPickerTrackId}
             />
           )}
 
@@ -1149,6 +1179,7 @@ export default function App() {
                   onOpenImportModal={() => setIsImportModalOpen(true)}
                   onOpenSectionEditor={() => setIsSectionEditorOpen(true)}
               onEditTracks={() => setIsEditTracksOpen(true)}
+                  onPickInstrument={setInstrumentPickerTrackId}
                 />
 
                 {isDockedMixerOpen && (
@@ -1209,6 +1240,7 @@ export default function App() {
                             updateCurrentProject((p) => ({ ...p, masterGain: gain }))
                           }
                           onResetMixer={handleResetMixer}
+                          onPickInstrument={setInstrumentPickerTrackId}
                         />
                       </div>
                     </div>
@@ -1257,6 +1289,7 @@ export default function App() {
                   updateCurrentProject((p) => ({ ...p, masterGain: gain }))
                 }
                 onResetMixer={handleResetMixer}
+                onPickInstrument={setInstrumentPickerTrackId}
                 onEditTracks={() => setIsEditTracksOpen(true)}
               />
             ) : (
@@ -1336,6 +1369,23 @@ export default function App() {
           }}
         />
       )}
+
+      {instrumentPickerTrackId && currentProject && (() => {
+        const trk = currentProject.tracks.find((tr) => tr.id === instrumentPickerTrackId);
+        if (!trk) return null;
+        return (
+          <InstrumentPickerModal
+            trackName={trk.name}
+            fileName={trk.fileName}
+            currentInstrumentId={instrumentIdFromName(trk.name)}
+            onPick={(id) => {
+              setInstrumentPickerTrackId(null);
+              handleChangeTrackInstrument(trk.id, id);
+            }}
+            onClose={() => setInstrumentPickerTrackId(null)}
+          />
+        );
+      })()}
 
       {isEditTracksOpen && currentProject && (
         <ImportWizardModal

@@ -39,6 +39,7 @@ interface TimelineArrangerProps {
   onOpenImportModal: () => void;
   onOpenSectionEditor: () => void;
   onEditTracks?: () => void;
+  onPickInstrument?: (trackId: string) => void;
 }
 
 function gainToDbText(gain: number): string {
@@ -252,6 +253,7 @@ export const TimelineArranger: React.FC<TimelineArrangerProps> = ({
   onOpenImportModal,
   onOpenSectionEditor,
   onEditTracks,
+  onPickInstrument,
 }) => {
   const addStemInputRef = useRef<HTMLInputElement | null>(null);
   // Quitar una pista exige dos clics (el segundo en 3 s): un roce junto a M/S no debe borrar un stem.
@@ -473,16 +475,19 @@ export const TimelineArranger: React.FC<TimelineArrangerProps> = ({
                           style={{ backgroundColor: track.color }}
                           className="w-3 h-3 rounded-xs shrink-0"
                         />
-                        <span
-                          className={`text-[13px] font-bold truncate ${
+                        <button
+                          type="button"
+                          onClick={() => onPickInstrument?.(track.id)}
+                          disabled={!onPickInstrument}
+                          className={`lt-name-btn text-left text-[13px] font-bold truncate ${
                             isAudible
                               ? 'text-neutral-100'
                               : 'text-neutral-400 line-through'
                           }`}
-                          title={track.name}
+                          title={onPickInstrument ? `${track.name}: cambiar instrumento` : track.name}
                         >
                           {track.name}
-                        </span>
+                        </button>
                       </div>
 
                       <div className="flex items-center gap-1 shrink-0">

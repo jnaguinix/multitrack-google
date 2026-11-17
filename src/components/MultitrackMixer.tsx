@@ -333,28 +333,33 @@ const FixedStrip: React.FC<{
   onChangeGain: (gain: number) => void;
   onToggleMute: () => void;
   onToggleSolo?: () => void;
-}> = ({ name, sub, color, live, gain, muted, dim, disabled, soloed, peakOf, levelsOf, onChangeGain, onToggleMute, onToggleSolo }) => (
+  onRename?: () => void;
+}> = ({ name, sub, color, live, gain, muted, dim, disabled, soloed, peakOf, levelsOf, onChangeGain, onToggleMute, onToggleSolo, onRename }) => (
   <div
     style={{ '--c': color } as React.CSSProperties}
     className={`lt-strip lt-bus ${dim ? 'lt-dim' : ''}`}
     aria-disabled={disabled || undefined}
   >
     <div className="lt-cap" />
-    <div className="lt-name">{name}</div>
+    {onRename ? (
+      <button type="button" className="lt-name lt-name-btn" title="Cambiar instrumento" onClick={onRename}>
+        {name}
+      </button>
+    ) : (
+      <div className="lt-name">{name}</div>
+    )}
     <div className="lt-sub">{sub}</div>
-    <div className={disabled ? 'pointer-events-none opacity-40' : undefined}>
-      {peakOf ? (
-        <StudioFader name={name} gain={gain} live={live} peakOf={peakOf} onChangeGain={onChangeGain} />
-      ) : (
-        <StudioFader
-          name={name}
-          gain={gain}
-          live={live}
-          levelsOf={levelsOf ?? (() => ({ l: 0, r: 0, dbScale: false }))}
-          onChangeGain={onChangeGain}
-        />
-      )}
-    </div>
+    {peakOf ? (
+      <StudioFader name={name} gain={gain} live={live} peakOf={peakOf} onChangeGain={onChangeGain} />
+    ) : (
+      <StudioFader
+        name={name}
+        gain={gain}
+        live={live}
+        levelsOf={levelsOf ?? (() => ({ l: 0, r: 0, dbScale: false }))}
+        onChangeGain={onChangeGain}
+      />
+    )}
     {!disabled && (
       <div className="lt-ms">
         <button type="button" className="lt-m" aria-pressed={muted} aria-label={`Mute ${name}`} onClick={onToggleMute}>
@@ -384,6 +389,8 @@ export interface MultitrackMixerProps {
   onChangeMasterGain: (gain: number) => void;
   onResetMixer: () => void;
   onEditTracks?: () => void;
+  /** Abre «Cambiar instrumento» para una pista (clic en su nombre). */
+  onPickInstrument?: (trackId: string) => void;
 }
 
 export const MultitrackMixer: React.FC<MultitrackMixerProps> = ({
@@ -400,6 +407,7 @@ export const MultitrackMixer: React.FC<MultitrackMixerProps> = ({
   onChangeMasterGain,
   onResetMixer,
   onEditTracks,
+  onPickInstrument,
 }) => {
   const anySolo = project.tracks.some((t) => t.soloed);
   const activeSection = project.sections.find((s) => s.id === transport.activeSectionId);
@@ -475,9 +483,20 @@ export const MultitrackMixer: React.FC<MultitrackMixerProps> = ({
                 className={`lt-strip ${isDimmed ? 'lt-dim' : ''}`}
               >
                 <div className="lt-cap" />
-                <div className="lt-name" title={displayName}>
-                  {displayName}
-                </div>
+                {onPickInstrument ? (
+                  <button
+                    type="button"
+                    className="lt-name lt-name-btn"
+                    title={`${displayName}: cambiar instrumento`}
+                    onClick={() => onPickInstrument(track.id)}
+                  >
+                    {displayName}
+                  </button>
+                ) : (
+                  <div className="lt-name" title={displayName}>
+                    {displayName}
+                  </div>
+                )}
 
                 <PanKnob
                   name={displayName}
@@ -553,6 +572,7 @@ export const MultitrackMixer: React.FC<MultitrackMixerProps> = ({
             onChangeGain={(g) => (clickTrack ? onChangeTrackGain(clickTrack.id, g) : onChangeClickGain(g))}
             onToggleMute={() => (clickTrack ? onToggleTrackMute(clickTrack.id) : onToggleClick())}
             onToggleSolo={clickTrack ? () => onToggleTrackSolo(clickTrack.id) : undefined}
+            onRename={clickTrack && onPickInstrument ? () => onPickInstrument(clickTrack.id) : undefined}
           />
           <FixedStrip
             name="Guía"
@@ -568,6 +588,7 @@ export const MultitrackMixer: React.FC<MultitrackMixerProps> = ({
             onChangeGain={(g) => guideTrack && onChangeTrackGain(guideTrack.id, g)}
             onToggleMute={() => guideTrack && onToggleTrackMute(guideTrack.id)}
             onToggleSolo={guideTrack ? () => onToggleTrackSolo(guideTrack.id) : undefined}
+            onRename={guideTrack && onPickInstrument ? () => onPickInstrument(guideTrack.id) : undefined}
           />
         </section>
       </main>

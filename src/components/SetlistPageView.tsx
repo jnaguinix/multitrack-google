@@ -65,6 +65,7 @@ interface SetlistPageViewProps {
   onAddMarkerAtPlayhead: () => void;
   onOpenSectionEditor: () => void;
   onEditTracks?: () => void;
+  onPickInstrument?: (trackId: string) => void;
   onAddStemsToCurrentSong: (files: FileList | File[]) => void;
   onQuickImportNewSongFiles: (files: FileList | File[]) => void;
   onQuickImportNativeFolder?: (folderPath: string) => void;
@@ -124,6 +125,7 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
   onAddMarkerAtPlayhead,
   onOpenSectionEditor,
   onEditTracks,
+  onPickInstrument,
   onAddStemsToCurrentSong,
   onQuickImportNewSongFiles,
   onQuickImportNativeFolder,
@@ -595,6 +597,7 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
                 onToggleClick={onToggleClick}
                 onChangeMasterGain={onChangeMasterGain}
                 onResetMixer={onResetMixer}
+                onPickInstrument={onPickInstrument}
               />
             </div>
           </div>
