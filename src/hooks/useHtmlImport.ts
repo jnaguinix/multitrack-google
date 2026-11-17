@@ -243,7 +243,7 @@ export function useHtmlImport({
               }
             } else {
               // Si los archivos se seleccionaron mediante el selector HTML o drag-and-drop sin path nativo en Chromium:
-              // No se omite: enviamos los bytes directamente a Rust (audio_import_track_bytes) para asegurar la caché nativa!
+              // No se omite: enviamos los bytes directamente a Rust (audio_import_track_bytes_raw) para asegurar la caché nativa!
               console.info('[AudioImport][Desktop] Transfiriendo stems a Rust para generar caché nativa...');
               for (let idx = 0; idx < validFiles.length; idx++) {
                 const file = validFiles[idx];

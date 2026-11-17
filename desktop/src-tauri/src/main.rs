@@ -230,8 +230,6 @@ fn main() {
             omnitracks_desktop::audio::audio_reset_stats,
             omnitracks_desktop::audio::audio_test_tone,
             omnitracks_desktop::audio::audio_import_tracks,
-            omnitracks_desktop::audio::audio_import_track_bytes,
-            omnitracks_desktop::audio::audio_import_folder,
             omnitracks_desktop::audio::audio_cancel_import,
             omnitracks_desktop::audio::audio_get_project_cache_status,
             omnitracks_desktop::audio::audio_load_project,

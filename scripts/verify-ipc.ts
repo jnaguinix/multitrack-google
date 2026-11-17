@@ -280,8 +280,6 @@ const REVIEWED_INTEGER = new Set([
   'audio_set_pitch.semitones', // <select> de -6 a +6
   'audio_configure_song.beatsPerBar', // compás del proyecto (entero) con `|| 4`
   'audio_load_project.beatsPerBar',
-  'audio_import_track_bytes.targetSampleRate', // frecuencia de un dispositivo
-  'audio_import_folder.targetSampleRate',
   'audio_test_tone.channel', // índice de canal
   'remote_kick.deviceId', // id numérico asignado por el servidor LAN
 ]);
