@@ -151,13 +151,8 @@ export default memo(function DesktopAudioSettings({ triggerHost }: Props) {
   });
   const [isNativeLoaded, setIsNativeLoaded] = useState(false);
   const [nativeNotice, setNativeNotice] = useState('');
-  const [isStressTesting, setIsStressTesting] = useState(false);
-  const [stressNotice, setStressNotice] = useState('');
   const [seekInputSec, setSeekInputSec] = useState(0);
   const [isDraggingSeek, setIsDraggingSeek] = useState(false);
-  const [preloadProjectId, setPreloadProjectId] = useState<string>('');
-  const [isPreloading, setIsPreloading] = useState(false);
-  const [switchDurationMs, setSwitchDurationMs] = useState<number | null>(null);
 
   const [loadErrorDetails, setLoadErrorDetails] = useState<string | null>(null);
   const [isGeneratingCache, setIsGeneratingCache] = useState(false);
@@ -419,43 +414,6 @@ export default memo(function DesktopAudioSettings({ triggerHost }: Props) {
     }
   };
 
-  const handlePreloadSong = async () => {
-    if (!invoke || !preloadProjectId) return;
-    setIsPreloading(true);
-    setNativeNotice('Precargando siguiente canción...');
-    try {
-      await invoke('audio_preload_project', { projectId: preloadProjectId });
-      const pTitle = songProjects.find((p) => p.id === preloadProjectId)?.title || preloadProjectId;
-      setNativeNotice(`Precargada: ${pTitle}`);
-    } catch (err: any) {
-      const errMsg = `Error precargando: ${String(err)}`;
-      setNativeNotice(errMsg);
-      setLoadErrorDetails(errMsg);
-    } finally {
-      setIsPreloading(false);
-    }
-  };
-
-  const handleSwitchToPreloaded = async () => {
-    if (!invoke) return;
-    setNativeNotice('Cambiando a canción precargada...');
-    const t0 = performance.now();
-    try {
-      const res: any = await invoke('audio_switch_to_preloaded');
-      const dur = Math.round(performance.now() - t0);
-      setSwitchDurationMs(dur);
-      if (res?.projectId) {
-        setSelectedProjectId(res.projectId);
-      }
-      setIsNativeLoaded(true);
-      setNativeNotice(`Cambio instantáneo en ${dur} ms (${res?.trackCount || 0} pistas)`);
-    } catch (err: any) {
-      const errMsg = `Error cambiando a precargada: ${String(err)}`;
-      setNativeNotice(errMsg);
-      setLoadErrorDetails(errMsg);
-    }
-  };
-
   const handlePitchChange = async (st: number) => {
     setPitchSemitones(st);
     if (!invoke) return;
@@ -624,22 +582,6 @@ export default memo(function DesktopAudioSettings({ triggerHost }: Props) {
     } catch (err: any) {
       setNativeNotice(`Error seek: ${err}`);
     }
-  };
-
-  const handleStressTest = () => {
-    setIsStressTesting(true);
-    setStressNotice('Probando aislamiento de hilo UI (3s)...');
-    setTimeout(() => {
-      const t0 = performance.now();
-      let operations = 0;
-      while (performance.now() - t0 < 3000) {
-        operations += Math.sqrt(Math.random());
-      }
-      pollStats().then(() => {
-        setIsStressTesting(false);
-        setStressNotice(`Carga completada (${Math.round(operations).toLocaleString()} ops). Comprueba si hubo cortes.`);
-      });
-    }, 60);
   };
 
   const formatTime = (sec: number) => {
@@ -910,66 +852,6 @@ export default memo(function DesktopAudioSettings({ triggerHost }: Props) {
                   {cleanCacheNotice}
                 </div>
               )}
-
-              {/* Fila: Prueba de aislamiento del hilo UI */}
-              <div className="flex items-center justify-between gap-2 p-2 rounded-lg bg-neutral-900/60 border border-neutral-800 text-xs">
-                <span className="text-neutral-400 text-[11px]">Prueba de aislamiento de hilo:</span>
-                <button
-                  type="button"
-                  onClick={handleStressTest}
-                  disabled={isStressTesting}
-                  className="px-2.5 py-1 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-neutral-200 text-[11px] font-medium cursor-pointer disabled:opacity-50 shrink-0"
-                  title="Congela el hilo de la interfaz por 3s para verificar que el audio no sufre ningún corte"
-                >
-                  {isStressTesting ? 'Probando...' : 'Carga pesada UI (3s)'}
-                </button>
-              </div>
-              {stressNotice && (
-                <div className="text-[10px] text-neutral-400 px-1 truncate">
-                  {stressNotice}
-                </div>
-              )}
-
-              {/* Fila: Precarga y conmutación de canción (Setlist) */}
-              <div className="flex items-center gap-2 p-2 rounded-lg bg-neutral-900/60 border border-neutral-800 text-xs">
-                <span className="text-[10px] text-neutral-400 uppercase tracking-wider shrink-0">Precarga:</span>
-                <select
-                  value={preloadProjectId}
-                  onChange={(e) => setPreloadProjectId(e.target.value)}
-                  className="bg-studio-strip border border-studio-line rounded px-2 py-0.5 text-xs text-neutral-200 truncate cursor-pointer flex-1"
-                >
-                  <option value="">Canción a precargar...</option>
-                  {songProjects
-                    .filter((p) => p.id !== selectedProjectId)
-                    .map((p) => (
-                      <option key={p.id} value={p.id}>
-                        {p.title}
-                      </option>
-                    ))}
-                </select>
-                <button
-                  type="button"
-                  onClick={handlePreloadSong}
-                  disabled={!preloadProjectId || isPreloading}
-                  className="px-2.5 py-0.5 rounded bg-neutral-800 hover:bg-neutral-700 text-neutral-200 text-[11px] font-medium cursor-pointer disabled:opacity-40 shrink-0"
-                  title="Precargar pistas de la siguiente canción en memoria/disco"
-                >
-                  {isPreloading ? 'Cargando...' : 'Precargar'}
-                </button>
-                <button
-                  type="button"
-                  onClick={handleSwitchToPreloaded}
-                  className="px-2.5 py-0.5 rounded bg-studio-ink hover:bg-neutral-200 text-studio-ground text-[11px] font-semibold cursor-pointer shrink-0 transition-colors"
-                  title="Cambia a la canción precargada sin latencia y mide duración"
-                >
-                  Cambiar
-                </button>
-                {switchDurationMs != null && (
-                  <span className="font-mono text-[10px] text-emerald-400 shrink-0">
-                    {switchDurationMs} ms
-                  </span>
-                )}
-              </div>
 
               {/* Fila de contadores de telemetría + botón reiniciar */}
               <div className="p-2 rounded-lg bg-studio-strip border border-studio-line text-xs space-y-1.5">
