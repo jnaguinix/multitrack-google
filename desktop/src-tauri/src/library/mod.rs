@@ -87,7 +87,9 @@ pub struct LibraryTrack {
     pub cue_muted: Option<bool>,
     #[serde(default)]
     pub bus: Option<String>,
-    #[serde(default)]
+    /// Picos de la forma de onda (320 por pista). Son datos derivados del audio: el sidecar de la carpeta no los
+    /// lleva (`write_sidecar`) y, si faltan, el motor los vuelve a leer de la caché PCM al cargar la canción.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub peaks: Option<Vec<f32>>,
 }
 
@@ -235,6 +237,16 @@ pub fn read_sidecar(folder_path: &Path) -> Result<Option<serde_json::Value>, Str
     Ok(None)
 }
 
+/// Contenido del sidecar: la configuración de la canción sin los picos de forma de onda. Estos son datos derivados
+/// del audio (ocupaban ~90 % de las líneas del archivo) y se regeneran con la caché PCM.
+pub fn sidecar_json(song: &LibrarySong) -> Result<String, String> {
+    let mut slim = song.clone();
+    for track in &mut slim.tracks {
+        track.peaks = None;
+    }
+    serde_json::to_string_pretty(&slim).map_err(|e| format!("Error serializando sidecar: {e}"))
+}
+
 /// Writes the canonical `omnitracks.project.json` sidecar directly into the song's directory.
 /// Non-fatal if the directory is read-only.
 pub fn write_sidecar(folder_path: &Path, song: &LibrarySong) -> Result<(), String> {
@@ -242,8 +254,7 @@ pub fn write_sidecar(folder_path: &Path, song: &LibrarySong) -> Result<(), Strin
         return Err(format!("La carpeta '{}' no existe", folder_path.display()));
     }
     let target = folder_path.join(SIDECAR_CANONICAL_FILENAME);
-    let json_str = serde_json::to_string_pretty(song)
-        .map_err(|e| format!("Error serializando sidecar: {e}"))?;
+    let json_str = sidecar_json(song)?;
 
     let tmp = folder_path.join(unique_tmp_name("omnitracks.project.json"));
     if let Err(e) = fs::write(&tmp, &json_str) {
@@ -887,6 +898,45 @@ mod tests {
         let on_disk = fs::read_to_string(dir.join(LIBRARY_FILENAME)).unwrap();
         assert!(serde_json::from_str::<LibraryFile>(&on_disk).is_ok());
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_el_sidecar_no_lleva_picos_y_uno_antiguo_con_picos_se_lee() {
+        let pista = |id: &str| LibraryTrack {
+            id: id.to_string(),
+            name: id.to_string(),
+            peaks: Some((0..320).map(|i| i as f32 / 320.0).collect()),
+            ..Default::default()
+        };
+        let song = LibrarySong {
+            id: "s1".to_string(),
+            title: "Prueba".to_string(),
+            tracks: vec![pista("a"), pista("b")],
+            ..Default::default()
+        };
+
+        let json = sidecar_json(&song).unwrap();
+        assert!(!json.contains("peaks"), "el sidecar no debe llevar picos ni `peaks: null`");
+        let con_picos = serde_json::to_string_pretty(&song).unwrap().lines().count();
+        assert!(
+            json.lines().count() * 5 < con_picos,
+            "sin picos el sidecar debe ser mucho más corto: {} líneas frente a {con_picos}",
+            json.lines().count()
+        );
+        // La canción original no se toca: la biblioteca conserva sus picos.
+        assert_eq!(song.tracks[0].peaks.as_ref().map(Vec::len), Some(320));
+
+        // El sidecar nuevo se lee, con los picos vacíos.
+        let nuevo: LibrarySong = serde_json::from_str(&json).unwrap();
+        assert_eq!(nuevo.tracks.len(), 2);
+        assert!(nuevo.tracks.iter().all(|t| t.peaks.is_none()));
+        assert_eq!(nuevo.tracks[1].id, "b");
+
+        // Un sidecar antiguo (con picos) sigue leyéndose.
+        let antiguo = serde_json::to_string_pretty(&song).unwrap();
+        assert!(antiguo.contains("peaks"));
+        let leido: LibrarySong = serde_json::from_str(&antiguo).unwrap();
+        assert_eq!(leido.tracks[0].peaks.as_ref().map(Vec::len), Some(320));
     }
 
     #[test]
