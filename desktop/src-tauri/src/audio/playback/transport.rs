@@ -220,6 +220,9 @@ impl PlaybackEngine {
                     soloed: trk.soloed.load(Ordering::Relaxed),
                     bus: TrackBus::from_u8(trk.bus.load(Ordering::Relaxed)).name().to_string(),
                     monitor: trk.monitor.load(Ordering::Relaxed),
+                    split_sequence: trk.split.load(Ordering::Relaxed),
+                    cue_gain: f32::from_bits(trk.cue_gain.load(Ordering::Relaxed)),
+                    cue_muted: trk.cue_muted.load(Ordering::Relaxed),
                 })
                 .collect(),
             Err(_) => Vec::new(),

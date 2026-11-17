@@ -42,6 +42,12 @@ pub struct ActiveTrack {
     pub soloed: Arc<AtomicBool>,
     /// «Aur.»: la pista, además de su bus, se suma al envío de auriculares (fuente Monitor).
     pub monitor: Arc<AtomicBool>,
+    /// Secuencia dividida: el canal izquierdo (click y guía) va a auriculares y el derecho (instrumentos) a la música.
+    pub split: Arc<AtomicBool>,
+    /// Volumen del canal izquierdo de una secuencia dividida (f32 bits). Lo controla el fader Click.
+    pub cue_gain: Arc<AtomicU32>,
+    /// Mute del canal izquierdo de una secuencia dividida (botón M del fader Click).
+    pub cue_muted: Arc<AtomicBool>,
     pub bus: Arc<AtomicU8>,   // 0: Main, 1: CueClick, 2: Both, 3: Guide
     pub consumer: Arc<std::sync::Mutex<rtrb::Consumer<f32>>>,
     pub stop_signal: Arc<AtomicBool>,
@@ -76,6 +82,9 @@ pub struct StreamTrackHandle {
     pub muted: Arc<AtomicBool>,
     pub soloed: Arc<AtomicBool>,
     pub monitor: Arc<AtomicBool>,
+    pub split: Arc<AtomicBool>,
+    pub cue_gain: Arc<AtomicU32>,
+    pub cue_muted: Arc<AtomicBool>,
     pub bus: Arc<AtomicU8>,
     pub meter: Arc<PeakMeter>,
     pub eof: Arc<AtomicBool>,
@@ -230,4 +239,10 @@ pub struct TrackControlSnapshot {
     pub bus: String,
     #[serde(default)]
     pub monitor: bool,
+    #[serde(default)]
+    pub split_sequence: bool,
+    #[serde(default)]
+    pub cue_gain: f32,
+    #[serde(default)]
+    pub cue_muted: bool,
 }

@@ -1117,6 +1117,9 @@
                 muted: Arc::new(AtomicBool::new(false)),
                 soloed: Arc::new(AtomicBool::new(false)),
                 monitor: Arc::new(AtomicBool::new(false)),
+                split: Arc::new(AtomicBool::new(false)),
+                cue_gain: Arc::new(AtomicU32::new(1.0f32.to_bits())),
+                cue_muted: Arc::new(AtomicBool::new(false)),
                 bus: Arc::new(AtomicU8::new(TrackBus::Main as u8)),
                 consumer: Arc::new(std::sync::Mutex::new(cons)),
                 stop_signal: Arc::new(AtomicBool::new(false)),
@@ -1140,6 +1143,9 @@
                 muted: Arc::clone(&t.muted),
                 soloed: Arc::clone(&t.soloed),
                 monitor: Arc::clone(&t.monitor),
+                split: Arc::clone(&t.split),
+                cue_gain: Arc::clone(&t.cue_gain),
+                cue_muted: Arc::clone(&t.cue_muted),
                 bus: Arc::clone(&t.bus),
                 meter: Arc::clone(&t.meter),
                 eof: Arc::clone(&t.eof),
@@ -1731,6 +1737,128 @@
         assert_eq!(engine.routing.load().gains[3][Source::Guide.index()], 1.0);
     }
 
+    // ----- Secuencia dividida: click y guía a la izquierda, instrumentos a la derecha, en un solo archivo -----
+
+    /// Caché con canales distintos y constantes: `l` en el izquierdo y `r` en el derecho.
+    fn escribir_cache_lr(nombre: &str, pistas: &[(&str, usize, i16, i16)]) -> std::path::PathBuf {
+        use crate::audio::cache::{write_track_pcm_and_metadata, TrackPcmMetadata};
+        let dir = std::env::temp_dir().join(format!("omnitracks_lr_{nombre}"));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        for (id, frames, l, r) in pistas {
+            let mut muestras = Vec::with_capacity(frames * 2);
+            for _ in 0..*frames {
+                muestras.push(*l);
+                muestras.push(*r);
+            }
+            let meta = TrackPcmMetadata {
+                format_version: 1,
+                track_id: id.to_string(),
+                target_sample_rate: SR_PRUEBA,
+                original_sample_rate: SR_PRUEBA,
+                original_channels: 2,
+                original_path: format!("{nombre}/{id}.wav"),
+                original_file_size: (*frames * 4) as u64,
+                original_modified_ms: 1000,
+                channels: 2,
+                is_effectively_mono: false,
+                frame_count: *frames as u64,
+                duration_sec: *frames as f64 / SR_PRUEBA as f64,
+                peaks: vec![0.5; 16],
+                created_at: "1000".to_string(),
+            };
+            write_track_pcm_and_metadata(&dir, nombre, &meta, &muestras).unwrap();
+        }
+        dir
+    }
+
+    /// Motor con una sola pista «secuencia» (canal izquierdo `l`, derecho `r`), dividida o no.
+    async fn motor_secuencia(nombre: &str, l: i16, r: i16, dividida: bool, ruteo: &RoutingConfig) -> PlaybackEngine {
+        let dir = escribir_cache_lr(nombre, &[("secuencia", 288_000, l, r)]);
+        let engine = PlaybackEngine::new(Arc::new(AudioStreamStats::default()));
+        engine
+            .load_project(&dir, nombre, SR_PRUEBA, Some(120.0), Some(4), Some(vec![seccion("a", 0.0, 6.0)]), Some("1-bar".to_string()))
+            .await
+            .expect("load_project");
+        // Como hace la interfaz: el bus va explícito (el bus inicial del motor se deduce del ID y «secuencia» contiene «cue»).
+        engine.set_track_controls("secuencia", None, None, None, None, Some("main")).await;
+        engine.set_track_split("secuencia", dividida).await;
+        engine.routing.store(&RouteTable::from_config(ruteo));
+        reproducir(&engine).await;
+        engine
+    }
+
+    #[tokio::test]
+    async fn test_secuencia_dividida_2_salidas_el_click_nunca_sale_por_la_salida_de_musica() {
+        // Solo canal izquierdo (click y guía): sale por la izquierda (auriculares) y NADA por la de música.
+        let engine = motor_secuencia("sec2_l", 12_000, 0, true, &proponer_ruteo(2)).await;
+        let p = picos_por_canal(&engine, 2, 80);
+        assert!(p[0] > 1e-3, "el click de la secuencia sale por auriculares: {p:?}");
+        assert_eq!(p[1], 0.0, "el click de la secuencia se coló en la salida de música (la oiría el público): {p:?}");
+        // Solo canal derecho (instrumentos): sale por la música y nada por auriculares.
+        let engine = motor_secuencia("sec2_r", 0, 12_000, true, &proponer_ruteo(2)).await;
+        let p = picos_por_canal(&engine, 2, 80);
+        assert!(p[1] > 1e-3, "los instrumentos salen por la música: {p:?}");
+        assert_eq!(p[0], 0.0, "los instrumentos se colaron en auriculares: {p:?}");
+    }
+
+    #[tokio::test]
+    async fn test_sin_marcar_como_dividida_el_click_de_la_secuencia_llegaria_al_publico() {
+        // Muestra por qué existe el tipo: una pista normal mezcla sus dos canales en la música.
+        let engine = motor_secuencia("sec_normal", 12_000, 0, false, &proponer_ruteo(2)).await;
+        let p = picos_por_canal(&engine, 2, 80);
+        assert!(p[1] > 1e-3, "sin la marca, el canal izquierdo acaba en la salida de música: {p:?}");
+    }
+
+    #[tokio::test]
+    async fn test_secuencia_dividida_3_y_4_salidas() {
+        // 3 salidas: los instrumentos (canal derecho) salen por las dos salidas de música; el click por la 3.
+        let engine = motor_secuencia("sec3_r", 0, 12_000, true, &proponer_ruteo(3)).await;
+        let p = picos_por_canal(&engine, 3, 80);
+        assert!(p[0] > 1e-3 && p[1] > 1e-3, "instrumentos por música izquierda y derecha: {p:?}");
+        assert!((p[0] - p[1]).abs() < 1e-4, "el canal derecho se reparte igual a los dos lados: {p:?}");
+        assert_eq!(p[2], 0.0, "{p:?}");
+        let engine = motor_secuencia("sec3_l", 12_000, 0, true, &proponer_ruteo(3)).await;
+        let p = picos_por_canal(&engine, 3, 80);
+        assert_eq!((p[0], p[1]), (0.0, 0.0), "el click no sale por la música: {p:?}");
+        assert!(p[2] > 1e-3, "{p:?}");
+        // 4 salidas: el canal izquierdo sale por la del click, no por la de la guía.
+        let engine = motor_secuencia("sec4_l", 12_000, 0, true, &proponer_ruteo(4)).await;
+        let p = picos_por_canal(&engine, 4, 80);
+        assert!(p[2] > 1e-3, "por la salida del click: {p:?}");
+        assert_eq!(p[3], 0.0, "no por la de la guía: {p:?}");
+        assert_eq!((p[0], p[1]), (0.0, 0.0), "{p:?}");
+    }
+
+    #[tokio::test]
+    async fn test_secuencia_dividida_dos_controles_independientes() {
+        // 2 salidas: 0 = auriculares (click), 1 = música.
+        let engine = motor_secuencia("sec_ctl", 12_000, 12_000, true, &proponer_ruteo(2)).await;
+        let a = picos_por_canal(&engine, 2, 80);
+        assert!(a[0] > 1e-3 && a[1] > 1e-3, "{a:?}");
+        // Mute de la pista: apaga la música, el click sigue.
+        engine.set_track_controls("secuencia", None, None, Some(true), None, None).await;
+        let m = picos_por_canal(&engine, 2, 40);
+        assert_eq!(m[1], 0.0, "el mute de la pista apaga la música: {m:?}");
+        assert!(m[0] > 1e-3, "el click de la secuencia sigue sonando: {m:?}");
+        engine.set_track_controls("secuencia", None, None, Some(false), None, None).await;
+        // Mute del click (fader Click): apaga el click, la música sigue.
+        engine.set_track_cue("secuencia", None, Some(true)).await;
+        let c = picos_por_canal(&engine, 2, 40);
+        assert_eq!(c[0], 0.0, "el mute del Click apaga el click de la secuencia: {c:?}");
+        assert!(c[1] > 1e-3, "{c:?}");
+        engine.set_track_cue("secuencia", None, Some(false)).await;
+        // Volumen del click a la mitad: el click baja, la música no cambia.
+        let pleno = picos_por_canal(&engine, 2, 60);
+        engine.set_track_cue("secuencia", Some(0.5), None).await;
+        let medio = picos_por_canal(&engine, 2, 60);
+        assert!(medio[0] < pleno[0] * 0.75, "el fader Click baja el click ({} vs {})", medio[0], pleno[0]);
+        assert!((medio[1] - pleno[1]).abs() < 1e-4, "la música no cambia ({} vs {})", medio[1], pleno[1]);
+        let s = engine.get_playback_state();
+        let t = s.track_controls.iter().find(|x| x.track_id == "secuencia").unwrap();
+        assert!(t.split_sequence && !t.cue_muted && (t.cue_gain - 0.5).abs() < 1e-6, "el estado informa la secuencia dividida: {t:?}");
+    }
+
     // ----- Envío a auriculares («Aur.») -----
 
     /// Solo suenan las pistas marcadas «Aur.»: click y guía en silencio.
@@ -2300,6 +2428,9 @@
                 muted: Arc::new(AtomicBool::new(false)),
                 soloed: Arc::new(AtomicBool::new(false)),
                 monitor: Arc::new(AtomicBool::new(false)),
+                split: Arc::new(AtomicBool::new(false)),
+                cue_gain: Arc::new(AtomicU32::new(1.0f32.to_bits())),
+                cue_muted: Arc::new(AtomicBool::new(false)),
                 bus: Arc::new(AtomicU8::new(TrackBus::Main as u8)),
                 consumer: Arc::new(std::sync::Mutex::new(cons)),
                 stop_signal: Arc::new(AtomicBool::new(false)),
@@ -2322,6 +2453,9 @@
                 muted: Arc::clone(&t.muted),
                 soloed: Arc::clone(&t.soloed),
                 monitor: Arc::clone(&t.monitor),
+                split: Arc::clone(&t.split),
+                cue_gain: Arc::clone(&t.cue_gain),
+                cue_muted: Arc::clone(&t.cue_muted),
                 bus: Arc::clone(&t.bus),
                 meter: Arc::clone(&t.meter),
                 eof: Arc::clone(&t.eof),

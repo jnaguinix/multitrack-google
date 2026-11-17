@@ -545,6 +545,9 @@ impl PlaybackEngine {
                 muted: Arc::new(AtomicBool::new(false)),
                 soloed: Arc::new(AtomicBool::new(false)),
                 monitor: Arc::new(AtomicBool::new(false)),
+                split: Arc::new(AtomicBool::new(false)),
+                cue_gain: Arc::new(AtomicU32::new(1.0f32.to_bits())),
+                cue_muted: Arc::new(AtomicBool::new(false)),
                 bus: Arc::new(AtomicU8::new(initial_bus)),
                 consumer: Arc::new(std::sync::Mutex::new(consumer)),
                 stop_signal,
@@ -588,6 +591,9 @@ impl PlaybackEngine {
                 muted: Arc::clone(&t.muted),
                 soloed: Arc::clone(&t.soloed),
                 monitor: Arc::clone(&t.monitor),
+                split: Arc::clone(&t.split),
+                cue_gain: Arc::clone(&t.cue_gain),
+                cue_muted: Arc::clone(&t.cue_muted),
                 bus: Arc::clone(&t.bus),
                 meter: Arc::clone(&t.meter),
                 eof: Arc::clone(&t.eof),
@@ -686,6 +692,27 @@ impl PlaybackEngine {
         let tracks = self.tracks.lock().await;
         if let Some(trk) = tracks.iter().find(|t| t.track_id == track_id) {
             trk.monitor.store(monitor, Ordering::Relaxed);
+        }
+    }
+
+    /// Marca una pista como secuencia dividida (canal izquierdo = click y guía, derecho = instrumentos).
+    pub async fn set_track_split(&self, track_id: &str, split: bool) {
+        let tracks = self.tracks.lock().await;
+        if let Some(trk) = tracks.iter().find(|t| t.track_id == track_id) {
+            trk.split.store(split, Ordering::Relaxed);
+        }
+    }
+
+    /// Volumen y mute del canal izquierdo (click y guía) de una secuencia dividida.
+    pub async fn set_track_cue(&self, track_id: &str, gain: Option<f32>, muted: Option<bool>) {
+        let tracks = self.tracks.lock().await;
+        if let Some(trk) = tracks.iter().find(|t| t.track_id == track_id) {
+            if let Some(g) = gain {
+                trk.cue_gain.store(g.clamp(0.0, 4.0).to_bits(), Ordering::Relaxed);
+            }
+            if let Some(m) = muted {
+                trk.cue_muted.store(m, Ordering::Relaxed);
+            }
         }
     }
 
@@ -985,8 +1012,15 @@ impl PlaybackEngine {
                         let is_solo = trk.soloed.load(Ordering::Relaxed);
                         let track_bus = TrackBus::from_u8(trk.bus.load(Ordering::Relaxed));
                         let monitor_on = trk.monitor.load(Ordering::Relaxed);
+                        let split_on = trk.split.load(Ordering::Relaxed);
+                        let solo_silent = any_solo && !is_solo;
+                        // Secuencia dividida: el mute de la pista apaga la música (canal derecho); el click y la guía del canal
+                        // izquierdo tienen su propio mute y volumen (fader Click). Una pista normal nunca tiene `cue_on`.
+                        let music_on = !is_muted && !solo_silent;
+                        let cue_on = split_on && !trk.cue_muted.load(Ordering::Relaxed) && !solo_silent;
+                        let cue_g_trk = f32::from_bits(trk.cue_gain.load(Ordering::Relaxed));
 
-                        if is_muted || (any_solo && !is_solo) {
+                        if !music_on && !cue_on {
                             // Una pista silenciada también avanza: se consume (y se resincroniza) igual.
                             if let Ok(mut c) = trk.consumer.try_lock() {
                                 let unread_frames = (c.slots() / 2) as u64;
@@ -1013,6 +1047,26 @@ impl PlaybackEngine {
                             let mut pk_l = 0.0f32;
                             let mut pk_r = 0.0f32;
                             let had_underrun = consume_track_block(&mut c, &trk.skip_frames, track_eof, frames, |f, l, r| {
+                                if split_on {
+                                    // Canal izquierdo (click y guía) → auriculares; canal derecho (instrumentos) → música.
+                                    if cue_on {
+                                        let cl = l * cue_g_trk;
+                                        cue_l[f] += cl;
+                                        cue_r[f] += cl;
+                                    }
+                                    if music_on {
+                                        let (ml, mr) = apply_pan(r, r, law);
+                                        pk_l = pk_l.max(ml.abs());
+                                        pk_r = pk_r.max(mr.abs());
+                                        main_l[f] += ml;
+                                        main_r[f] += mr;
+                                        if monitor_on {
+                                            mon_l[f] += ml;
+                                            mon_r[f] += mr;
+                                        }
+                                    }
+                                    return;
+                                }
                                 let (tl, tr) = apply_pan(l, r, law);
                                 pk_l = pk_l.max(tl.abs());
                                 pk_r = pk_r.max(tr.abs());
@@ -1236,8 +1290,15 @@ impl PlaybackEngine {
             let is_solo = trk.soloed.load(Ordering::Relaxed);
             let track_bus = TrackBus::from_u8(trk.bus.load(Ordering::Relaxed));
             let monitor_on = trk.monitor.load(Ordering::Relaxed);
+            let split_on = trk.split.load(Ordering::Relaxed);
+            let solo_silent = any_solo && !is_solo;
+            // Secuencia dividida: el mute de la pista apaga la música (canal derecho); el click y la guía del canal
+            // izquierdo tienen su propio mute y volumen (fader Click). Una pista normal nunca tiene `cue_on`.
+            let music_on = !is_muted && !solo_silent;
+            let cue_on = split_on && !trk.cue_muted.load(Ordering::Relaxed) && !solo_silent;
+            let cue_g_trk = f32::from_bits(trk.cue_gain.load(Ordering::Relaxed));
 
-            if is_muted || (any_solo && !is_solo) {
+            if !music_on && !cue_on {
                 if let Ok(mut c) = trk.consumer.lock() {
                     consume_track_block(&mut c, &trk.skip_frames, trk.eof.load(Ordering::Relaxed), frames, |_, _, _| {});
                 }
@@ -1251,6 +1312,26 @@ impl PlaybackEngine {
                 let mut pk_l = 0.0f32;
                 let mut pk_r = 0.0f32;
                 consume_track_block(&mut c, &trk.skip_frames, trk.eof.load(Ordering::Relaxed), frames, |f, l, r| {
+                    if split_on {
+                        // Canal izquierdo (click y guía) → auriculares; canal derecho (instrumentos) → música.
+                        if cue_on {
+                            let cl = l * cue_g_trk;
+                            cue_l[f] += cl;
+                            cue_r[f] += cl;
+                        }
+                        if music_on {
+                            let (ml, mr) = apply_pan(r, r, law);
+                            pk_l = pk_l.max(ml.abs());
+                            pk_r = pk_r.max(mr.abs());
+                            main_l[f] += ml;
+                            main_r[f] += mr;
+                            if monitor_on {
+                                mon_l[f] += ml;
+                                mon_r[f] += mr;
+                            }
+                        }
+                        return;
+                    }
                     let (tl, tr) = apply_pan(l, r, law);
                     pk_l = pk_l.max(tl.abs());
                     pk_r = pk_r.max(tr.abs());

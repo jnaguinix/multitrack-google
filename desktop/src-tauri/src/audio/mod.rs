@@ -492,6 +492,9 @@ pub async fn audio_set_track_controls(
     soloed: Option<bool>,
     bus: Option<String>,
     monitor: Option<bool>,
+    split_sequence: Option<bool>,
+    cue_gain: Option<f32>,
+    cue_muted: Option<bool>,
 ) -> Result<(), String> {
     state
         .playback
@@ -499,6 +502,12 @@ pub async fn audio_set_track_controls(
         .await;
     if let Some(m) = monitor {
         state.playback.set_track_monitor(&track_id, m).await;
+    }
+    if let Some(s) = split_sequence {
+        state.playback.set_track_split(&track_id, s).await;
+    }
+    if cue_gain.is_some() || cue_muted.is_some() {
+        state.playback.set_track_cue(&track_id, cue_gain, cue_muted).await;
     }
     Ok(())
 }
