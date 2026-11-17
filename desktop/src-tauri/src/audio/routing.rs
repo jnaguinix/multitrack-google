@@ -19,8 +19,11 @@ use std::sync::atomic::{AtomicU32, AtomicU64, AtomicUsize, Ordering};
 pub const MAX_OUTPUTS: usize = 32;
 /// Cantidad de fuentes lógicas.
 pub const N_SOURCES: usize = 6;
-/// 1/√2: combina L y R en mono sin que una señal en un solo canal pierda más de 3 dB.
-pub const INV_SQRT2: f32 = std::f32::consts::FRAC_1_SQRT_2;
+/// Ganancia de la suma a mono: `(L + R) / 2`. El resultado nunca supera el pico de los canales originales, así que
+/// pasar a mono no empuja la mezcla contra el limitador. Lo que está al centro queda al mismo nivel que tenía cada
+/// lado en estéreo; lo que está en un solo canal baja 6 dB (como al pulsar «mono» en una consola).
+/// Antes era 1/√2: lo del centro subía 3 dB y las mezclas fuertes pasaban casi siempre por el limitador.
+pub const MONO_SUM_GAIN: f32 = 0.5;
 
 /// Fuente lógica que se puede enviar a una salida.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -376,7 +379,7 @@ impl Default for RoutingSlot {
 /// Música en mono a partir de un par L/R: lo que existe en un solo canal se conserva (a −3 dB).
 #[inline(always)]
 pub fn music_mono(l: f32, r: f32) -> f32 {
-    (l + r) * INV_SQRT2
+    (l + r) * MONO_SUM_GAIN
 }
 
 /// Umbral desde el que el limitador empieza a actuar.
@@ -526,12 +529,31 @@ mod tests {
         let cfg = propose(2);
         // Un instrumento que existe únicamente en el canal derecho no debe desaparecer.
         let solo_r = render(&cfg, sources(0.0, 0.8, 0.0, 0.0));
-        assert!((solo_r[1] - 0.8 * INV_SQRT2).abs() < 1e-6, "lo del canal R se conserva en la salida de música: {}", solo_r[1]);
+        assert!((solo_r[1] - 0.4).abs() < 1e-6, "lo del canal R se conserva (−6 dB) en la salida de música: {}", solo_r[1]);
         let solo_l = render(&cfg, sources(0.8, 0.0, 0.0, 0.0));
-        assert!((solo_l[1] - 0.8 * INV_SQRT2).abs() < 1e-6);
-        // Ambos canales iguales (mono real) suben 3 dB: no hay pérdida.
+        assert!((solo_l[1] - 0.4).abs() < 1e-6);
+        // Ambos canales iguales (lo que está al centro) quedan exactamente al mismo nivel.
         let ambos = render(&cfg, sources(0.5, 0.5, 0.0, 0.0));
-        assert!((ambos[1] - 0.5 * 2.0 * INV_SQRT2).abs() < 1e-6);
+        assert!((ambos[1] - 0.5).abs() < 1e-6, "lo del centro no cambia de nivel: {}", ambos[1]);
+    }
+
+    #[test]
+    fn la_suma_a_mono_nunca_supera_el_pico_del_estereo() {
+        // Si la mezcla en estéreo no toca el limitador, en mono tampoco: |(L+R)/2| <= max(|L|, |R|).
+        let mut x = 0x1234_5678u32;
+        let mut next = || {
+            x ^= x << 13;
+            x ^= x >> 17;
+            x ^= x << 5;
+            (x as f32 / u32::MAX as f32) * 2.0 - 1.0
+        };
+        for _ in 0..100_000 {
+            let (l, r) = (next(), next());
+            assert!(music_mono(l, r).abs() <= l.abs().max(r.abs()) + 1e-6, "({l}, {r})");
+        }
+        // Una mezcla fuerte al centro (0,89 por lado, justo debajo del umbral) no pasa por el limitador en mono.
+        let m = music_mono(0.89, 0.89);
+        assert!(m <= LIMITER_KNEE && soft_limit(m) == m, "con la suma anterior (1/√2) daba 1,26 y se aplastaba: {m}");
     }
 
     #[test]
@@ -600,8 +622,8 @@ mod tests {
 
     #[test]
     fn sumar_musica_y_downmix_no_produce_clipping_duro() {
-        // Dos canales correlacionados cerca del máximo: el mono sube 3 dB y pasa de 1,0.
-        let mono = music_mono(0.95, 0.95);
+        // Una mezcla que ya pasa de 1,0 (faders arriba): el limitador la deja por debajo de 1,0 sin recorte duro.
+        let mono = music_mono(1.4, 1.3);
         assert!(mono > 1.0, "sin limitador esto recortaría ({mono})");
         assert!(soft_limit(mono) <= 1.0, "con limitador queda por debajo de 1,0");
     }
@@ -630,7 +652,7 @@ mod tests {
     fn la_musica_sigue_saliendo_completa_aunque_haya_monitor() {
         // El piano marcado «Aur.» suena también en Main: el monitor es un envío adicional, no un desvío.
         let out = render(&propose(2), sources_m(0.5, 0.5, 0.0, 0.0, 0.5));
-        assert!((out[1] - 2.0 * 0.5 * INV_SQRT2).abs() < 1e-6, "la música por la salida de música no cambia: {}", out[1]);
+        assert!((out[1] - 0.5).abs() < 1e-6, "la música por la salida de música no cambia: {}", out[1]);
         assert_eq!(out[0], 0.5, "y el envío sale por la salida de auriculares (izquierda)");
     }
 
