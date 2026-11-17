@@ -1,4 +1,5 @@
 import { createPreviewBackend } from './previewBackend';
+import { flightRecorder } from '../utils/flightRecorder';
 
 /**
  * Vista previa en el navegador: si la app corre con `npm run dev` fuera de Tauri, instala un `window.__TAURI__`
@@ -18,5 +19,6 @@ if (
     core: { invoke: backend.invoke },
     event: { listen: backend.listen },
   };
+  (window as any).__flightRecorder = flightRecorder;
   console.info('[Vista previa] Motor simulado activo: canciones de ejemplo, sin audio. Usa ?sinvista para desactivarlo.');
 }

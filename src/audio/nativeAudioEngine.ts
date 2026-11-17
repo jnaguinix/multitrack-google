@@ -7,8 +7,8 @@
 // =============================================================================
 
 import { logAsyncError } from '../utils/asyncErrors';
-import { panToEngine } from '../utils/panScale';
-import { engineBus } from '../utils/instrumentCatalog';
+import { ControlSync, type ControlOp, type EngineTrackControl } from './controlSync';
+import { flightRecorder } from '../utils/flightRecorder';
 import { AudioEngineMode, SongProject, TrackChannel, TransportState, MetersSnapshot } from '../types/project';
 import { MeterBallistics, NativeMetersSnapshot } from './meterBallistics';
 import { StatePoller } from './statePoller';
@@ -52,6 +52,8 @@ export interface NativePlaybackSnapshot {
   quantizeMode?: string;
   masterGain?: number;
   cueMasterGain?: number;
+  /** Lo que el motor tiene realmente en cada pista: la interfaz lo compara con lo que muestra y corrige diferencias. */
+  trackControls?: EngineTrackControl[];
   /** Picos reales medidos por el motor desde la consulta anterior. */
   meters?: NativeMetersSnapshot;
 }
@@ -71,6 +73,11 @@ export interface NativeImportProgress {
 
 export class NativeAudioEngine {
   private currentProject: SongProject | null = null;
+  /** Envío ordenado, por diferencias y autocorregido de los controles de la mezcla (ver `controlSync.ts`). */
+  private readonly controlSync = new ControlSync({
+    getInvoke: () => getInvoke() ?? undefined,
+    onError: (op, err) => logAsyncError(op.cmd)(err),
+  });
   private loadedProjectId: string | null = null;
   private loadingPromises = new Map<string, Promise<{ peaksMap: Map<string, number[]>; wasCancelled: boolean }>>();
   private transportListeners = new Set<(transport: TransportState) => void>();
@@ -354,6 +361,11 @@ export class NativeAudioEngine {
   private applySnapshot(pb: NativePlaybackSnapshot): void {
     this.lastPlaybackState = pb;
     this.meterBallistics.update(pb.meters, meterNow());
+    // Red de seguridad: si el motor tiene algo distinto de lo que muestra la interfaz (una orden perdida o
+    // aplicada al revés), se corrige y queda anotado en la caja negra.
+    if (this.currentProject && this.loadedProjectId === this.currentProject.id) {
+      this.controlSync.reconcile(pb, this.currentProject);
+    }
     const curSec = pb.positionSec;
     const totSec = pb.durationSec;
     this.lastPositionSec = curSec;
@@ -555,82 +567,6 @@ export class NativeAudioEngine {
   // ===========================================================================
   // CONTROL DE MEZCLADOR Y PISTAS
   // ===========================================================================
-  public setTrackGain(trackId: string, gain: number): void {
-    const invoke = getInvoke();
-    if (!invoke) return;
-    invoke('audio_set_track_controls', { trackId, gain }).catch(logAsyncError('audio_set_track_controls'));
-  }
-
-  public setTrackPan(trackId: string, pan: number): void {
-    const invoke = getInvoke();
-    if (!invoke) return;
-    invoke('audio_set_track_controls', { trackId, pan: panToEngine(pan) }).catch(logAsyncError('audio_set_track_controls'));
-  }
-
-  public setTrackMuted(trackId: string, muted: boolean): void {
-    const invoke = getInvoke();
-    if (!invoke) return;
-    invoke('audio_set_track_controls', { trackId, muted }).catch(logAsyncError('audio_set_track_controls'));
-  }
-
-  public setTrackSoloed(trackId: string, soloed: boolean): void {
-    const invoke = getInvoke();
-    if (!invoke) return;
-    invoke('audio_set_track_controls', { trackId, soloed }).catch(logAsyncError('audio_set_track_controls'));
-  }
-
-  public setTrackBus(trackId: string, bus: string): void {
-    const invoke = getInvoke();
-    if (!invoke) return;
-    invoke('audio_set_track_controls', { trackId, bus }).catch(logAsyncError('audio_set_track_controls'));
-  }
-
-  public setMasterGain(masterGain: number): void {
-    const invoke = getInvoke();
-    if (!invoke) return;
-    invoke('audio_set_master_gains', { masterGain, cueMasterGain: null }).catch(logAsyncError('audio_set_master_gains'));
-  }
-
-  public setCueMasterGain(cueMasterGain: number): void {
-    const invoke = getInvoke();
-    if (!invoke) return;
-    invoke('audio_set_master_gains', { masterGain: null, cueMasterGain }).catch(logAsyncError('audio_set_master_gains'));
-  }
-
-  public setClickEnabled(enabled: boolean): void {
-    if (!this.currentProject) return;
-    this.updateMetronome({ clickEnabled: enabled });
-  }
-
-  public setClickGain(gain: number): void {
-    if (!this.currentProject) return;
-    this.updateMetronome({ clickGain: gain });
-  }
-
-  public setClickSubdivision(subdivision: number): void {
-    if (!this.currentProject) return;
-    this.updateMetronome({ clickSubdivision: subdivision as 1 | 2 });
-  }
-
-  public setPitchSemitones(semitones: number): void {
-    const invoke = getInvoke();
-    if (!invoke) return;
-    invoke('audio_set_pitch', { semitones }).catch(logAsyncError('audio_set_pitch'));
-  }
-
-  private updateMetronome(changes: Partial<SongProject>): void {
-    const invoke = getInvoke();
-    if (!invoke || !this.currentProject) return;
-    const cfg = {
-      enabled: changes.clickEnabled ?? this.currentProject.clickEnabled ?? true,
-      bpm: this.currentProject.bpm || 120,
-      beatsPerBar: this.currentProject.beatsPerBar || 4,
-      subdivision: changes.clickSubdivision ?? this.currentProject.clickSubdivision ?? 1,
-      gain: changes.clickGain ?? this.currentProject.clickGain ?? 0.8,
-    };
-    invoke('audio_set_metronome', { config: cfg }).catch(logAsyncError('audio_set_metronome'));
-  }
-
   // ===========================================================================
   // CARGA DE PROYECTO Y VERIFICACIÓN DE CACHÉ NATIVA
   // ===========================================================================
@@ -644,45 +580,19 @@ export class NativeAudioEngine {
     }
   }
 
+  /** Envía TODO el estado de la canción al motor (carga, importación, reapertura). */
   public updateProjectConfig(project: SongProject): void {
     this.currentProject = project;
-    const invoke = getInvoke();
-    if (!invoke) return;
+    this.controlSync.syncAll(project);
+  }
 
-    // Sincronizar parámetros globales
-    this.setMasterGain(project.masterGain ?? 1.0);
-    this.setCueMasterGain(project.cueMasterGain ?? 0.708);
-    this.setPitchSemitones(project.pitchSemitones || 0);
-
-    const nativeSections = (project.sections || []).map((s) => ({
-      id: s.id,
-      name: s.name,
-      code: (s as any).code || null,
-      startSec: s.startTimeSec,
-      endSec: s.endTimeSec,
-    }));
-
-    invoke('audio_configure_song', {
-      bpm: project.bpm || 120,
-      beatsPerBar: project.beatsPerBar || 4,
-      sections: nativeSections,
-      quantizeMode: project.quantizeMode || 'section-end',
-    }).catch(logAsyncError('audio_configure_song'));
-
-    // Sincronizar metrónomo
-    this.updateMetronome(project);
-
-    // Sincronizar controles individuales de cada pista
-    for (const trk of project.tracks) {
-      invoke('audio_set_track_controls', {
-        trackId: trk.id,
-        gain: trk.gain,
-        pan: panToEngine(trk.pan),
-        muted: trk.muted,
-        soloed: trk.soloed,
-        bus: engineBus(trk),
-      }).catch(logAsyncError('audio_set_track_controls'));
-    }
+  /**
+   * Envía solo lo que cambió entre dos versiones de la canción (un fader, un solo…). Las órdenes salen en orden y
+   * una a una. Devuelve las órdenes generadas (la interfaz las usa para decidir cuándo guardar).
+   */
+  public applyProjectChange(prev: SongProject, next: SongProject): ControlOp[] {
+    this.currentProject = next;
+    return this.controlSync.applyChange(prev, next);
   }
 
   /** Consulta al backend y actualiza el estado síncrono. Lanza si el backend falla. */

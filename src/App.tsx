@@ -74,6 +74,10 @@ import {
   orderTracksForDisplay,
 } from './utils/instrumentCatalog';
 import { loadTrackMapMemory, memoryKey, rememberTrackMapping } from './utils/trackMapMemory';
+import { isContinuousOnly } from './audio/controlSync';
+import { flightRecorder } from './utils/flightRecorder';
+import { findDuplicateTrackIds } from './utils/trackIds';
+import { projectSaves } from './storage/projectSaves';
 import {
   FingerprintCandidate,
 } from './audio/fingerprint';
@@ -558,18 +562,49 @@ export default function App() {
   // Mutate and persist current project helper
   const updateCurrentProject = useCallback(
     (updater: (prev: SongProject) => SongProject) => {
-      setCurrentProject((prev) => {
-        if (!prev) return null;
-        const next = updater(prev);
-        if (next === prev) return prev;
-        audioEngine.updateProjectConfig(next);
-        saveProjectToDb(next).catch(logAsyncError('guardar la canción'));
-        setProjects((list) => list.map((item) => (item.id === next.id ? next : item)));
-        return next;
-      });
+      // Nada de efectos secundarios dentro de un actualizador de estado: se calcula aquí, una sola vez, y el motor
+      // recibe solo la diferencia, en orden. `currentProjectRef` se adelanta para que dos cambios seguidos (p. ej.
+      // un solo y un volumen en el mismo instante) se compongan en vez de pisarse.
+      const prev = currentProjectRef.current;
+      if (!prev) return;
+      const next = updater(prev);
+      if (next === prev) return;
+      currentProjectRef.current = next;
+      setCurrentProject(next);
+      const ops = audioEngine.applyProjectChange(prev, next);
+      setProjects((list) => list.map((item) => (item.id === next.id ? next : item)));
+      // Arrastrar un fader no escribe el disco con cada píxel: se agrupa y se guarda el último valor.
+      if (isContinuousOnly(ops)) projectSaves.schedule(next);
+      else void projectSaves.saveNow(next);
     },
     []
   );
+
+  // Al ocultar o cerrar la ventana se vacía lo pendiente de guardar.
+  useEffect(() => {
+    const flush = () => void projectSaves.flushAll();
+    const onVisibility = () => {
+      if (document.visibilityState === 'hidden') flush();
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+    window.addEventListener('pagehide', flush);
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibility);
+      window.removeEventListener('pagehide', flush);
+    };
+  }, []);
+
+  // Aviso (una vez por canción) si hay pistas con ID repetido: el motor solo direcciona la primera.
+  const warnedDuplicateIds = useRef(new Set<string>());
+  useEffect(() => {
+    for (const p of projects) {
+      const dup = findDuplicateTrackIds(p.tracks);
+      if (dup.length === 0 || warnedDuplicateIds.current.has(p.id)) continue;
+      warnedDuplicateIds.current.add(p.id);
+      flightRecorder.record('ids-repetidos', `${p.title}: ${dup.join(', ')}`);
+      showToast(`«${p.title}» tiene pistas con ID repetido (${dup.join(', ')}). Reimporta la carpeta para corregirlo.`);
+    }
+  }, [projects, showToast]);
 
   // «Editar pistas»: reasigna el instrumento de cada pista de la canción actual (nombre, rol, color y bus).
   const handleSaveTrackMapping = useCallback(

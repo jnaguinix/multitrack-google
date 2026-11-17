@@ -2,6 +2,7 @@ import React, { memo, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { logAsyncError } from '../../src/utils/asyncErrors';
 import { AudioRoutingPanel } from './AudioRoutingPanel';
+import { flightRecorder } from '../../src/utils/flightRecorder';
 import {
   Sliders,
   Volume2,
@@ -164,6 +165,26 @@ export default memo(function DesktopAudioSettings({ triggerHost }: Props) {
   const [cacheProgressPercent, setCacheProgressPercent] = useState(0);
 
   const [isDiagnosticsOpen, setIsDiagnosticsOpen] = useState(false);
+  const [diagNotice, setDiagNotice] = useState('');
+
+  // Caja negra: los últimos eventos de control y las discrepancias corregidas, listos para pegar en un mensaje.
+  const copyDiagnostic = async () => {
+    const text = flightRecorder.report({
+      navegador: navigator.userAgent,
+      dispositivo: activeDevice?.name,
+      salidas: activeDevice?.channels,
+      reproduciendo: playbackState.isPlaying,
+      posicionSeg: Math.round(playbackState.positionSec * 10) / 10,
+    });
+    try {
+      await navigator.clipboard.writeText(text);
+      setDiagNotice('Diagnóstico copiado: pégalo en un mensaje.');
+    } catch (err) {
+      logAsyncError('copiar el diagnóstico')(err);
+      console.info(text);
+      setDiagNotice('No se pudo copiar; el texto quedó en la consola.');
+    }
+  };
   const [cacheStats, setCacheStats] = useState<{ totalBytes: number; projectCount: number; projectIds: string[] }>({
     totalBytes: 0,
     projectCount: 0,
@@ -830,6 +851,17 @@ export default memo(function DesktopAudioSettings({ triggerHost }: Props) {
 
           {isDiagnosticsOpen && (
             <div className="space-y-2 pt-1">
+              {/* Caja negra de los controles de la mezcla */}
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => void copyDiagnostic()}
+                  className="px-3 py-1 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-neutral-200 text-xs font-medium cursor-pointer transition-colors shrink-0"
+                >
+                  Copiar diagnóstico
+                </button>
+                {diagNotice && <span className="text-[11px] text-neutral-400 truncate">{diagNotice}</span>}
+              </div>
               {/* Alerta si el hardware de audio fue desconectado */}
               {playbackState.deviceDisconnected && (
                 <div className="flex items-center justify-between p-2 rounded-lg bg-rose-950/80 border border-rose-800 text-rose-200 text-xs">

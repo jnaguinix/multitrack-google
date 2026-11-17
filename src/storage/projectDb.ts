@@ -461,8 +461,17 @@ function scheduleProjectSidecarSync(project: SongProject): void {
   sidecarDebounceTimers.set(project.id, timer);
 }
 
+/**
+ * El solo es una escucha momentánea, no parte de la mezcla: guardarlo hacía que al reabrir la canción solo sonara
+ * una pista (y que pareciera que «no suena nada»). Mute, volumen y paneo sí se conservan.
+ */
+export function withoutSolos(project: SongProject): SongProject {
+  if (!project.tracks.some((t) => t.soloed)) return project;
+  return { ...project, tracks: project.tracks.map((t) => (t.soloed ? { ...t, soloed: false } : t)) };
+}
+
 export async function saveProjectToDb(project: SongProject): Promise<void> {
-  const updatedProject = { ...project, updatedAt: Date.now() };
+  const updatedProject = { ...withoutSolos(project), updatedAt: Date.now() };
   if (isDesktopApp()) {
     await saveDesktopSong(updatedProject);
     return;
@@ -485,10 +494,12 @@ export async function loadAllProjectsFromDb(): Promise<SongProject[]> {
     const activeSet = new Set(lib.activeSetlist || []);
     const userProjects: SongProject[] = lib.songs.map((item: any) => {
       const inSet = item.inSetlist !== undefined ? Boolean(item.inSetlist) : activeSet.has(item.id);
-      return normalizeProjectSectionsToTime({
-        ...item,
-        inSetlist: inSet,
-      });
+      return normalizeProjectSectionsToTime(
+        withoutSolos({
+          ...item,
+          inSetlist: inSet,
+        })
+      );
     });
     userProjects.sort((a, b) => b.updatedAt - a.updatedAt);
     return userProjects;

@@ -21,9 +21,11 @@ interface SectionDto {
 
 interface TrackControl {
   gain: number;
+  /** Entero de -100 a 100, como en el motor real. */
   pan: number;
   muted: boolean;
   soloed: boolean;
+  bus: string;
 }
 
 const SCAN_NAMES = [
@@ -89,8 +91,11 @@ function routingInfo(name: string | null): RoutingInfo {
 
 export function createPreviewBackend() {
   const library = createSampleLibrary();
+  // Solo desarrollo: permite provocar a mano una diferencia entre la interfaz y el "motor" para ver la autocorrección.
+  (globalThis as unknown as { __previewControls?: Map<string, TrackControl> }).__previewControls = undefined;
   const songsById = new Map<string, SongProject>(library.songs.map((s) => [s.id, s]));
   const controls = new Map<string, TrackControl>();
+  (globalThis as unknown as { __previewControls?: Map<string, TrackControl> }).__previewControls = controls;
 
   let loadedId: string | null = null;
   let trackIds: string[] = [];
@@ -177,6 +182,7 @@ export function createPreviewBackend() {
       masterGain,
       cueMasterGain,
       meters: meters(),
+      trackControls: trackIds.map((id) => ({ trackId: id, ...(controls.get(id) as TrackControl) })),
     };
   };
 
@@ -234,7 +240,7 @@ export function createPreviewBackend() {
       queued = null;
       vamping = false;
       loopRange = null;
-      for (const t of song?.tracks ?? []) controls.set(t.id, { gain: t.gain, pan: t.pan, muted: t.muted, soloed: t.soloed });
+      for (const t of song?.tracks ?? []) controls.set(t.id, { gain: t.gain, pan: Math.round(t.pan * 100), muted: t.muted, soloed: t.soloed, bus: 'main' });
       const trackPeaks: Record<string, number[]> = {};
       for (const t of song?.tracks ?? []) trackPeaks[t.id] = t.peaks;
       return {
@@ -294,8 +300,9 @@ export function createPreviewBackend() {
 
     // ---- Motor: mezcla
     audio_set_track_controls: (a) => {
-      const c = controls.get(a?.trackId) ?? { gain: 1, pan: 0, muted: false, soloed: false };
+      const c = controls.get(a?.trackId) ?? { gain: 1, pan: 0, muted: false, soloed: false, bus: 'main' };
       if (a?.gain != null) c.gain = a.gain;
+      if (a?.bus != null) c.bus = a.bus;
       if (a?.pan != null) c.pan = a.pan;
       if (a?.muted != null) c.muted = a.muted;
       if (a?.soloed != null) c.soloed = a.soloed;

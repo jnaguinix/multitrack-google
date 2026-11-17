@@ -254,6 +254,18 @@ for (const file of tsFiles) {
     }
     calls.push({ cmd, file: rel(file), line: lineOf(text, m.index), args, hasSpread, raw });
   }
+
+  // Órdenes que salen por la cola de control: objetos `{ key: …, cmd: 'comando', args: { … } }`. Se analizan igual que
+  // un `invoke('comando', { … })`; los argumentos que se arman con claves dinámicas se comprueban en test/controlSync.test.ts.
+  const opRe = /cmd:\s*'([a-z_]+)'\s*,\s*args:\s*(\{)/g;
+  let o: RegExpExecArray | null;
+  while ((o = opRe.exec(text))) {
+    const open = o.index + o[0].length - 1;
+    const close = matchClose(text, open);
+    if (close < 0) continue;
+    const parsed = parseObjectLiteral(text.slice(open + 1, close));
+    calls.push({ cmd: o[1], file: rel(file), line: lineOf(text, o.index), args: parsed.args, hasSpread: parsed.spread, raw: false });
+  }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -380,6 +392,7 @@ const RESPONSE_TYPES: { file: string; iface: string; rust: string }[] = [
   { file: 'desktop/frontend/DesktopAudioSettings.tsx', iface: 'AudioStreamStatsSnapshot', rust: 'AudioStreamStatsSnapshot' },
   { file: 'desktop/frontend/DesktopAudioSettings.tsx', iface: 'AudioDeviceInfo', rust: 'AudioDeviceInfo' },
   { file: 'desktop/frontend/DesktopAudioSettings.tsx', iface: 'AudioSettings', rust: 'AudioSettings' },
+  { file: 'src/audio/controlSync.ts', iface: 'EngineTrackControl', rust: 'TrackControlSnapshot' },
   { file: 'desktop/frontend/routing.ts', iface: 'RoutingInfo', rust: 'RoutingInfo' },
   { file: 'desktop/frontend/routing.ts', iface: 'RoutingConfig', rust: 'RoutingConfig' },
   { file: 'desktop/frontend/routing.ts', iface: 'OutputAssign', rust: 'OutputAssign' },
