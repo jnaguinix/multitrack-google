@@ -2,24 +2,9 @@ import React, { memo, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { logAsyncError } from '../../src/utils/asyncErrors';
 import { AudioRoutingPanel } from './AudioRoutingPanel';
-import { flightRecorder } from '../../src/utils/flightRecorder';
-import {
-  Sliders,
-  Volume2,
-  Check,
-  AlertTriangle,
-  Info,
-  RefreshCw,
-  X,
-  Activity,
-  Play,
-  Pause,
-  Square,
-  FolderOpen,
-  ChevronDown,
-  RotateCcw,
-} from 'lucide-react';
-import { loadAllProjectsFromDb, loadProjectStemsFromDb, extractStemArrayBuffer } from '../../src/storage/projectDb';
+import { AudioDiagnostics, type AudioStreamStatsSnapshot } from './AudioDiagnostics';
+import { Sliders, Volume2, RefreshCw, X, Play } from 'lucide-react';
+import { loadAllProjectsFromDb } from '../../src/storage/projectDb';
 import { SongProject } from '../../src/types/project';
 import './connection.css';
 
@@ -44,16 +29,6 @@ interface AudioSettings {
   sampleRate: number | null;
   bufferSize: number | null;
   testChannel: number | null;
-}
-
-interface AudioStreamStatsSnapshot {
-  underruns: number;
-  callbacks: number;
-  maxCallbackDurationUs: number;
-  minRingBufferLevelMs?: number | null;
-  maxFeederBlockDurationUs?: number;
-  limitedSamples?: number;
-  outputSamples?: number;
 }
 
 interface PlaybackStateSnapshot {
@@ -96,25 +71,6 @@ interface Props {
 
 const host = window as Window & { __TAURI__?: { core: { invoke: Invoke } } };
 const invoke = host.__TAURI__?.core.invoke;
-
-/** Porcentaje de muestras de salida que pasaron por el limitador. */
-function limiterShare(s: AudioStreamStatsSnapshot): number | null {
-  if (!s.outputSamples) return null;
-  return ((s.limitedSamples ?? 0) / s.outputSamples) * 100;
-}
-
-function limiterLabel(s: AudioStreamStatsSnapshot): string {
-  const share = limiterShare(s);
-  if (share == null) return '—';
-  if (share === 0) return '0 %';
-  return share < 0.01 ? '< 0,01 %' : `${share.toLocaleString('es', { maximumFractionDigits: 2 })} %`;
-}
-
-function limiterTone(s: AudioStreamStatsSnapshot): string {
-  const share = limiterShare(s);
-  if (!share) return 'text-emerald-400';
-  return share < 0.1 ? 'text-amber-300' : 'text-rose-400 font-bold';
-}
 
 export default memo(function DesktopAudioSettings({ triggerHost }: Props) {
   const dialogRef = useRef<HTMLDialogElement>(null);
@@ -159,7 +115,6 @@ export default memo(function DesktopAudioSettings({ triggerHost }: Props) {
   };
 
   const [songProjects, setSongProjects] = useState<SongProject[]>([]);
-  const [selectedProjectId, setSelectedProjectId] = useState<string>('');
   const [playbackState, setPlaybackState] = useState<PlaybackStateSnapshot>({
     isPlaying: false,
     positionSec: 0,
@@ -170,86 +125,6 @@ export default memo(function DesktopAudioSettings({ triggerHost }: Props) {
     callbacks: 0,
     maxCallbackDurationUs: 0,
   });
-  const [isNativeLoaded, setIsNativeLoaded] = useState(false);
-  const [nativeNotice, setNativeNotice] = useState('');
-  const [seekInputSec, setSeekInputSec] = useState(0);
-  const [isDraggingSeek, setIsDraggingSeek] = useState(false);
-
-  const [loadErrorDetails, setLoadErrorDetails] = useState<string | null>(null);
-  const [isGeneratingCache, setIsGeneratingCache] = useState(false);
-  const [cacheProgressText, setCacheProgressText] = useState('');
-  const [cacheProgressPercent, setCacheProgressPercent] = useState(0);
-
-  const [isDiagnosticsOpen, setIsDiagnosticsOpen] = useState(false);
-  const [diagNotice, setDiagNotice] = useState('');
-
-  // Caja negra: los últimos eventos de control y las discrepancias corregidas, listos para pegar en un mensaje.
-  const copyDiagnostic = async () => {
-    const text = flightRecorder.report({
-      navegador: navigator.userAgent,
-      dispositivo: activeDevice?.name,
-      salidas: activeDevice?.channels,
-      reproduciendo: playbackState.isPlaying,
-      posicionSeg: Math.round(playbackState.positionSec * 10) / 10,
-    });
-    try {
-      await navigator.clipboard.writeText(text);
-      setDiagNotice('Diagnóstico copiado: pégalo en un mensaje.');
-    } catch (err) {
-      logAsyncError('copiar el diagnóstico')(err);
-      console.info(text);
-      setDiagNotice('No se pudo copiar; el texto quedó en la consola.');
-    }
-  };
-  const [cacheStats, setCacheStats] = useState<{ totalBytes: number; projectCount: number; projectIds: string[] }>({
-    totalBytes: 0,
-    projectCount: 0,
-    projectIds: [],
-  });
-  const [isCleaningCache, setIsCleaningCache] = useState(false);
-  const [cleanCacheNotice, setCleanCacheNotice] = useState('');
-
-  const refreshCacheStats = async () => {
-    if (!invoke) return;
-    try {
-      const s = await invoke<any>('audio_get_cache_stats');
-      if (s) setCacheStats(s);
-    } catch {
-      // ignore
-    }
-  };
-
-  const handleCleanOrphanCache = async () => {
-    if (!invoke) return;
-    const confirmed = window.confirm(
-      '¿Deseas eliminar las carpetas de caché nativa de canciones que ya no están en tu biblioteca?'
-    );
-    if (!confirmed) return;
-
-    setIsCleaningCache(true);
-    setCleanCacheNotice('');
-    try {
-      const validIds = songProjects.map((p) => p.id);
-      const res: any = await invoke('audio_clean_orphan_caches', { validProjectIds: validIds });
-      const freedMb = (res.freedBytes / (1024 * 1024)).toFixed(1);
-      setCleanCacheNotice(`Se eliminaron ${res.deletedCount} carpetas huérfanas (${freedMb} MB liberados).`);
-      await refreshCacheStats();
-    } catch (err: any) {
-      setCleanCacheNotice(`Error limpiando caché: ${err}`);
-    } finally {
-      setIsCleaningCache(false);
-    }
-  };
-
-  const [selectedSectionId, setSelectedSectionId] = useState<string>('');
-  const [quantizeMode, setQuantizeMode] = useState<string>('1-bar');
-  const [clickEnabled, setClickEnabled] = useState(true);
-  const [clickGain, setClickGain] = useState(0.8);
-  const [clickSubdiv, setClickSubdiv] = useState<1 | 2>(1);
-  const [pitchSemitones, setPitchSemitones] = useState(0);
-
-  const currentProject = songProjects.find((p) => p.id === selectedProjectId);
-
   const activeDevice = devices.find((d) => d.name === selectedDeviceName) || devices.find((d) => d.isDefault) || devices[0];
 
   const loadAudioConfig = async () => {
@@ -275,9 +150,6 @@ export default memo(function DesktopAudioSettings({ triggerHost }: Props) {
       try {
         const projs = await loadAllProjectsFromDb();
         setSongProjects(projs);
-        if (projs.length > 0 && !selectedProjectId) {
-          setSelectedProjectId(projs[0].id);
-        }
       } catch {
         // ignore
       }
@@ -332,26 +204,7 @@ export default memo(function DesktopAudioSettings({ triggerHost }: Props) {
       timer = window.setInterval(async () => {
         try {
           const pb = await invoke<PlaybackStateSnapshot>('audio_get_playback_state');
-          if (pb) {
-            setPlaybackState(pb);
-            if (pb.isPlaying && !isDraggingSeek) {
-              setSeekInputSec(Math.round(pb.positionSec * 10) / 10);
-            } else if (!pb.isPlaying && pb.currentFrame === 0 && !isDraggingSeek) {
-              setSeekInputSec(0);
-            }
-            if (typeof pb.pitchSemitones === 'number') {
-              setPitchSemitones(pb.pitchSemitones);
-            }
-            if (typeof pb.clickEnabled === 'boolean') {
-              setClickEnabled(pb.clickEnabled);
-            }
-            if (typeof pb.clickGain === 'number') {
-              setClickGain(pb.clickGain);
-            }
-            if (typeof pb.clickSubdivision === 'number') {
-              setClickSubdiv(pb.clickSubdivision as 1 | 2);
-            }
-          }
+          if (pb) setPlaybackState(pb);
           const s = await invoke<AudioStreamStatsSnapshot>('audio_get_stats');
           if (s) setStats(s);
         } catch (err) {
@@ -362,255 +215,7 @@ export default memo(function DesktopAudioSettings({ triggerHost }: Props) {
     return () => {
       if (timer) clearInterval(timer);
     };
-  }, [isDraggingSeek, isOpen]);
-
-  const handleNativeLoad = async () => {
-    if (!invoke || !selectedProjectId) return;
-    setNativeNotice('Cargando pistas...');
-    setLoadErrorDetails(null);
-    try {
-      const currentProj = songProjects.find((p) => p.id === selectedProjectId);
-      const nativeSections = (currentProj?.sections || []).map((s) => ({
-        id: s.id,
-        name: s.name,
-        code: (s as any).code || null,
-        startSec: s.startTimeSec,
-        endSec: s.endTimeSec,
-      }));
-
-      const res: any = await invoke('audio_load_project', {
-        projectId: selectedProjectId,
-        bpm: currentProj?.bpm || 120,
-        beatsPerBar: currentProj?.beatsPerBar || 4,
-        sections: nativeSections,
-        quantizeMode: currentProj?.quantizeMode || quantizeMode || '1-bar',
-      });
-      setIsNativeLoaded(true);
-      setNativeNotice(`Cargadas ${res.trackCount} pistas (${res.durationSec.toFixed(1)}s)`);
-
-      if (currentProj?.sections && currentProj.sections.length > 0) {
-        setSelectedSectionId(currentProj.sections[0].id);
-      }
-
-      pollStats();
-    } catch (err: any) {
-      const errMsg = String(err);
-      setNativeNotice(`Error cargando: ${errMsg}`);
-      setLoadErrorDetails(errMsg);
-    }
-  };
-
-  const handleQueueJump = async (sectionId: string) => {
-    if (!invoke || !sectionId) return;
-    try {
-      const res: any = await invoke('audio_queue_jump', { sectionId, mode: quantizeMode });
-      setNativeNotice(`Salto en cola -> ${res?.targetSectionId || sectionId} (${quantizeMode})`);
-      setLoadErrorDetails(null);
-    } catch (err: any) {
-      const errMsg = `Error en salto: ${err instanceof Error ? err.message : String(err)}`;
-      setNativeNotice(errMsg);
-      setLoadErrorDetails(errMsg);
-    }
-  };
-
-  const handleCancelJump = async () => {
-    if (!invoke) return;
-    try {
-      await invoke('audio_cancel_jump');
-      setNativeNotice('Salto cancelado');
-    } catch (err: any) {
-      const errMsg = `Error cancelando salto: ${err instanceof Error ? err.message : String(err)}`;
-      setNativeNotice(errMsg);
-    }
-  };
-
-  const handleToggleVamp = async () => {
-    if (!invoke) return;
-    try {
-      const newVamp: boolean = await invoke('audio_toggle_vamp', { enable: !playbackState.isVamping });
-      setNativeNotice(newVamp ? 'Vamp activado en bucle' : 'Vamp desactivado');
-    } catch (err: any) {
-      const errMsg = `Error alternando vamp: ${err instanceof Error ? err.message : String(err)}`;
-      setNativeNotice(errMsg);
-    }
-  };
-
-  const handlePitchChange = async (st: number) => {
-    setPitchSemitones(st);
-    if (!invoke) return;
-    try {
-      await invoke('audio_set_pitch', { semitones: st });
-    } catch (err) {
-      console.warn('Error cambiando tono:', err);
-    }
-  };
-
-  const handleMetronomeChange = async (enabled: boolean, gain: number, subdivision: number) => {
-    setClickEnabled(enabled);
-    setClickGain(gain);
-    setClickSubdiv(subdivision as 1 | 2);
-    if (!invoke) return;
-    try {
-      await invoke('audio_set_metronome', {
-        config: {
-          enabled,
-          bpm: currentProject?.bpm || 120,
-          beatsPerBar: currentProject?.beatsPerBar || 4,
-          subdivision,
-          gain,
-        },
-      });
-    } catch (err) {
-      console.warn('Error configurando metrónomo:', err);
-    }
-  };
-
-  const handleGenerateNativeCache = async () => {
-    if (!invoke || !selectedProjectId) return;
-    setIsGeneratingCache(true);
-    setCacheProgressPercent(0);
-    setCacheProgressText('Leyendo stems de la biblioteca...');
-    setLoadErrorDetails(null);
-    try {
-      const stems = await loadProjectStemsFromDb(selectedProjectId);
-      if (!stems || stems.length === 0) {
-        setLoadErrorDetails('No se encontraron stems en memoria para este proyecto. Usa el botón de carpeta para decodificar desde disco.');
-        setIsGeneratingCache(false);
-        return;
-      }
-
-      const total = stems.length;
-      let completed = 0;
-      const targetSr = activeDevice?.defaultSampleRate || 48000;
-
-      for (let i = 0; i < total; i++) {
-        const stem = stems[i];
-        const label = stem.fileName || stem.trackId;
-        setCacheProgressText(`Decodificando "${label}" (${i + 1}/${total})...`);
-        setCacheProgressPercent(Math.round(((i) / total) * 100));
-
-        const arrayBuf = await extractStemArrayBuffer(stem);
-        if (!arrayBuf || arrayBuf.byteLength === 0) {
-          continue;
-        }
-
-        const bytes = Array.from(new Uint8Array(arrayBuf));
-        await invoke('audio_import_track_bytes', {
-          projectId: selectedProjectId,
-          trackId: stem.trackId,
-          fileName: stem.fileName || `${stem.trackId}.mp3`,
-          bytes,
-          targetSampleRate: targetSr,
-        });
-        completed++;
-      }
-
-      if (completed === 0) {
-        setLoadErrorDetails('Los stems almacenados no tenían buffer en memoria. Selecciona la carpeta original desde disco.');
-        setIsGeneratingCache(false);
-        return;
-      }
-
-      setCacheProgressPercent(100);
-      setCacheProgressText(`¡Caché generada para ${completed} pistas!`);
-      setTimeout(() => {
-        setIsGeneratingCache(false);
-        void handleNativeLoad();
-      }, 500);
-    } catch (err: any) {
-      setLoadErrorDetails(`Error generando caché: ${err}`);
-      setIsGeneratingCache(false);
-    }
-  };
-
-  const handleImportFromFolder = async () => {
-    if (!invoke || !selectedProjectId) return;
-    try {
-      const selected = await invoke<any>('plugin:dialog|open', {
-        options: {
-          directory: true,
-          multiple: false,
-          title: 'Seleccionar carpeta de la canción multitrack',
-        },
-      });
-
-      const folderPath =
-        typeof selected === 'string'
-          ? selected
-          : selected?.path || (Array.isArray(selected) ? selected[0] : null);
-
-      if (!folderPath) return;
-
-      setIsGeneratingCache(true);
-      setCacheProgressText(`Decodificando archivos en "${folderPath}"...`);
-      setCacheProgressPercent(25);
-      setLoadErrorDetails(null);
-
-      const targetSr = activeDevice?.defaultSampleRate || 48000;
-      const res: any = await invoke('audio_import_folder', {
-        projectId: selectedProjectId,
-        folderPath,
-        targetSampleRate: targetSr,
-      });
-
-      setCacheProgressPercent(100);
-      setCacheProgressText(`¡${res.tracks?.length || 0} pistas procesadas!`);
-      setTimeout(() => {
-        setIsGeneratingCache(false);
-        void handleNativeLoad();
-      }, 500);
-    } catch (err: any) {
-      setLoadErrorDetails(`Error importando carpeta: ${err}`);
-      setIsGeneratingCache(false);
-    }
-  };
-
-  const handleNativePlay = async () => {
-    if (!invoke) return;
-    try {
-      await invoke('audio_play');
-      setNativeNotice('Reproduciendo');
-    } catch (err: any) {
-      setNativeNotice(`Error: ${err}`);
-    }
-  };
-
-  const handleNativePause = async () => {
-    if (!invoke) return;
-    try {
-      await invoke('audio_pause');
-      setNativeNotice('En pausa');
-    } catch (err: any) {
-      setNativeNotice(`Error: ${err}`);
-    }
-  };
-
-  const handleNativeStop = async () => {
-    if (!invoke) return;
-    try {
-      await invoke('audio_stop');
-      setSeekInputSec(0);
-      setNativeNotice('Detenido');
-    } catch (err: any) {
-      setNativeNotice(`Error: ${err}`);
-    }
-  };
-
-  const handleNativeSeek = async (sec: number) => {
-    if (!invoke) return;
-    try {
-      await invoke('audio_seek', { positionSec: sec });
-    } catch (err: any) {
-      setNativeNotice(`Error seek: ${err}`);
-    }
-  };
-
-  const formatTime = (sec: number) => {
-    const m = Math.floor(sec / 60);
-    const s = Math.floor(sec % 60);
-    const ms = Math.floor((sec % 1) * 10);
-    return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}.${ms}`;
-  };
+  }, [isOpen]);
 
   const handleTestTone = async (channel: number = selectedChannel) => {
     if (!invoke || !activeDevice) return;
@@ -791,148 +396,15 @@ export default memo(function DesktopAudioSettings({ triggerHost }: Props) {
           </div>
         )}
 
-        {/* 6. Sección plegable «Diagnóstico», cerrada por defecto (Se retirará en Fase 6) */}
-        <div className="border-t border-neutral-800 pt-2 space-y-2">
-          <button
-            type="button"
-            onClick={() => {
-              const next = !isDiagnosticsOpen;
-              setIsDiagnosticsOpen(next);
-              if (next) refreshCacheStats();
-            }}
-            className="flex items-center justify-between w-full text-xs font-semibold text-neutral-400 hover:text-neutral-200 py-0.5 cursor-pointer select-none transition-colors"
-          >
-            <div className="flex items-center gap-1.5">
-              <Activity size={13} className="text-neutral-400" />
-              <span>Diagnóstico</span>
-            </div>
-            <ChevronDown
-              size={13}
-              className={`text-neutral-400 transition-transform ${isDiagnosticsOpen ? 'rotate-180' : ''}`}
-            />
-          </button>
-
-          {isDiagnosticsOpen && (
-            <div className="space-y-2 pt-1">
-              {/* Caja negra de los controles de la mezcla */}
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => void copyDiagnostic()}
-                  className="px-3 py-1 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-neutral-200 text-xs font-medium cursor-pointer transition-colors shrink-0"
-                >
-                  Copiar diagnóstico
-                </button>
-                {diagNotice && <span className="text-[11px] text-neutral-400 truncate">{diagNotice}</span>}
-              </div>
-              {/* Alerta si el hardware de audio fue desconectado */}
-              {playbackState.deviceDisconnected && (
-                <div className="flex items-center justify-between p-2 rounded-lg bg-rose-950/80 border border-rose-800 text-rose-200 text-xs">
-                  <div className="flex items-center gap-2">
-                    <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0" />
-                    <span>Dispositivo de audio desconectado. Reproducción en pausa.</span>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={async () => {
-                      if (!invoke) return;
-                      try {
-                        await invoke('audio_reopen_stream');
-                        setNativeNotice('Dispositivo reabierto');
-                      } catch (err: any) {
-                        setNativeNotice(`Error reabriendo: ${err}`);
-                      }
-                    }}
-                    className="px-2 py-0.5 bg-rose-600 hover:bg-rose-500 text-white rounded font-medium cursor-pointer transition-colors shrink-0 text-[11px]"
-                  >
-                    Reabrir dispositivo
-                  </button>
-                </div>
-              )}
-
-              {/* Fila: Gestión de caché nativa y limpieza de huérfanos */}
-              <div className="flex items-center justify-between gap-2 p-2 rounded-lg bg-neutral-900/60 border border-neutral-800 text-xs">
-                <div>
-                  <span className="text-neutral-400 text-[11px] block">Caché nativa en disco:</span>
-                  <span className="font-mono text-neutral-200 text-xs">
-                    {(cacheStats.totalBytes / (1024 * 1024)).toFixed(1)} MB ({cacheStats.projectCount} {cacheStats.projectCount === 1 ? 'canción' : 'canciones'})
-                  </span>
-                </div>
-                <button
-                  type="button"
-                  onClick={handleCleanOrphanCache}
-                  disabled={isCleaningCache}
-                  className="px-2.5 py-1 rounded bg-neutral-800 hover:bg-neutral-700 text-neutral-200 text-[11px] font-medium cursor-pointer disabled:opacity-50 shrink-0"
-                  title="Elimina carpetas de caché de canciones que ya no existen en tu biblioteca"
-                >
-                  {isCleaningCache ? 'Limpiando...' : 'Limpiar caché huérfana'}
-                </button>
-              </div>
-              {cleanCacheNotice && (
-                <div className="text-[10px] text-emerald-400 px-1 truncate">
-                  {cleanCacheNotice}
-                </div>
-              )}
-
-              {/* Fila de contadores de telemetría + botón reiniciar */}
-              <div className="p-2 rounded-lg bg-studio-strip border border-studio-line text-xs space-y-1.5">
-                <div className="flex items-center justify-between">
-                  <div className="grid grid-cols-3 sm:grid-cols-7 gap-2 flex-1 text-[10px]">
-                    <div>
-                      <span className="text-neutral-400 uppercase tracking-wider block">Callbacks</span>
-                      <span className="font-mono text-neutral-200 text-xs">{stats.callbacks.toLocaleString()}</span>
-                    </div>
-                    <div>
-                      <span className="text-neutral-400 uppercase tracking-wider block">Underruns</span>
-                      <span className={`font-mono text-xs ${stats.underruns === 0 ? 'text-emerald-400' : 'text-rose-400 font-bold'}`}>
-                        {stats.underruns}
-                      </span>
-                    </div>
-                    <div>
-                      <span className="text-neutral-400 uppercase tracking-wider block">Callback máx</span>
-                      <span className="font-mono text-neutral-200 text-xs">
-                        {stats.maxCallbackDurationUs > 0 ? `${stats.maxCallbackDurationUs} µs` : '0 µs'}
-                      </span>
-                    </div>
-                    <div>
-                      <span className="text-neutral-400 uppercase tracking-wider block">Feeder máx</span>
-                      <span className="font-mono text-neutral-200 text-xs">
-                        {(stats.maxFeederBlockDurationUs || playbackState.maxFeederBlockDurationUs || 0) > 0
-                          ? `${stats.maxFeederBlockDurationUs || playbackState.maxFeederBlockDurationUs} µs`
-                          : '0 µs'}
-                      </span>
-                    </div>
-                    <div>
-                      <span className="text-neutral-400 uppercase tracking-wider block">Búfer mín</span>
-                      <span className="font-mono text-emerald-400 text-xs">
-                        {stats.minRingBufferLevelMs != null ? `${stats.minRingBufferLevelMs} ms` : '—'}
-                      </span>
-                    </div>
-                    <div title="Parte del audio de salida que pasó por el limitador (picos suavizados). Debería quedar en 0 %; si sube, baja el volumen de las pistas o el Main.">
-                      <span className="text-neutral-400 uppercase tracking-wider block">Limitador</span>
-                      <span className={`font-mono text-xs ${limiterTone(stats)}`}>{limiterLabel(stats)}</span>
-                    </div>
-                    <div>
-                      <span className="text-neutral-400 uppercase tracking-wider block">Prefill</span>
-                      <span className="font-mono text-neutral-300 text-xs">
-                        {playbackState.prefillDurationMs ? `${playbackState.prefillDurationMs} ms` : '0 ms'}
-                      </span>
-                    </div>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => void handleResetStats()}
-                    className="text-[10px] text-neutral-400 hover:text-white flex items-center gap-1 cursor-pointer shrink-0 transition-colors ml-2 self-start pt-1"
-                    title="Reiniciar contadores a cero"
-                  >
-                    <RotateCcw size={10} />
-                    <span>Reiniciar</span>
-                  </button>
-                </div>
-              </div>
-            </div>
-          )}
-        </div>
+        {/* 6. Sección plegable «Diagnóstico», cerrada por defecto */}
+        <AudioDiagnostics
+          invoke={invoke}
+          stats={stats}
+          playbackState={playbackState}
+          device={activeDevice}
+          validProjectIds={songProjects.map((p) => p.id)}
+          onResetStats={() => void handleResetStats()}
+        />
 
         {/* 7. Pie: «Cancelar» y «Guardar», alineados a la derecha */}
         <div className="flex items-center justify-between pt-2.5 border-t border-neutral-800">
