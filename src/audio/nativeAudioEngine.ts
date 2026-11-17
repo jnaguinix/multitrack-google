@@ -8,7 +8,7 @@
 
 import { logAsyncError } from '../utils/asyncErrors';
 import { panToEngine } from '../utils/panScale';
-import { effectiveBus } from '../utils/instrumentCatalog';
+import { engineBus } from '../utils/instrumentCatalog';
 import { AudioEngineMode, SongProject, TrackChannel, TransportState, MetersSnapshot } from '../types/project';
 import { MeterBallistics, NativeMetersSnapshot } from './meterBallistics';
 import { StatePoller } from './statePoller';
@@ -50,7 +50,6 @@ export interface NativePlaybackSnapshot {
   clickGain?: number;
   clickSubdivision?: number;
   quantizeMode?: string;
-  splitMono?: boolean;
   masterGain?: number;
   cueMasterGain?: number;
   /** Picos reales medidos por el motor desde la consulta anterior. */
@@ -619,12 +618,6 @@ export class NativeAudioEngine {
     invoke('audio_set_pitch', { semitones }).catch(logAsyncError('audio_set_pitch'));
   }
 
-  public setSplitRoutingMode(mode: 'stereo' | 'split-mono'): void {
-    const invoke = getInvoke();
-    if (!invoke) return;
-    invoke('audio_set_split_mono', { enabled: mode === 'split-mono' }).catch(logAsyncError('audio_set_split_mono'));
-  }
-
   private updateMetronome(changes: Partial<SongProject>): void {
     const invoke = getInvoke();
     if (!invoke || !this.currentProject) return;
@@ -634,7 +627,6 @@ export class NativeAudioEngine {
       beatsPerBar: this.currentProject.beatsPerBar || 4,
       subdivision: changes.clickSubdivision ?? this.currentProject.clickSubdivision ?? 1,
       gain: changes.clickGain ?? this.currentProject.clickGain ?? 0.8,
-      splitMono: this.currentProject.splitRoutingMode === 'split-mono',
     };
     invoke('audio_set_metronome', { config: cfg }).catch(logAsyncError('audio_set_metronome'));
   }
@@ -658,7 +650,6 @@ export class NativeAudioEngine {
     if (!invoke) return;
 
     // Sincronizar parámetros globales
-    this.setSplitRoutingMode(project.splitRoutingMode || 'stereo');
     this.setMasterGain(project.masterGain ?? 1.0);
     this.setCueMasterGain(project.cueMasterGain ?? 0.708);
     this.setPitchSemitones(project.pitchSemitones || 0);
@@ -689,7 +680,7 @@ export class NativeAudioEngine {
         pan: panToEngine(trk.pan),
         muted: trk.muted,
         soloed: trk.soloed,
-        bus: effectiveBus(trk),
+        bus: engineBus(trk),
       }).catch(logAsyncError('audio_set_track_controls'));
     }
   }

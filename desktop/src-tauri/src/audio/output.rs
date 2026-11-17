@@ -5,6 +5,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use crate::audio::playback::PlaybackEngine;
+use crate::audio::routing::RoutingStore;
 
 /// Elige la configuración de salida del dispositivo.
 ///
@@ -141,11 +142,14 @@ pub struct AudioEngineState {
     pub stats: Arc<AudioStreamStats>,
     pub import_cancellation: Mutex<std::collections::HashMap<String, Arc<AtomicBool>>>,
     pub playback: Arc<PlaybackEngine>,
+    /// Ruteo de salidas guardado por dispositivo (`audio_routing.json`).
+    pub routing_store: std::sync::Mutex<RoutingStore>,
 }
 
 impl AudioEngineState {
     pub fn new(settings_path: PathBuf) -> Self {
         let initial_settings = load_settings_from_disk(&settings_path).unwrap_or_default();
+        let routing_store = RoutingStore::load(&settings_path.with_file_name("audio_routing.json"));
         let stats = Arc::new(AudioStreamStats::default());
         Self {
             active_test_stream: Arc::new(Mutex::new(None)),
@@ -154,6 +158,7 @@ impl AudioEngineState {
             stats: Arc::clone(&stats),
             import_cancellation: Mutex::new(std::collections::HashMap::new()),
             playback: Arc::new(PlaybackEngine::new(Arc::clone(&stats))),
+            routing_store: std::sync::Mutex::new(routing_store),
         }
     }
 

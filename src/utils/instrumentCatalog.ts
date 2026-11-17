@@ -145,3 +145,13 @@ export function orderTracksForDisplay<T extends TrackLike>(tracks: readonly T[])
 export function effectiveBus(t: TrackLike): OutputBus {
   return isClickTrack(t) || isGuideTrack(t) ? 'cue-click' : 'main';
 }
+
+/**
+ * Bus que se envía al motor nativo. El motor distingue Click y Guía para poder sacarlos por salidas distintas
+ * cuando el dispositivo tiene suficientes canales (`audio/routing.rs`).
+ */
+export function engineBus(t: TrackLike): 'main' | 'click' | 'guide' {
+  if (isClickTrack(t)) return 'click';
+  if (isGuideTrack(t)) return 'guide';
+  return 'main';
+}

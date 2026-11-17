@@ -201,7 +201,6 @@ pub struct PlaybackStateSnapshot {
     pub click_gain: f32,
     pub click_subdivision: u32,
     pub quantize_mode: String,
-    pub split_mono: bool,
     pub master_gain: f32,
     pub cue_master_gain: f32,
     #[serde(default)]

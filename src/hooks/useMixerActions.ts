@@ -39,13 +39,6 @@ export function useMixerActions({
     updateCurrentProject((p) => ({ ...p, clickEnabled: !p.clickEnabled }));
   };
 
-  const handleToggleSplitRouting = () => {
-    updateCurrentProject((p) => ({
-      ...p,
-      splitRoutingMode: p.splitRoutingMode === 'stereo' ? 'split-mono' : 'stereo',
-    }));
-  };
-
   const handleToggleTrackMute = (trackId: string) => {
     updateCurrentProject((p) => ({
       ...p,
@@ -125,7 +118,6 @@ export function useMixerActions({
     handleChangePitch,
     handleChangeQuantize,
     handleToggleClick,
-    handleToggleSplitRouting,
     handleToggleTrackMute,
     handleToggleTrackSolo,
     handleChangeTrackGain,

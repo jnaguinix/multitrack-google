@@ -9,6 +9,8 @@ pub struct MetronomeConfig {
     pub beats_per_bar: u32,
     pub subdivision: u32, // 1 = quarter note, 2 = eighth note
     pub gain: f32,        // 0.0 to 2.0
+    /// Obsoleto: el ruteo vive en el dispositivo (`audio/routing.rs`). Se acepta y se ignora.
+    #[serde(default)]
     pub split_mono: bool,
 }
 

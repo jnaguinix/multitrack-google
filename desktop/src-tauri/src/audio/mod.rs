@@ -542,13 +542,154 @@ pub async fn audio_set_metronome(
     Ok(())
 }
 
+/// Estado del ruteo de salidas de un dispositivo, para la pantalla de Ajustes de audio.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RoutingInfo {
+    pub device_name: Option<String>,
+    pub host: String,
+    /// `false` si el dispositivo guardado no está conectado.
+    pub device_found: bool,
+    /// Canales de salida independientes que expone el dispositivo (los que declara Windows en su formato de mezcla).
+    pub channels: u16,
+    /// Ruteo vigente (el guardado si encaja con el dispositivo; si no, la propuesta).
+    pub config: routing::RoutingConfig,
+    /// Propuesta automática para esta cantidad de canales.
+    pub proposed: routing::RoutingConfig,
+    pub saved: bool,
+    /// Había un ruteo guardado para otra cantidad de canales: se descartó y se propone uno nuevo.
+    pub stale: bool,
+    pub valid: bool,
+    pub issues: Vec<String>,
+    pub notes: Vec<String>,
+    pub summary: String,
+}
+
+/// Canales de salida del dispositivo indicado (o del predeterminado). `Ok(None)` = el dispositivo no está conectado.
+fn probe_output_device(device_name: Option<&str>) -> Result<(String, Option<u16>), String> {
+    use cpal::traits::{DeviceTrait, HostTrait};
+    let host = cpal::default_host();
+    let host_name = host.id().name().to_string();
+    let device = match device_name {
+        Some(name) => host
+            .output_devices()
+            .map_err(|e| e.to_string())?
+            .find(|d| output::get_device_name(d) == name),
+        None => host.default_output_device(),
+    };
+    let channels = device.and_then(|d| d.default_output_config().ok().map(|c| c.channels()));
+    Ok((host_name, channels))
+}
+
+fn routing_notes(channels: u16) -> Vec<String> {
+    let mut notes = Vec::new();
+    if channels <= 2 {
+        notes.push(
+            "Windows (WASAPI compartido) solo expone los canales que declara el controlador. Una interfaz con más de dos \
+             salidas suele aparecer como varios pares estéreo separados («Analógico 1+2», «3+4»…) que no se pueden \
+             combinar en un solo dispositivo. Para usar más canales hace falta ASIO o un formato multicanal \
+             configurado en Windows."
+                .to_string(),
+        );
+    } else {
+        notes.push(format!(
+            "Windows expone {channels} canales de salida en este dispositivo. Una salida de audífonos que solo replica \
+             a otra no se distingue por software."
+        ));
+    }
+    notes.push("Comprueba cada canal con el tono de prueba antes de un servicio.".to_string());
+    notes
+}
+
+fn build_routing_info(state: &AudioEngineState, device_name: Option<String>) -> Result<RoutingInfo, String> {
+    let (host, channels) = probe_output_device(device_name.as_deref())?;
+    let found = channels.is_some();
+    let channels = channels.unwrap_or(0);
+    let key = routing::device_key(&host, device_name.as_deref().unwrap_or("(predeterminado)"));
+    let resolution = state.routing_store.lock().unwrap().resolve(&key, channels);
+    let mut issues: Vec<String> = routing::validate(&resolution.config, channels).iter().map(|i| i.message()).collect();
+    if !found {
+        issues.insert(
+            0,
+            format!(
+                "El dispositivo «{}» no está conectado.",
+                device_name.as_deref().unwrap_or("predeterminado")
+            ),
+        );
+    }
+    Ok(RoutingInfo {
+        device_name,
+        host,
+        device_found: found,
+        channels,
+        summary: routing::describe(&resolution.config),
+        proposed: routing::propose(channels),
+        saved: resolution.saved,
+        stale: resolution.stale,
+        valid: issues.is_empty(),
+        issues,
+        notes: routing_notes(channels),
+        config: resolution.config,
+    })
+}
+
+fn routing_key_for(device_name: &Option<String>) -> Result<String, String> {
+    let (host, _) = probe_output_device(device_name.as_deref())?;
+    Ok(routing::device_key(&host, device_name.as_deref().unwrap_or("(predeterminado)")))
+}
+
 #[tauri::command]
-pub async fn audio_set_split_mono(
+pub async fn audio_get_routing(
     state: State<'_, AudioEngineState>,
-    enabled: bool,
-) -> Result<(), String> {
-    state.playback.set_split_mono(enabled);
-    Ok(())
+    device_name: Option<String>,
+) -> Result<RoutingInfo, String> {
+    build_routing_info(&state, device_name)
+}
+
+/// Guarda el ruteo de un dispositivo. Solo se guarda si es válido para su cantidad de canales.
+#[tauri::command]
+pub async fn audio_set_routing(
+    state: State<'_, AudioEngineState>,
+    device_name: Option<String>,
+    config: routing::RoutingConfig,
+) -> Result<RoutingInfo, String> {
+    let (host, channels) = probe_output_device(device_name.as_deref())?;
+    let channels = channels.ok_or_else(|| {
+        format!(
+            "El dispositivo «{}» no está conectado: conéctalo para guardar su ruteo.",
+            device_name.as_deref().unwrap_or("predeterminado")
+        )
+    })?;
+    let mut config = config;
+    config.custom = true;
+    let issues = routing::validate(&config, channels);
+    if !issues.is_empty() {
+        // No se guarda ni se aplica: se devuelve para que la pantalla muestre qué corregir.
+        let mut info = build_routing_info(&state, device_name)?;
+        info.config = config;
+        info.issues = issues.iter().map(|i| i.message()).collect();
+        info.valid = false;
+        return Ok(info);
+    }
+    let key = routing::device_key(&host, device_name.as_deref().unwrap_or("(predeterminado)"));
+    state.playback.apply_routing(&key, &routing::RouteTable::from_config(&config))?;
+    state.routing_store.lock().unwrap().set(&key, config)?;
+    build_routing_info(&state, device_name)
+}
+
+/// Descarta el ruteo guardado de un dispositivo y vuelve a la propuesta automática.
+#[tauri::command]
+pub async fn audio_reset_routing(
+    state: State<'_, AudioEngineState>,
+    device_name: Option<String>,
+) -> Result<RoutingInfo, String> {
+    let (_, channels) = probe_output_device(device_name.as_deref())?;
+    let key = routing_key_for(&device_name)?;
+    if let Some(ch) = channels {
+        state.playback.apply_routing(&key, &routing::RouteTable::from_config(&routing::propose(ch)))?;
+    }
+    state.routing_store.lock().unwrap().remove(&key)?;
+    build_routing_info(&state, device_name)
 }
 
 #[tauri::command]

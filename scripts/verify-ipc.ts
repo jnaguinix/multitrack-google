@@ -380,6 +380,10 @@ const RESPONSE_TYPES: { file: string; iface: string; rust: string }[] = [
   { file: 'desktop/frontend/DesktopAudioSettings.tsx', iface: 'AudioStreamStatsSnapshot', rust: 'AudioStreamStatsSnapshot' },
   { file: 'desktop/frontend/DesktopAudioSettings.tsx', iface: 'AudioDeviceInfo', rust: 'AudioDeviceInfo' },
   { file: 'desktop/frontend/DesktopAudioSettings.tsx', iface: 'AudioSettings', rust: 'AudioSettings' },
+  { file: 'desktop/frontend/routing.ts', iface: 'RoutingInfo', rust: 'RoutingInfo' },
+  { file: 'desktop/frontend/routing.ts', iface: 'RoutingConfig', rust: 'RoutingConfig' },
+  { file: 'desktop/frontend/routing.ts', iface: 'OutputAssign', rust: 'OutputAssign' },
+  { file: 'desktop/frontend/routing.ts', iface: 'RouteEntry', rust: 'RouteEntry' },
 ];
 for (const r of RESPONSE_TYPES) {
   const text = read(path.join(ROOT, r.file));

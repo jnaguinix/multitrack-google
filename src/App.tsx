@@ -82,7 +82,7 @@ const DesktopRemoteBridge = (import.meta.env.VITE_OMNITRACKS_DESKTOP === '1' || 
   ? React.lazy(() => import('../desktop/frontend/RemoteConnectionBridge'))
   : null;
 
-const DesktopAudioSettings = import.meta.env.VITE_OMNITRACKS_DESKTOP === '1'
+const DesktopAudioSettings = (import.meta.env.VITE_OMNITRACKS_DESKTOP === '1' || import.meta.env.DEV)
   ? React.lazy(() => import('../desktop/frontend/DesktopAudioSettings'))
   : null;
 
@@ -571,20 +571,6 @@ export default function App() {
     []
   );
 
-  // El interruptor de Split-Mono de Ajustes de audio cambia el modo del proyecto: así el motor no lo pierde
-  // cuando la mezcla se reenvía (mover un fader) y el botón de la barra de transporte refleja el mismo estado.
-  useEffect(() => {
-    const onSplitMono = (event: Event) => {
-      const enabled = Boolean((event as CustomEvent<{ enabled: boolean }>).detail?.enabled);
-      updateCurrentProject((p) => {
-        const mode = enabled ? 'split-mono' : 'stereo';
-        return p.splitRoutingMode === mode ? p : { ...p, splitRoutingMode: mode };
-      });
-    };
-    window.addEventListener('omnitracks:split-mono', onSplitMono);
-    return () => window.removeEventListener('omnitracks:split-mono', onSplitMono);
-  }, [updateCurrentProject]);
-
   // «Editar pistas»: reasigna el instrumento de cada pista de la canción actual (nombre, rol, color y bus).
   const handleSaveTrackMapping = useCallback(
     (result: WizardResult) => {
@@ -758,7 +744,6 @@ export default function App() {
     handleChangePitch,
     handleChangeQuantize,
     handleToggleClick,
-    handleToggleSplitRouting,
     handleToggleTrackMute,
     handleToggleTrackSolo,
     handleChangeTrackGain,
@@ -857,7 +842,7 @@ export default function App() {
   const transportProject = activeView === 'live' ? null : currentProject;
   const remoteTriggerRef = DesktopRemoteBridge && (window.location.origin === 'https://tauri.localhost' || import.meta.env.DEV)
     ? setRemoteTriggerHost : undefined;
-  const audioTriggerRef = DesktopAudioSettings && window.location.origin === 'https://tauri.localhost'
+  const audioTriggerRef = DesktopAudioSettings && (window.location.origin === 'https://tauri.localhost' || import.meta.env.DEV)
     ? setAudioTriggerHost : undefined;
 
   return (
@@ -967,7 +952,6 @@ export default function App() {
           onChangePitch={handleChangePitch}
           onChangeQuantize={handleChangeQuantize}
           onToggleClick={handleToggleClick}
-          onToggleSplitRouting={handleToggleSplitRouting}
           onAddMarkerAtPlayhead={handleAddMarkerAtPlayhead}
           onOpenSectionEditor={() => setIsSectionEditorOpen(true)}
           onCancelQueuedJump={handleCancelQueuedJump}

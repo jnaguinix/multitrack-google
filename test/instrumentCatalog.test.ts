@@ -4,6 +4,7 @@ import {
   INSTRUMENTS,
   compareNames,
   effectiveBus,
+  engineBus,
   getInstrument,
   instrumentIdFromName,
   isClickTrack,
@@ -76,6 +77,12 @@ assert(!isClickTrack({ name: 'Bajo', role: 'bass' }) && !isGuideTrack({ name: 'G
 eq(effectiveBus({ name: 'Bajo', role: 'bass' }), 'main', 'instrumento → main');
 eq(effectiveBus({ name: 'Click Track', role: 'custom' }), 'cue-click', 'click → cue');
 eq(effectiveBus({ name: 'Guía', role: 'guide' }), 'cue-click', 'guía → cue');
+
+// --- Bus enviado al motor: Click y Guía se distinguen para poder separarlos en la salida
+eq(engineBus({ name: 'Bajo', role: 'bass' }), 'main', 'instrumento → main');
+eq(engineBus({ name: 'Click Track', role: 'custom' }), 'click', 'click antiguo → click');
+eq(engineBus({ name: 'Guía', role: 'guide' }), 'guide', 'guía → guide');
+eq(engineBus({ name: 'Cues', role: 'custom' }), 'guide', 'Cues antiguo → guide');
 
 // --- Memoria (coincidencia exacta)
 function fakeStorage() {

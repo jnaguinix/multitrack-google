@@ -1,6 +1,7 @@
 import React, { memo, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { logAsyncError } from '../../src/utils/asyncErrors';
+import { AudioRoutingPanel } from './AudioRoutingPanel';
 import {
   Sliders,
   Volume2,
@@ -74,7 +75,6 @@ interface PlaybackStateSnapshot {
   clickGain?: number;
   clickSubdivision?: number;
   quantizeMode?: string;
-  splitMono?: boolean;
   masterGain?: number;
   cueMasterGain?: number;
 }
@@ -163,7 +163,6 @@ export default memo(function DesktopAudioSettings({ triggerHost }: Props) {
   const [cacheProgressText, setCacheProgressText] = useState('');
   const [cacheProgressPercent, setCacheProgressPercent] = useState(0);
 
-  const [splitMono, setSplitMono] = useState(() => localStorage.getItem('omnitracks_split_mono') === 'true');
   const [isDiagnosticsOpen, setIsDiagnosticsOpen] = useState(false);
   const [cacheStats, setCacheStats] = useState<{ totalBytes: number; projectCount: number; projectIds: string[] }>({
     totalBytes: 0,
@@ -306,9 +305,6 @@ export default memo(function DesktopAudioSettings({ triggerHost }: Props) {
             if (typeof pb.pitchSemitones === 'number') {
               setPitchSemitones(pb.pitchSemitones);
             }
-            if (typeof pb.splitMono === 'boolean') {
-              setSplitMono(pb.splitMono);
-            }
             if (typeof pb.clickEnabled === 'boolean') {
               setClickEnabled(pb.clickEnabled);
             }
@@ -359,7 +355,6 @@ export default memo(function DesktopAudioSettings({ triggerHost }: Props) {
         setSelectedSectionId(currentProj.sections[0].id);
       }
 
-      await invoke('audio_set_split_mono', { enabled: splitMono });
       pollStats();
     } catch (err: any) {
       const errMsg = String(err);
@@ -463,26 +458,10 @@ export default memo(function DesktopAudioSettings({ triggerHost }: Props) {
           beatsPerBar: currentProject?.beatsPerBar || 4,
           subdivision,
           gain,
-          splitMono,
         },
       });
     } catch (err) {
       console.warn('Error configurando metrónomo:', err);
-    }
-  };
-
-  const handleSplitMonoChange = async (enabled: boolean) => {
-    setSplitMono(enabled);
-    localStorage.setItem('omnitracks_split_mono', String(enabled));
-    // El modo vive en el proyecto (`splitRoutingMode`): la app lo reenvía al motor en cada cambio de la
-    // mezcla. Si solo se cambiara el motor, el siguiente movimiento de un fader lo desharía.
-    window.dispatchEvent(new CustomEvent('omnitracks:split-mono', { detail: { enabled } }));
-    if (invoke) {
-      try {
-        await invoke('audio_set_split_mono', { enabled });
-      } catch (err) {
-        console.warn('Error cambiando split-mono:', err);
-      }
     }
   };
 
@@ -649,15 +628,16 @@ export default memo(function DesktopAudioSettings({ triggerHost }: Props) {
     return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}.${ms}`;
   };
 
-  const handleTestTone = async () => {
+  const handleTestTone = async (channel: number = selectedChannel) => {
     if (!invoke || !activeDevice) return;
+    setSelectedChannel(channel);
     setIsPlayingTestTone(true);
-    setStatusNotice(`Tono 440 Hz en Salida ${selectedChannel + 1}...`);
+    setStatusNotice(`Tono 440 Hz en Salida ${channel + 1}...`);
 
     try {
       await invoke<TestToneResult>('audio_test_tone', {
         deviceName: activeDevice.name,
-        channel: selectedChannel,
+        channel,
         frequency: 440.0,
         durationMs: 1200,
       });
@@ -666,7 +646,7 @@ export default memo(function DesktopAudioSettings({ triggerHost }: Props) {
 
       setTimeout(() => {
         setIsPlayingTestTone(false);
-        setStatusNotice(`Tono completado en Salida ${selectedChannel + 1}.`);
+        setStatusNotice(`Tono completado en Salida ${channel + 1}.`);
         void pollStats();
       }, 1250);
     } catch (err) {
@@ -694,35 +674,6 @@ export default memo(function DesktopAudioSettings({ triggerHost }: Props) {
       setSavingNotice(`Error: ${err instanceof Error ? err.message : String(err)}`);
     }
   };
-
-  const isCaseA = Boolean(activeDevice && activeDevice.channels >= 4);
-
-  const isCaseB = (() => {
-    if (isCaseA || !activeDevice || devices.length < 2) return false;
-
-    const pairRegex = /(?:(?:\b(?:out|ch|line|salida)\s*)?(?:[1-9]\s*[-/]\s*[1-9]))/i;
-
-    const getBaseHardwareName = (name: string) => {
-      return name
-        .replace(/\((?:[^)]*?(?:1\/2|3\/4|5\/6|7\/8|1-2|3-4|5-6|7-8|out|ch|line)[^)]*?)\)/gi, '')
-        .replace(/(?:out|line|salida|ch|canales)?\s*[1-9]\s*[-/]\s*[1-9]/gi, '')
-        .replace(/\s+/g, ' ')
-        .trim()
-        .toLowerCase();
-    };
-
-    const activeBase = getBaseHardwareName(activeDevice.name);
-    if (!activeBase || activeBase.length < 3) return false;
-
-    const matchingSiblings = devices.filter((d) => {
-      const dBase = getBaseHardwareName(d.name);
-      return dBase === activeBase && (pairRegex.test(d.name) || pairRegex.test(activeDevice.name));
-    });
-
-    return matchingSiblings.length >= 2;
-  })();
-
-  const isCaseC = !isCaseA && !isCaseB && Boolean(activeDevice && activeDevice.channels === 2);
 
   return (
     <>
@@ -815,42 +766,15 @@ export default memo(function DesktopAudioSettings({ triggerHost }: Props) {
           </div>
         )}
 
-        {/* 4. Aviso del caso A, B o C: una sola línea con icono pequeño */}
+        {/* 4. Ruteo de salidas: se propone según los canales independientes del dispositivo y se guarda por dispositivo */}
         {activeDevice && (
-          <div className="flex items-center justify-between text-xs text-neutral-300 min-h-[22px]">
-            {isCaseA && (
-              <div className="flex items-center gap-1.5">
-                <Check size={13} className="text-emerald-400 shrink-0" />
-                <span>Caso A: Dispositivo multicanal unificado ({activeDevice.channels} salidas disponibles).</span>
-              </div>
-            )}
-            {isCaseB && (
-              <div className="flex items-center gap-1.5">
-                <AlertTriangle size={13} className="text-amber-400 shrink-0" />
-                <span>Caso B: Salidas estéreo separadas. Usa ASIO para todas simultáneas.</span>
-              </div>
-            )}
-            {isCaseC && (
-              <>
-                <div className="flex items-center gap-1.5">
-                  <Info size={13} className="text-neutral-400 shrink-0" />
-                  <span>Caso C: Salida estéreo (2 canales).</span>
-                </div>
-                <label className="flex items-center gap-1.5 text-xs text-neutral-300 cursor-pointer select-none ml-auto">
-                  <input
-                    type="checkbox"
-                    checked={splitMono}
-                    onChange={(e) => {
-                      const checked = e.target.checked;
-                      void handleSplitMonoChange(checked);
-                    }}
-                    className="rounded border-neutral-700 bg-neutral-900 text-studio-ink focus:ring-0 cursor-pointer"
-                  />
-                  <span>Split-Mono</span>
-                </label>
-              </>
-            )}
-          </div>
+          <AudioRoutingPanel
+            invoke={invoke}
+            deviceName={activeDevice.name}
+            isPlaying={Boolean(playbackState?.isPlaying)}
+            onTestChannel={(ch) => void handleTestTone(ch)}
+            testingChannel={isPlayingTestTone ? selectedChannel : null}
+          />
         )}
 
         {/* 5. Prueba de salida: en la misma fila, selector de canal y botón «Probar» */}
@@ -870,7 +794,7 @@ export default memo(function DesktopAudioSettings({ triggerHost }: Props) {
             </select>
             <button
               type="button"
-              onClick={() => void handleTestTone()}
+              onClick={() => void handleTestTone(selectedChannel)}
               disabled={isPlayingTestTone}
               className="px-3 py-1 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-neutral-200 text-xs font-medium flex items-center gap-1.5 cursor-pointer disabled:opacity-50 transition-colors shrink-0"
             >

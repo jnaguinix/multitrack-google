@@ -235,7 +235,6 @@ impl PlaybackEngine {
             click_gain: met.config.gain,
             click_subdivision: met.config.subdivision,
             quantize_mode: self.quantize_mode.lock().unwrap().clone(),
-            split_mono: self.split_mono.load(Ordering::SeqCst),
             master_gain: f32::from_bits(self.master_gain.load(Ordering::Relaxed)),
             cue_master_gain: f32::from_bits(self.cue_master_gain.load(Ordering::Relaxed)),
             meters,

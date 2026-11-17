@@ -8,6 +8,7 @@
 import type { SongProject } from '../types/project';
 import { createSampleLibrary, PREVIEW_SAMPLE_RATE } from './fixtures';
 import { previewInvoke as remotePreviewInvoke } from '../../desktop/frontend/previewInvoke';
+import { proposeRouting, validateRouting, type RoutingConfig, type RoutingInfo } from '../../desktop/frontend/routing';
 
 type Args = Record<string, any> | undefined;
 
@@ -55,6 +56,34 @@ function scannedFolder() {
       estDurationSec: 381.7,
       fileSize: 67_337_620,
     })),
+  };
+}
+
+const savedRouting = new Map<string, RoutingConfig>();
+const deviceChannels = (name: string | null) => (name && name.includes('4 salidas') ? 4 : 2);
+
+function routingInfo(name: string | null): RoutingInfo {
+  const channels = deviceChannels(name);
+  const saved = savedRouting.get(name ?? '');
+  const stale = Boolean(saved && saved.channels !== channels);
+  const config = saved && !stale ? saved : proposeRouting(channels);
+  const issues = validateRouting(config, channels);
+  return {
+    deviceName: name,
+    host: 'WASAPI',
+    deviceFound: true,
+    channels,
+    config,
+    proposed: proposeRouting(channels),
+    saved: Boolean(saved && !stale),
+    stale,
+    valid: issues.length === 0,
+    issues,
+    notes:
+      channels <= 2
+        ? ['Windows (WASAPI compartido) solo expone los canales que declara el controlador. Para usar más canales hace falta ASIO o un formato multicanal configurado en Windows.', 'Comprueba cada canal con el tono de prueba antes de un servicio.']
+        : [`Windows expone ${channels} canales de salida en este dispositivo. Una salida de audífonos que solo replica a otra no se distingue por software.`, 'Comprueba cada canal con el tono de prueba antes de un servicio.'],
+    summary: '',
   };
 }
 
@@ -300,7 +329,24 @@ export function createPreviewBackend() {
         id: 'Altavoces (vista previa)', name: 'Altavoces (vista previa)', host: 'WASAPI', isDefault: true, channels: 2,
         defaultSampleRate: 48000, supportedSampleRates: [44100, 48000, 96000], minBufferSize: 64, maxBufferSize: 4096, sampleFormat: 'f32',
       },
+      {
+        id: 'Interfaz 4 salidas (vista previa)', name: 'Interfaz 4 salidas (vista previa)', host: 'WASAPI', isDefault: false, channels: 4,
+        defaultSampleRate: 48000, supportedSampleRates: [44100, 48000, 96000], minBufferSize: 64, maxBufferSize: 4096, sampleFormat: 'f32',
+      },
     ],
+    audio_get_routing: (a) => routingInfo(a?.deviceName ?? null),
+    audio_set_routing: (a) => {
+      const name = a?.deviceName ?? null;
+      const ch = deviceChannels(name);
+      const cfg = { ...(a?.config as RoutingConfig), custom: true };
+      if (validateRouting(cfg, ch).length === 0) savedRouting.set(name ?? '', cfg);
+      const info = routingInfo(name);
+      return validateRouting(cfg, ch).length === 0 ? info : { ...info, config: cfg, valid: false, issues: validateRouting(cfg, ch) };
+    },
+    audio_reset_routing: (a) => {
+      savedRouting.delete(a?.deviceName ?? '');
+      return routingInfo(a?.deviceName ?? null);
+    },
     audio_reopen_stream: () => null,
     audio_test_tone: () => null,
     audio_get_stats: () => ({
