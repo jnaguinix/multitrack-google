@@ -24,8 +24,6 @@
     "allow-audio-reset-stats",
     "allow-audio-test-tone",
     "allow-audio-import-tracks",
-    "allow-audio-import-track-bytes",
-    "allow-audio-import-folder",
     "allow-audio-cancel-import",
     "allow-audio-get-project-cache-status",
     "allow-audio-load-project",

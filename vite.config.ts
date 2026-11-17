@@ -16,7 +16,12 @@ export default defineConfig(() => {
       // Do not modify—file watching is disabled to prevent flickering during agent edits.
       hmr: process.env.DISABLE_HMR !== 'true',
       // Disable file watching when DISABLE_HMR is true to save CPU during agent edits.
-      watch: process.env.DISABLE_HMR === 'true' ? null : {},
+      // Fuera del watcher: la compilación de Rust (`target`, bloquea el .exe y los .pdb mientras enlaza: EBUSY),
+      // la salida de `vite build` y la carpeta local de agentes.
+      watch:
+        process.env.DISABLE_HMR === 'true'
+          ? null
+          : { ignored: ['**/desktop/src-tauri/target/**', '**/dist/**', '**/.claude/**'] },
     },
   };
 });
