@@ -16,6 +16,7 @@ import { useDawDragDrop } from './hooks/useDawDragDrop';
 import { useToast } from './hooks/useToast';
 import { useNativeCacheBanner } from './hooks/useNativeCacheBanner';
 import { useSetlistCaching } from './hooks/useSetlistCaching';
+import { useLoudnessAnalysis } from './hooks/useLoudnessAnalysis';
 import { useProjectActivation } from './hooks/useProjectActivation';
 import { useProjectPersistence } from './hooks/useProjectPersistence';
 import { useTrackInstruments } from './hooks/useTrackInstruments';
@@ -183,6 +184,13 @@ export default function App() {
     currentProjectId: currentProject?.id,
     isActivatingProject,
     isDesktopApp,
+  });
+
+  useLoudnessAnalysis({
+    isDesktopApp,
+    setlistKey: setlistQueue.map((s) => s.id).join('|'),
+    setProjects,
+    setCurrentProject,
   });
 
   // Surface engine notices (play blocked, still loading...) instead of failing silently
