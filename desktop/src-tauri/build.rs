@@ -48,6 +48,7 @@ fn main() {
             "audio_clean_orphan_caches",
             "audio_check_files_exist",
             "library_load",
+            "library_get_song_peaks",
             "library_save",
             "library_save_song",
             "library_delete_song",

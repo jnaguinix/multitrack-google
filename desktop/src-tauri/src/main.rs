@@ -260,6 +260,7 @@ fn main() {
             omnitracks_desktop::audio::audio_clean_orphan_caches,
             omnitracks_desktop::audio::audio_check_files_exist,
             omnitracks_desktop::library::library_load,
+            omnitracks_desktop::library::library_get_song_peaks,
             omnitracks_desktop::library::library_save,
             omnitracks_desktop::library::library_save_song,
             omnitracks_desktop::library::library_delete_song,

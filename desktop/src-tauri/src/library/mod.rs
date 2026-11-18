@@ -457,30 +457,54 @@ fn library_for_disk(local_data: &Path, library: &LibraryFile) -> LibraryFile {
     slim
 }
 
-/// Loads library.json (con los picos de `peaks/` unidos a cada canción) from the app local data dir.
+/// Biblioteca para la interfaz: los picos de `peaks/` se unen **solo a las canciones del setlist** (sus fichas
+/// dibujan una mini onda antes de abrir la canción). El resto sale sin picos: al abrir una canción el motor devuelve
+/// los suyos desde la caché PCM, y al añadir una al setlist la interfaz los pide con `library_get_song_peaks`.
 /// Una biblioteca anterior, con los picos dentro, se migra sola: se reescribe ligera y con su carpeta `peaks/`.
-pub fn load_library_internal(local_data: &Path) -> Result<LibraryFile, String> {
-    let mut lib = load_library_raw(local_data)?;
+pub fn load_library_for_ui(local_data: &Path) -> Result<LibraryFile, String> {
+    let mut lib = load_library_internal(local_data)?;
     let legacy = lib
         .songs
         .iter()
         .any(|s| s.tracks.iter().any(|t| t.peaks.as_ref().map_or(false, |p| !p.is_empty())));
-    for song in &mut lib.songs {
-        attach_song_peaks(local_data, song);
-    }
     if legacy {
         match save_library_internal(local_data, &lib) {
             Ok(()) => tracing::info!("[Library] library.json migrado: los picos de forma de onda pasaron a {PEAKS_DIRNAME}/"),
             Err(e) => tracing::warn!("[Library] No se pudo migrar library.json a la versión ligera: {e}"),
         }
     }
+    let active: std::collections::HashSet<String> = lib.active_setlist.iter().cloned().collect();
+    for song in &mut lib.songs {
+        // Mismo criterio que la interfaz: el marcador de la canción manda y, sin él, la lista del setlist activo.
+        let in_setlist = song.in_setlist.unwrap_or_else(|| active.contains(&song.id));
+        if in_setlist {
+            attach_song_peaks(local_data, song);
+        } else {
+            for track in &mut song.tracks {
+                track.peaks = None;
+            }
+        }
+    }
     Ok(lib)
 }
 
-/// Loads library.json from the app local data dir.
+/// Picos guardados de una canción, por ID de pista. Vacío si la canción aún no tiene archivo de picos.
+pub fn read_song_peaks(local_data: &Path, song_id: &str) -> Result<HashMap<String, Vec<f32>>, String> {
+    let Some(path) = peaks_file_path(local_data, song_id) else { return Ok(HashMap::new()) };
+    let content = match fs::read_to_string(&path) {
+        Ok(c) => c,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(HashMap::new()),
+        Err(e) => return Err(format!("No se pudo leer {}: {e}", path.display())),
+    };
+    serde_json::from_str::<PeaksFileIn>(&content)
+        .map(|f| f.tracks)
+        .map_err(|e| format!("{} no es válido: {e}", path.display()))
+}
+
+/// Loads library.json from the app local data dir, **sin** picos (los de las canciones se guardan en `peaks/`).
 /// If absent, creates an initial empty library.json.
 /// If corrupted, falls back to library.backup.json.
-fn load_library_raw(local_data: &Path) -> Result<LibraryFile, String> {
+pub fn load_library_internal(local_data: &Path) -> Result<LibraryFile, String> {
     if !local_data.exists() {
         fs::create_dir_all(local_data)
             .map_err(|e| format!("Error creando carpeta local data: {e}"))?;
@@ -589,7 +613,18 @@ pub async fn library_load(app: AppHandle) -> Result<LibraryFile, String> {
         .app_local_data_dir()
         .map_err(|e| format!("Error resolviendo app_local_data_dir: {e}"))?;
     let _guard = lock_library();
-    load_library_internal(&local_data)
+    load_library_for_ui(&local_data)
+}
+
+/// Picos de forma de onda de una canción (ID de pista -> picos). La interfaz los pide al añadirla al setlist.
+#[tauri::command]
+pub async fn library_get_song_peaks(app: AppHandle, song_id: String) -> Result<HashMap<String, Vec<f32>>, String> {
+    let local_data = app
+        .path()
+        .app_local_data_dir()
+        .map_err(|e| format!("Error resolviendo app_local_data_dir: {e}"))?;
+    let _guard = lock_library();
+    read_song_peaks(&local_data, &song_id)
 }
 
 #[tauri::command]
@@ -1101,10 +1136,13 @@ mod tests {
         dir
     }
 
-    fn cancion_con_picos(id: &str, pistas: &[&str], base: f32) -> LibrarySong {
+    /// Canción con 320 picos por pista. `en_setlist`: marcador de la canción (la interfaz solo recibe los picos de
+    /// las del setlist).
+    fn cancion_con_picos(id: &str, pistas: &[&str], base: f32, en_setlist: bool) -> LibrarySong {
         LibrarySong {
             id: id.to_string(),
             title: format!("Canción {id}"),
+            in_setlist: Some(en_setlist),
             tracks: pistas
                 .iter()
                 .enumerate()
@@ -1123,10 +1161,20 @@ mod tests {
         LibraryFile { songs, ..Default::default() }
     }
 
+    fn sin_picos(song: &LibrarySong) -> LibrarySong {
+        let mut s = song.clone();
+        for t in &mut s.tracks {
+            t.peaks = None;
+        }
+        s
+    }
+
     #[test]
-    fn test_los_picos_van_a_su_archivo_y_se_unen_al_cargar() {
+    fn test_los_picos_van_a_su_archivo_y_la_interfaz_recibe_solo_los_del_setlist() {
         let dir = carpeta_de_prueba("ida_y_vuelta");
-        let lib = biblioteca_con(vec![cancion_con_picos("song-1", &["a", "b"], 0.1), cancion_con_picos("song-2", &["a"], 0.2)]);
+        let en_set = cancion_con_picos("song-1", &["a", "b"], 0.1, true);
+        let fuera = cancion_con_picos("song-2", &["a"], 0.2, false);
+        let lib = biblioteca_con(vec![en_set.clone(), fuera.clone()]);
         save_library_internal(&dir, &lib).unwrap();
 
         let en_disco = fs::read_to_string(dir.join(LIBRARY_FILENAME)).unwrap();
@@ -1139,40 +1187,98 @@ mod tests {
         );
         assert!(dir.join(PEAKS_DIRNAME).join("song-1.json").is_file());
         assert!(dir.join(PEAKS_DIRNAME).join("song-2.json").is_file());
-
-        // La biblioteca en memoria conserva sus picos y al cargar vuelven a estar en cada pista.
+        // La biblioteca en memoria conserva sus picos.
         assert_eq!(lib.songs[0].tracks[0].peaks.as_ref().map(Vec::len), Some(320));
-        let cargada = load_library_internal(&dir).unwrap();
-        assert_eq!(cargada, lib, "cargar devuelve exactamente lo guardado, picos incluidos");
+
+        // La carga «cruda» (la de los guardados) no trae picos de nadie.
+        let cruda = load_library_internal(&dir).unwrap();
+        assert_eq!(cruda.songs, vec![sin_picos(&en_set), sin_picos(&fuera)]);
+
+        // La de la interfaz trae los de la canción del setlist y deja sin picos la otra.
+        let para_ui = load_library_for_ui(&dir).unwrap();
+        assert_eq!(para_ui.songs[0], en_set, "la del setlist vuelve con todos sus picos");
+        assert_eq!(para_ui.songs[1], sin_picos(&fuera), "la que no está en el setlist sale sin picos");
+
+        // Y sus picos se pueden pedir cuando se añade al setlist.
+        let pedidos = read_song_peaks(&dir, "song-2").unwrap();
+        assert_eq!(pedidos.len(), 1);
+        assert_eq!(pedidos["a"], fuera.tracks[0].peaks.clone().unwrap());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_sin_marcador_de_setlist_manda_la_lista_del_setlist_activo() {
+        let dir = carpeta_de_prueba("lista_activa");
+        let mut a = cancion_con_picos("song-a", &["x"], 0.1, true);
+        let mut b = cancion_con_picos("song-b", &["x"], 0.2, true);
+        a.in_setlist = None;
+        b.in_setlist = None;
+        let mut lib = biblioteca_con(vec![a.clone(), b.clone()]);
+        lib.active_setlist = vec!["song-b".to_string()];
+        save_library_internal(&dir, &lib).unwrap();
+
+        let ui = load_library_for_ui(&dir).unwrap();
+        assert!(ui.songs[0].tracks[0].peaks.is_none(), "song-a no está en la lista activa");
+        assert_eq!(ui.songs[1].tracks[0].peaks, b.tracks[0].peaks, "song-b sí");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_guardar_desde_la_carga_cruda_no_borra_ni_toca_los_picos_de_otras_canciones() {
+        let dir = carpeta_de_prueba("guardado_cruzado");
+        let lib = biblioteca_con(vec![
+            cancion_con_picos("song-1", &["a"], 0.1, true),
+            cancion_con_picos("song-2", &["a"], 0.2, false),
+        ]);
+        save_library_internal(&dir, &lib).unwrap();
+        let archivo2 = dir.join(PEAKS_DIRNAME).join("song-2.json");
+        let antes = fs::read(&archivo2).unwrap();
+
+        // Lo que hace library_save_song: carga cruda, cambia una canción (que llega sin picos) y guarda.
+        let mut cruda = load_library_internal(&dir).unwrap();
+        cruda.songs[0].title = "Cambiada".to_string();
+        save_library_internal(&dir, &cruda).unwrap();
+
+        assert_eq!(fs::read(&archivo2).unwrap(), antes, "el archivo de picos de la otra canción no cambió");
+        assert!(dir.join(PEAKS_DIRNAME).join("song-1.json").is_file(), "ni se borró el de la canción guardada");
+        let ui = load_library_for_ui(&dir).unwrap();
+        assert_eq!(ui.songs[0].title, "Cambiada");
+        assert_eq!(ui.songs[0].tracks[0].peaks, lib.songs[0].tracks[0].peaks, "sus picos siguen ahí");
+        assert_eq!(read_song_peaks(&dir, "song-2").unwrap()["a"], lib.songs[1].tracks[0].peaks.clone().unwrap());
         let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn test_una_biblioteca_antigua_con_picos_dentro_se_migra_sola() {
         let dir = carpeta_de_prueba("migracion");
-        let lib = biblioteca_con(vec![cancion_con_picos("song-viejo", &["a", "b"], 0.3)]);
+        let en_set = cancion_con_picos("song-viejo", &["a", "b"], 0.3, true);
+        let fuera = cancion_con_picos("song-fuera", &["a"], 0.4, false);
+        let lib = biblioteca_con(vec![en_set.clone(), fuera.clone()]);
         // Formato anterior: todo en library.json, sin carpeta peaks.
         fs::write(dir.join(LIBRARY_FILENAME), serde_json::to_string_pretty(&lib).unwrap()).unwrap();
         assert!(!dir.join(PEAKS_DIRNAME).exists());
 
-        let cargada = load_library_internal(&dir).unwrap();
-        assert_eq!(cargada, lib, "la primera carga devuelve los picos de siempre");
+        let cargada = load_library_for_ui(&dir).unwrap();
+        assert_eq!(cargada.songs[0], en_set, "la del setlist conserva sus picos");
+        assert_eq!(cargada.songs[1], sin_picos(&fuera), "la otra no los trae a la interfaz");
 
         let en_disco = fs::read_to_string(dir.join(LIBRARY_FILENAME)).unwrap();
         assert!(!en_disco.contains("peaks"), "tras cargar, library.json queda ligero");
         assert!(dir.join(PEAKS_DIRNAME).join("song-viejo.json").is_file());
+        assert!(dir.join(PEAKS_DIRNAME).join("song-fuera.json").is_file(), "los de la que no está en el setlist también se migran");
+        assert_eq!(read_song_peaks(&dir, "song-fuera").unwrap()["a"], fuera.tracks[0].peaks.clone().unwrap());
         // El respaldo conserva la versión anterior completa, por si hiciera falta volver atrás.
         let respaldo = fs::read_to_string(dir.join(LIBRARY_BACKUP_FILENAME)).unwrap();
         assert!(respaldo.contains("peaks"));
         // Y una segunda carga sigue dando lo mismo.
-        assert_eq!(load_library_internal(&dir).unwrap(), lib);
+        assert_eq!(load_library_for_ui(&dir).unwrap(), cargada);
         let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn test_guardar_sin_cambiar_los_picos_no_reescribe_su_archivo_y_si_cambian_si() {
         let dir = carpeta_de_prueba("sin_cambios");
-        let mut lib = biblioteca_con(vec![cancion_con_picos("song-1", &["a"], 0.1)]);
+        let mut lib = biblioteca_con(vec![cancion_con_picos("song-1", &["a"], 0.1, true)]);
         save_library_internal(&dir, &lib).unwrap();
 
         // Se sustituye el archivo por una marca: si un guardado sin cambios lo reescribiera, la marca desaparecería.
@@ -1192,7 +1298,7 @@ mod tests {
         lib.songs[0].tracks[0].peaks.as_mut().unwrap()[0] = 0.99;
         save_library_internal(&dir, &lib).unwrap();
         assert_ne!(fs::read_to_string(&archivo).unwrap(), "{\"marca\":true}", "picos distintos: se reescribe");
-        assert_eq!(load_library_internal(&dir).unwrap().songs[0].tracks[0].peaks.as_ref().unwrap()[0], 0.99);
+        assert_eq!(load_library_for_ui(&dir).unwrap().songs[0].tracks[0].peaks.as_ref().unwrap()[0], 0.99);
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -1201,26 +1307,28 @@ mod tests {
         let dir = carpeta_de_prueba("sin_carpeta");
         // `peaks` es un archivo: no se puede crear la carpeta con ese nombre.
         fs::write(dir.join(PEAKS_DIRNAME), "no soy una carpeta").unwrap();
-        let lib = biblioteca_con(vec![cancion_con_picos("song-1", &["a"], 0.1)]);
+        let lib = biblioteca_con(vec![cancion_con_picos("song-1", &["a"], 0.1, true)]);
 
         save_library_internal(&dir, &lib).expect("el guardado no debe fallar por los picos");
         let en_disco = fs::read_to_string(dir.join(LIBRARY_FILENAME)).unwrap();
         assert!(en_disco.contains("peaks"), "sin dónde guardarlos, los picos se quedan en library.json");
-        assert_eq!(load_library_internal(&dir).unwrap(), lib, "no se pierde nada");
+        assert_eq!(load_library_for_ui(&dir).unwrap(), lib, "no se pierde nada");
         let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn test_un_archivo_de_picos_corrupto_no_impide_cargar_y_borrar_la_cancion_lo_quita() {
         let dir = carpeta_de_prueba("corrupto");
-        let lib = biblioteca_con(vec![cancion_con_picos("song-1", &["a"], 0.1)]);
+        let lib = biblioteca_con(vec![cancion_con_picos("song-1", &["a"], 0.1, true)]);
         save_library_internal(&dir, &lib).unwrap();
         let archivo = dir.join(PEAKS_DIRNAME).join("song-1.json");
 
         fs::write(&archivo, "{ esto no es json").unwrap();
-        let cargada = load_library_internal(&dir).unwrap();
+        let cargada = load_library_for_ui(&dir).unwrap();
         assert_eq!(cargada.songs.len(), 1, "la canción se carga igual");
         assert!(cargada.songs[0].tracks[0].peaks.is_none(), "sin picos hasta que la caché los regenere");
+        assert!(read_song_peaks(&dir, "song-1").is_err(), "pedirlos explícitamente sí avisa del archivo dañado");
+        assert!(read_song_peaks(&dir, "song-que-no-existe").unwrap().is_empty());
 
         remove_song_peaks(&dir, "song-1");
         assert!(!archivo.exists(), "al eliminar la canción se borra su archivo de picos");
