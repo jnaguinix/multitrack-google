@@ -3,7 +3,6 @@ import {
   ChevronLeft,
   ChevronRight,
   ChevronsRight,
-  Check,
   GripHorizontal,
   MoreHorizontal,
   Pause,
@@ -18,6 +17,7 @@ import { SetlistTransitionMode, SongProject } from '../types/project';
 import { getSongWaveformPeaks } from '../utils/songWaveform';
 import { resolveTransition, TRANSITION_LABELS } from '../utils/setlistTransition';
 import { formatMmSs } from './TransportDeck';
+import { MenuItem, MenuLabel, MenuSeparator, PopoverMenu } from './ui/Menu';
 
 export interface SongTileStatus {
   text: string;
@@ -77,10 +77,6 @@ const TileWave: React.FC<{ song: SongProject; active: boolean }> = ({ song, acti
     </div>
   );
 };
-
-function closePopover(event: React.MouseEvent<HTMLButtonElement>) {
-  event.currentTarget.closest<HTMLElement>('[popover]')?.hidePopover();
-}
 
 const TRANSITION_OPTIONS: SetlistTransitionMode[] = ['stop', 'cue-next', 'auto-play'];
 
@@ -235,62 +231,14 @@ export const SetlistStrip: React.FC<SetlistStripProps> = ({
                 </button>
               )}
 
-              <div id={`tile-menu-${idx}`} popover="auto" onClick={(e) => e.stopPropagation()} className="lt-popover space-y-1">
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    onMount(song);
-                    closePopover(e);
-                  }}
-                  className="w-full px-2.5 py-1.5 text-left rounded-lg hover:bg-neutral-800 text-studio-ink font-semibold cursor-pointer"
-                >
-                  Montar en consola (00:00)
-                </button>
-                {canOptimize(song) && (
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      onOptimize(song);
-                      closePopover(e);
-                    }}
-                    className="w-full px-2.5 py-1.5 text-left rounded-lg hover:bg-neutral-800 text-amber-300 flex items-center gap-1.5 cursor-pointer font-medium"
-                  >
-                    <Zap className="w-3.5 h-3.5 text-amber-400" /> Generar caché
-                  </button>
-                )}
-                <button
-                  type="button"
-                  disabled={idx === 0}
-                  onClick={(e) => {
-                    onMove(song.id, 'up');
-                    closePopover(e);
-                  }}
-                  className="w-full px-2.5 py-1.5 text-left rounded-lg hover:bg-neutral-800 text-neutral-200 flex items-center gap-1.5 disabled:opacity-30 cursor-pointer"
-                >
-                  <ChevronLeft className="w-3.5 h-3.5" /> Mover antes
-                </button>
-                <button
-                  type="button"
-                  disabled={idx === songs.length - 1}
-                  onClick={(e) => {
-                    onMove(song.id, 'down');
-                    closePopover(e);
-                  }}
-                  className="w-full px-2.5 py-1.5 text-left rounded-lg hover:bg-neutral-800 text-neutral-200 flex items-center gap-1.5 disabled:opacity-30 cursor-pointer"
-                >
-                  <ChevronRight className="w-3.5 h-3.5" /> Mover después
-                </button>
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    onRemove(song.id);
-                    closePopover(e);
-                  }}
-                  className="w-full px-2.5 py-1.5 text-left rounded-lg hover:bg-red-500/20 text-red-400 flex items-center gap-1.5 cursor-pointer"
-                >
-                  <Trash2 className="w-3.5 h-3.5" /> Quitar del setlist
-                </button>
-              </div>
+              <PopoverMenu id={`tile-menu-${idx}`} label={`Acciones de ${song.title}`} onClick={(e) => e.stopPropagation()}>
+                <MenuItem label="Montar en consola (00:00)" icon={Play} onSelect={() => onMount(song)} />
+                {canOptimize(song) && <MenuItem label="Generar caché" icon={Zap} onSelect={() => onOptimize(song)} />}
+                <MenuItem label="Mover antes" icon={ChevronLeft} disabled={idx === 0} onSelect={() => onMove(song.id, 'up')} />
+                <MenuItem label="Mover después" icon={ChevronRight} disabled={idx === songs.length - 1} onSelect={() => onMove(song.id, 'down')} />
+                <MenuSeparator />
+                <MenuItem label="Quitar del setlist" icon={Trash2} danger onSelect={() => onRemove(song.id)} />
+              </PopoverMenu>
             </div>
 
             {idx < songs.length - 1 && (
@@ -305,36 +253,23 @@ export const SetlistStrip: React.FC<SetlistStripProps> = ({
                 >
                   <TransitionIcon mode={mode} />
                 </button>
-                <div id={`transition-${idx}`} popover="auto" className="lt-popover space-y-1">
-                  <div className="px-2.5 py-1 text-xs text-studio-muted font-semibold">
-                    Al terminar «{song.title}»
-                  </div>
+                <PopoverMenu id={`transition-${idx}`} label={`Al terminar ${song.title}`}>
+                  <MenuLabel>Al terminar «{song.title}»</MenuLabel>
                   {TRANSITION_OPTIONS.map((opt) => (
-                    <button
+                    <MenuItem
                       key={opt}
-                      type="button"
-                      onClick={(e) => {
-                        onSetTransition(song.id, opt);
-                        closePopover(e);
-                      }}
-                      className="w-full px-2.5 py-1.5 text-left rounded-lg hover:bg-neutral-800 text-neutral-100 flex items-center gap-2 cursor-pointer"
-                    >
-                      <span className="w-4">{song.transitionToNext === opt && <Check size={14} />}</span>
-                      {TRANSITION_LABELS[opt]}
-                    </button>
+                      label={TRANSITION_LABELS[opt]}
+                      checked={song.transitionToNext === opt}
+                      onSelect={() => onSetTransition(song.id, opt)}
+                    />
                   ))}
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      onSetTransition(song.id, undefined);
-                      closePopover(e);
-                    }}
-                    className="w-full px-2.5 py-1.5 text-left rounded-lg hover:bg-neutral-800 text-neutral-300 flex items-center gap-2 cursor-pointer border-t border-studio-line"
-                  >
-                    <span className="w-4">{!hasOwnTransition && <Check size={14} />}</span>
-                    Ajuste general ({TRANSITION_LABELS[globalMode]})
-                  </button>
-                </div>
+                  <MenuSeparator />
+                  <MenuItem
+                    label={`Ajuste general (${TRANSITION_LABELS[globalMode]})`}
+                    checked={!hasOwnTransition}
+                    onSelect={() => onSetTransition(song.id, undefined)}
+                  />
+                </PopoverMenu>
               </div>
             )}
           </React.Fragment>

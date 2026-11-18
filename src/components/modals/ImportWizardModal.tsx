@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowLeft, ArrowRight, Check, Music2, X } from 'lucide-react';
+import { ArrowLeft, ArrowRight, Check, Music2 } from 'lucide-react';
 import { INSTRUMENTS, FIXED_INSTRUMENTS, getInstrument, numberedNames } from '../../utils/instrumentCatalog';
+import { Dialog, DialogHeader } from '../ui/Dialog';
 
 /* ============================================================================
  * ASISTENTE DE IMPORTACIÓN
@@ -122,11 +123,9 @@ export const ImportWizardModal: React.FC<Props> = ({ mode, initialMeta, files, o
     });
   };
 
+  // Escape lo gestiona el Dialog. Aquí solo queda Enter en el paso 1: pasa al paso 2 si los datos son válidos.
   const onKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Escape') {
-      e.stopPropagation();
-      onCancel();
-    } else if (e.key === 'Enter' && step === 1 && (e.target as HTMLElement).tagName === 'INPUT') {
+    if (e.key === 'Enter' && step === 1 && (e.target as HTMLElement).tagName === 'INPUT') {
       e.preventDefault();
       if (step1Ok) setStep(2);
     }
@@ -135,65 +134,32 @@ export const ImportWizardModal: React.FC<Props> = ({ mode, initialMeta, files, o
   const heading =
     mode === 'new-song' ? 'Importar canción' : mode === 'add-tracks' ? 'Añadir pistas' : 'Editar pistas';
 
+  const steps = hasSongStep && (
+    <ol className="lt-steps" aria-label="Pasos">
+      {(['Canción', 'Pistas'] as const).map((label, i) => {
+        const n = (i + 1) as 1 | 2;
+        const active = step === n;
+        const done = step > n;
+        return (
+          <li key={label} data-active={active || undefined} data-done={done || undefined} aria-current={active ? 'step' : undefined}>
+            <span className="tabular-nums">{done ? <Check size={12} aria-hidden="true" /> : n}</span>
+            {label}
+          </li>
+        );
+      })}
+    </ol>
+  );
+
   return (
-    <div
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="import-wizard-title"
-      onKeyDown={onKeyDown}
-      className="fixed inset-0 z-[80] bg-black/70 backdrop-blur-[2px] flex items-center justify-center p-4"
-    >
-      <div className="bg-studio-panel border border-neutral-800 rounded-2xl w-full max-w-2xl max-h-[92dvh] flex flex-col shadow-2xl overflow-hidden">
-        {/* Cabecera */}
-        <div className="flex items-center gap-3 px-5 pt-4 pb-3 border-b border-neutral-800">
-          <div className="w-8 h-8 rounded-lg bg-studio-strip flex items-center justify-center text-studio-accent shrink-0">
-            <Music2 className="w-4 h-4" aria-hidden="true" />
-          </div>
-          <div className="min-w-0 flex-1">
-            <h2 id="import-wizard-title" className="text-sm font-semibold text-neutral-100 leading-tight">
-              {heading}
-            </h2>
-            <p className="text-xs text-studio-muted truncate">
-              {files.length} {files.length === 1 ? 'pista' : 'pistas'}
-              {hasSongStep && step === 2 && title.trim() ? ` · ${title.trim()}` : ''}
-            </p>
-          </div>
-          {hasSongStep && (
-            <ol className="hidden sm:flex items-center gap-1.5 text-xs" aria-label="Pasos">
-              {(['Canción', 'Pistas'] as const).map((label, i) => {
-                const n = (i + 1) as 1 | 2;
-                const active = step === n;
-                const done = step > n;
-                return (
-                  <li key={label} className="flex items-center gap-1.5">
-                    {i > 0 && <span className="w-4 h-px bg-neutral-700" aria-hidden="true" />}
-                    <span
-                      className={`flex items-center gap-1.5 px-2 py-1 rounded-full border ${
-                        active
-                          ? 'border-studio-accent text-studio-accent'
-                          : done
-                            ? 'border-neutral-700 text-neutral-300'
-                            : 'border-neutral-800 text-studio-muted'
-                      }`}
-                      aria-current={active ? 'step' : undefined}
-                    >
-                      <span className="font-semibold tabular-nums">{done ? <Check className="w-3 h-3" /> : n}</span>
-                      {label}
-                    </span>
-                  </li>
-                );
-              })}
-            </ol>
-          )}
-          <button
-            type="button"
-            onClick={onCancel}
-            aria-label="Cancelar"
-            className="p-1.5 rounded-lg text-neutral-400 hover:text-white hover:bg-neutral-800 cursor-pointer"
-          >
-            <X className="w-4 h-4" />
-          </button>
-        </div>
+    <Dialog label={heading} onClose={onCancel} size="lg">
+      <div className="lt-dialog-keys" onKeyDown={onKeyDown}>
+        <DialogHeader
+          icon={Music2}
+          title={heading}
+          description={`${files.length} ${files.length === 1 ? 'pista' : 'pistas'}${hasSongStep && step === 2 && title.trim() ? ` · ${title.trim()}` : ''}`}
+          actions={steps}
+          onClose={onCancel}
+        />
 
         {/* Cuerpo */}
         <div className="flex-1 overflow-y-auto px-5 py-4">
@@ -308,6 +274,8 @@ export const ImportWizardModal: React.FC<Props> = ({ mode, initialMeta, files, o
                         />
                         <select
                           ref={f.id === firstEmptyId ? firstEmptyRef : undefined}
+                          // Sin pistas por elegir (editar pistas), el foco empieza en la primera.
+                          data-autofocus={f.id === (firstEmptyId ?? files[0]?.id) || undefined}
                           value={value}
                           onChange={(e) => {
                             setChoice((c) => ({ ...c, [f.id]: e.target.value }));
@@ -394,6 +362,6 @@ export const ImportWizardModal: React.FC<Props> = ({ mode, initialMeta, files, o
           )}
         </div>
       </div>
-    </div>
+    </Dialog>
   );
 };

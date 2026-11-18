@@ -1,11 +1,12 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Check, FolderPlus, Music, Plus, Search, Upload, X } from 'lucide-react';
+import React, { useMemo, useRef, useState } from 'react';
+import { Check, FolderPlus, Music, Plus, Search, Upload } from 'lucide-react';
 import { SongProject } from '../types/project';
 import { pickAudioSources } from '../storage/sourceFiles';
 import { isDesktopApp, pickNativeFiles, pickNativeFolder } from '../utils/nativeDialog';
 import { formatMmSs } from './TransportDeck';
 import { filterSongs } from '../utils/songSearch';
 import { useProgressiveList } from '../hooks/useProgressiveList';
+import { Dialog, DialogHeader } from './ui/Dialog';
 
 interface SongPickerModalProps {
   songs: SongProject[];
@@ -43,18 +44,8 @@ export const SongPickerModal: React.FC<SongPickerModalProps> = ({
 }) => {
   const [query, setQuery] = useState('');
   const [sort, setSort] = useState<SortKey>('title');
-  const searchRef = useRef<HTMLInputElement | null>(null);
   const filesInputRef = useRef<HTMLInputElement | null>(null);
   const folderInputRef = useRef<HTMLInputElement | null>(null);
-
-  useEffect(() => {
-    searchRef.current?.focus();
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [onClose]);
 
   const visible = useMemo(() => {
     const filtered = filterSongs(songs, query);
@@ -91,32 +82,23 @@ export const SongPickerModal: React.FC<SongPickerModalProps> = ({
   const inSetlistCount = songs.filter((s) => setlistIds.has(s.id)).length;
 
   return (
-    <div className="lt-picker-backdrop" onClick={onClose}>
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-label="Añadir canciones al setlist"
-        className="lt-picker"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <header className="lt-picker-header">
-          <div>
-            <h2>Añadir al setlist</h2>
-            <p>
-              {songs.length === 1 ? '1 canción en la biblioteca' : `${songs.length} canciones en la biblioteca`}
-              {inSetlistCount > 0 && ` · ${inSetlistCount} en el setlist`}
-            </p>
-          </div>
-          <button type="button" onClick={onClose} className="lt-control lt-icon-control" aria-label="Cerrar">
-            <X size={16} />
-          </button>
-        </header>
+    <Dialog label="Añadir canciones al setlist" onClose={onClose} size="xl" dismissOnBackdrop className="lt-picker">
+      <DialogHeader
+        title="Añadir al setlist"
+        description={
+          <>
+            {songs.length === 1 ? '1 canción en la biblioteca' : `${songs.length} canciones en la biblioteca`}
+            {inSetlistCount > 0 && ` · ${inSetlistCount} en el setlist`}
+          </>
+        }
+        onClose={onClose}
+      />
 
         <div className="lt-picker-toolbar">
           <label className="lt-picker-search">
             <Search size={15} aria-hidden="true" />
             <input
-              ref={searchRef}
+              data-autofocus
               type="search"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
@@ -242,7 +224,6 @@ export const SongPickerModal: React.FC<SongPickerModalProps> = ({
             }
           }}
         />
-      </div>
-    </div>
+    </Dialog>
   );
 };
