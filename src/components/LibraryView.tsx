@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { Search, Download, MoreHorizontal, Trash2, CheckCircle2, FolderPlus, ListMusic, Zap, HardDrive, Edit3 } from 'lucide-react';
+import { Search, Download, MoreHorizontal, Trash2, CheckCircle2, FolderPlus, ListPlus, ListMinus, Zap, HardDrive, Edit3, type LucideIcon } from 'lucide-react';
 import { SongProject } from '../types/project';
 import { audioEngine } from '../audio/audioEngine';
 import { isFsAccessSupported } from '../storage/sourceFiles';
@@ -175,102 +175,54 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                       <button type="button" popoverTarget={`library-song-${index}`} aria-label={`Acciones de ${proj.title}`} className="lt-control lt-icon-control">
                         <MoreHorizontal size={17} />
                       </button>
-                      <div id={`library-song-${index}`} popover="auto" className="lt-popover lt-library-actions space-y-1">
-                        {/* Relink original files (moved/renamed folder or permission lost) */}
-                        {onRelinkProject && (isDesktopApp() || (!isPcmReady && isFsAccessSupported())) && (
-                          <button
-                            type="button"
-                            onClick={(event) => {
-                              event.currentTarget.closest<HTMLElement>('[popover]')?.hidePopover();
-                              onRelinkProject(proj);
-                            }}
-                            title="Elegir la carpeta donde están ahora los stems originales de esta canción"
-                            className="px-3 py-2 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-neutral-200 border border-neutral-700 text-xs font-semibold flex items-center gap-1.5 cursor-pointer transition-colors"
-                          >
-                            <FolderPlus className="w-3.5 h-3.5 text-studio-ink" />
-                            <span>Ubicar carpeta</span>
-                          </button>
-                        )}
-
-                        {/* Optimize for Streaming Button if not yet optimized */}
-                        {!isPcmReady && proj.tracks.length > 0 && (
-                          <button
-                            type="button"
-                            onClick={(event) => {
-                              event.currentTarget.closest<HTMLElement>('[popover]')?.hidePopover();
-                              onOptimizeProject(proj);
-                            }}
-                            title="Generar la caché PCM nativa de esta canción"
-                            className="px-3 py-2 rounded-lg bg-studio-strip hover:bg-neutral-700 text-studio-ink border border-studio-line text-xs font-semibold flex items-center gap-1.5 cursor-pointer transition-colors"
-                          >
-                            <Zap className="w-3.5 h-3.5 text-studio-ink" />
-                            <span>Optimizar para streaming</span>
-                          </button>
-                        )}
-
-                        <button
-                          type="button"
-                          onClick={(event) => {
-                            event.currentTarget.closest<HTMLElement>('[popover]')?.hidePopover();
-                            setEditingMetadataSong(proj);
-                          }}
-                          title="Editar título, artista, BPM, compás y tono"
-                          className="px-3 py-2 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-neutral-200 border border-neutral-700 text-xs font-semibold flex items-center gap-1.5 cursor-pointer transition-colors"
-                        >
-                          <Edit3 className="w-3.5 h-3.5 text-studio-ink" />
-                          <span>Editar metadatos</span>
-                        </button>
-
+                      <div id={`library-song-${index}`} popover="auto" role="menu" aria-label={`Acciones de ${proj.title}`} className="lt-popover lt-library-actions">
                         {proj.inSetlist && onRemoveFromSetlist ? (
-                          <button
-                            type="button"
-                            onClick={(event) => {
-                              event.currentTarget.closest<HTMLElement>('[popover]')?.hidePopover();
-                              onRemoveFromSetlist(proj.id);
-                            }}
+                          <LibraryMenuItem
+                            icon={ListMinus}
+                            label="Quitar del Setlist"
                             title="Quitar esta canción del Setlist (permanece en la biblioteca)"
-                            className="px-3 py-2 rounded-lg bg-rose-500/15 hover:bg-rose-500/25 text-rose-300 border border-rose-500/40 text-xs font-semibold flex items-center gap-1.5 cursor-pointer transition-colors"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                            <span>Quitar del Setlist</span>
-                          </button>
+                            onSelect={() => onRemoveFromSetlist(proj.id)}
+                          />
                         ) : (
-                          <button
-                            type="button"
-                            onClick={(event) => {
-                              event.currentTarget.closest<HTMLElement>('[popover]')?.hidePopover();
-                              onAddToSetlist(proj.id);
-                            }}
-                            className="px-3 py-2 rounded-lg bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 border border-amber-500/40 text-xs font-semibold flex items-center gap-1.5 cursor-pointer transition-colors"
-                          >
-                            <ListMusic className="w-3.5 h-3.5" />
-                            <span>Añadir al Setlist</span>
-                          </button>
+                          <LibraryMenuItem icon={ListPlus} label="Añadir al Setlist" onSelect={() => onAddToSetlist(proj.id)} />
                         )}
-
-                        <button
-                          type="button"
-                          onClick={(event) => {
-                              event.currentTarget.closest<HTMLElement>('[popover]')?.hidePopover();
-                              onExportJson(proj);
-                            }}
+                        <LibraryMenuItem
+                          icon={Edit3}
+                          label="Editar metadatos"
+                          title="Editar título, artista, BPM, compás y tono"
+                          onSelect={() => setEditingMetadataSong(proj)}
+                        />
+                        {/* Volver a enlazar los archivos originales (carpeta movida o renombrada, o permiso perdido). */}
+                        {onRelinkProject && (isDesktopApp() || (!isPcmReady && isFsAccessSupported())) && (
+                          <LibraryMenuItem
+                            icon={FolderPlus}
+                            label="Ubicar carpeta"
+                            title="Elegir la carpeta donde están ahora los stems originales de esta canción"
+                            onSelect={() => onRelinkProject(proj)}
+                          />
+                        )}
+                        {!isPcmReady && proj.tracks.length > 0 && (
+                          <LibraryMenuItem
+                            icon={Zap}
+                            label="Generar caché"
+                            title="Generar la caché PCM nativa de esta canción"
+                            onSelect={() => onOptimizeProject(proj)}
+                          />
+                        )}
+                        <LibraryMenuItem
+                          icon={Download}
+                          label="Exportar JSON"
                           title="Exportar configuración del proyecto en JSON"
-                          className="p-2 rounded-lg bg-neutral-900 hover:bg-neutral-800 text-neutral-300 border border-neutral-800 cursor-pointer"
-                        >
-                          <Download className="w-4 h-4" /> Exportar JSON
-                        </button>
-
-                        <button
-                          type="button"
-                          onClick={(event) => {
-                              event.currentTarget.closest<HTMLElement>('[popover]')?.hidePopover();
-                              onDeleteProject(proj.id);
-                            }}
-                          title="Eliminar proyecto de la biblioteca"
-                          className="p-2 rounded-lg bg-neutral-900 hover:bg-red-500/20 text-neutral-400 hover:text-red-400 border border-neutral-800 cursor-pointer"
-                        >
-                          <Trash2 className="w-4 h-4" /> Eliminar canción
-                        </button>
+                          onSelect={() => onExportJson(proj)}
+                        />
+                        <div role="separator" className="lt-menu-separator" />
+                        <LibraryMenuItem
+                          icon={Trash2}
+                          label="Eliminar canción"
+                          title="Eliminar la canción de la biblioteca (los archivos originales no se tocan)"
+                          danger
+                          onSelect={() => onDeleteProject(proj.id)}
+                        />
                       </div>
                     </div>
                   </div>
@@ -303,3 +255,38 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
     </div>
   );
 };
+
+/**
+ * Opción del menú «⋯» de una canción en la Biblioteca. Todas iguales (icono y texto en una fila, misma altura), como
+ * los demás menús de la app; `danger` solo para la acción destructiva, que va al final tras un separador.
+ */
+function LibraryMenuItem({
+  icon: Icon,
+  label,
+  title,
+  danger = false,
+  onSelect,
+}: {
+  icon: LucideIcon;
+  label: string;
+  title?: string;
+  danger?: boolean;
+  onSelect: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      role="menuitem"
+      title={title}
+      data-danger={danger || undefined}
+      onClick={(event) => {
+        event.currentTarget.closest<HTMLElement>('[popover]')?.hidePopover();
+        onSelect();
+      }}
+      className="lt-menu-item"
+    >
+      <Icon size={16} aria-hidden="true" />
+      <span>{label}</span>
+    </button>
+  );
+}

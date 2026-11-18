@@ -1323,7 +1323,17 @@
 .lt-queue-item[data-current] { border-color: var(--lt-line); }
 .lt-queue-item[data-dragging] { border-color: var(--lt-text); }
 .lt-queue-action { width: 28px; min-height: 28px; padding: 0; }
-.lt-library-actions > button { width: 100%; min-height: 34px; justify-content: flex-start; text-align: left; }
+.lt-library-actions { width: min(232px, calc(100vw - 24px)); padding: 6px; }
+.lt-menu-item {
+  display: flex; align-items: center; gap: 10px; width: 100%; min-height: 34px; padding: 0 10px;
+  border-radius: 6px; color: var(--lt-text); font-size: 13px; text-align: left; cursor: pointer;
+}
+.lt-menu-item svg { flex: none; color: var(--lt-mut); }
+.lt-menu-item:hover, .lt-menu-item:focus-visible { background: var(--lt-strip); outline: none; }
+.lt-menu-item[data-danger] { color: #f87171; }
+.lt-menu-item[data-danger] svg { color: currentColor; }
+.lt-menu-item[data-danger]:hover, .lt-menu-item[data-danger]:focus-visible { background: #ef444426; }
+.lt-menu-separator { height: 1px; margin: 5px 4px; background: var(--lt-line); }
 .lt-waveform {
   height: clamp(118px, 22dvh, 172px);
   border: 1px solid var(--lt-line);
