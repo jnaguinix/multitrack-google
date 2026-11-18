@@ -130,7 +130,7 @@ export function createPreviewBackend() {
     callbacks += Math.round(dt * 100);
     if (!playing) return;
     const before = position;
-    position += dt * Math.pow(2, pitch / 12);
+    position += dt; // el tono no cambia la velocidad
     if (queued && before < queued.atSec && position >= queued.atSec) {
       position = queued.targetSec + (position - queued.atSec);
       queued = null;

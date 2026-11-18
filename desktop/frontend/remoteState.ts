@@ -73,7 +73,8 @@ export function snapshot(
   }, undefined);
   const queued = section(project?.sections.find((entry) => entry.id === transport.queuedSectionId));
   const playing = Boolean(project && transport.isPlaying && !activating && !transport.isMountingSong);
-  const rate = playing ? 2 ** ((project?.pitchSemitones || 0) / 12) : 0;
+  // El tono ya no altera la velocidad: la canción avanza un segundo por segundo (antes subía 2^(tono/12)).
+  const rate = playing ? 1 : 0;
   const positionSec = project ? transport.currentTimeSec : 0;
   const durationSec = project ? transport.totalDurationSec : 0;
   const elapsedMs = previousClock ? nowMs - previousClock.sampledAtMs : 0;
