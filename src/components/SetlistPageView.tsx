@@ -37,6 +37,7 @@ import { SongPickerModal } from './SongPickerModal';
 import { SetlistStrip, SongTileStatus } from './SetlistStrip';
 import { SECTION_TEMPLATES } from '../utils/sectionTemplates';
 import { MenuItem, MenuLabel, PopoverMenu } from './ui/Menu';
+import { Dialog, DialogBody, DialogFooter, DialogHeader } from './ui/Dialog';
 import { useSetlistMeta } from '../hooks/useSetlistMeta';
 
 interface SetlistPageViewProps {
@@ -161,18 +162,6 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
 
   const masterCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const addAudioInputRef = useRef<HTMLInputElement | null>(null);
-
-  // Close floating Mixer on Escape key
-  useEffect(() => {
-    if (!isFloatingMixerOpen) return;
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        setIsFloatingMixerOpen(false);
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isFloatingMixerOpen]);
 
   const totalDurationSec = useMemo(() => {
     if (!project) return 0;
@@ -526,83 +515,46 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
 
       {/* 4. FLOATING MIXER CARD MODAL / DRAWER (Opens on demand, closes with 1 click or Esc) */}
       {isFloatingMixerOpen && filteredProjectForMixer && (
-        <div
-          onClick={() => setIsFloatingMixerOpen(false)}
-          className="fixed inset-0 z-50 bg-black/60 flex items-end justify-center p-3 sm:p-5"
-        >
-          <div
-            role="dialog"
-            aria-modal="true"
-            aria-label="Mezcla de la canción"
-            onClick={(e) => e.stopPropagation()}
-            className="w-full max-w-[1440px] bg-studio-panel border-2 border-studio-line rounded-2xl shadow-[0_24px_70px_rgba(0,0,0,0.9)] overflow-hidden flex flex-col max-h-[86vh]"
-          >
-            {/* Floating Card Header with Intuitive Close Button */}
-            <div className="px-4 py-3 bg-studio-panel border-b border-studio-line flex flex-wrap items-center justify-between gap-2 shrink-0">
-              <div className="flex items-center gap-3">
-                <div className="w-8 h-8 rounded-lg bg-studio-strip border border-studio-line flex items-center justify-center text-studio-ink">
-                  <Sliders className="w-4 h-4" />
-                </div>
-                <div>
-                  <div className="flex items-center gap-2">
-                    <h2 className="text-base font-bold text-white">
-                      Consola Mixer — {filteredProjectForMixer.title}
-                    </h2>
-                    <span className="px-2 py-0.5 rounded bg-studio-strip border border-studio-line text-studio-ink text-xs font-bold">
-                      Compás {String(transport.currentBar).padStart(3, '0')}
-                    </span>
-                  </div>
-                  <p className="text-xs text-neutral-400">
-                    Doble clic en fader = 0.0 dB · Doble clic en knob = Centrar (C) · Pulsa Esc o fuera de la tarjeta para cerrar
-                  </p>
-                </div>
-              </div>
-
-              <div className="flex items-center gap-2.5">
-                <button
-                  type="button"
-                  onClick={onResetMixer}
-                  className="h-9 px-3.5 rounded-lg bg-studio-strip hover:bg-neutral-800 border border-studio-line text-xs font-semibold text-neutral-200 flex items-center gap-1.5 cursor-pointer"
-                >
-                  <RotateCcw className="w-3.5 h-3.5" />
-                  <span>Restablecer mezcla a 0 dB</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => setIsFloatingMixerOpen(false)}
-                  className="lt-control"
-                >
-                  <X className="w-4 h-4 stroke-[2.5]" />
-                  <span>Cerrar mezcla</span>
-                </button>
-              </div>
-            </div>
-
-            {/* Mixer Strips Body */}
-            <div className="overflow-y-auto">
-              <MultitrackMixer
-                project={filteredProjectForMixer}
-                transport={transport}
-                docked={true}
-                onToggleTrackMute={onToggleTrackMute}
-                onToggleTrackSolo={onToggleTrackSolo}
-                onChangeTrackGain={onChangeTrackGain}
-                onChangeTrackPan={onChangeTrackPan}
-                onChangeClickGain={onChangeClickGain}
-                onChangeClickPan={onChangeClickPan}
-                onToggleClick={onToggleClick}
-                onChangeMasterGain={onChangeMasterGain}
-                onToggleTrackMonitor={onToggleTrackMonitor}
-                onChangeMonitorGain={onChangeMonitorGain}
-                onChangeTrackCueGain={onChangeTrackCueGain}
-                onToggleTrackCueMute={onToggleTrackCueMute}
-                onResetMixer={onResetMixer}
-                onPickInstrument={onPickInstrument}
-              />
-            </div>
+        <Dialog label="Mezcla de la canción" onClose={() => setIsFloatingMixerOpen(false)} size="fill" placement="bottom" dismissOnBackdrop>
+          <DialogHeader
+            icon={Sliders}
+            title={
+              <>
+                Consola Mixer — {filteredProjectForMixer.title}{' '}
+                <span className="lt-dialog-badge">Compás {String(transport.currentBar).padStart(3, '0')}</span>
+              </>
+            }
+            description="Doble clic en fader = 0.0 dB · Doble clic en knob = Centrar (C) · Pulsa Esc o fuera de la tarjeta para cerrar"
+            actions={
+              <button type="button" onClick={onResetMixer} className="lt-control">
+                <RotateCcw size={14} aria-hidden="true" />
+                <span>Restablecer mezcla a 0 dB</span>
+              </button>
+            }
+            onClose={() => setIsFloatingMixerOpen(false)}
+          />
+          <div className="overflow-y-auto">
+            <MultitrackMixer
+              project={filteredProjectForMixer}
+              transport={transport}
+              docked={true}
+              onToggleTrackMute={onToggleTrackMute}
+              onToggleTrackSolo={onToggleTrackSolo}
+              onChangeTrackGain={onChangeTrackGain}
+              onChangeTrackPan={onChangeTrackPan}
+              onChangeClickGain={onChangeClickGain}
+              onChangeClickPan={onChangeClickPan}
+              onToggleClick={onToggleClick}
+              onChangeMasterGain={onChangeMasterGain}
+              onToggleTrackMonitor={onToggleTrackMonitor}
+              onChangeMonitorGain={onChangeMonitorGain}
+              onChangeTrackCueGain={onChangeTrackCueGain}
+              onToggleTrackCueMute={onToggleTrackCueMute}
+              onResetMixer={onResetMixer}
+              onPickInstrument={onPickInstrument}
+            />
           </div>
-        </div>
+        </Dialog>
       )}
 
       {cursorNotice && (
@@ -611,50 +563,39 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
         </div>
       )}
 
-      {/* Modal de confirmación para limpiar la sesión (Setlist) */}
+      {/* Confirmación para limpiar la sesión (Setlist) */}
       {showClearConfirm && (
-        <div
-          role="dialog"
-          aria-modal="true"
-          className="fixed inset-0 z-50 bg-black/75 flex items-center justify-center p-4"
-        >
-          <div className="bg-studio-panel border border-neutral-800 rounded-2xl max-w-md w-full p-6 space-y-4 shadow-2xl">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-xl bg-amber-500/15 border border-amber-500/40 flex items-center justify-center shrink-0">
-                <RotateCcw className="w-5 h-5 text-amber-400" />
-              </div>
-              <div>
-                <h3 className="text-base font-bold text-neutral-100">¿Limpiar la sesión actual?</h3>
-                <p className="text-xs text-neutral-400">
-                  Se quitarán las {setlistQueue.length} canciones del setlist activo.
-                </p>
-              </div>
-            </div>
-            <p className="text-xs text-neutral-300 bg-studio-ground border border-neutral-800 rounded-lg p-3">
+        <Dialog label="Limpiar la sesión actual" onClose={() => setShowClearConfirm(false)} size="sm">
+          <DialogHeader
+            icon={RotateCcw}
+            tone="warning"
+            title="¿Limpiar la sesión actual?"
+            description={`Se quitarán las ${setlistQueue.length} canciones del setlist activo.`}
+            onClose={() => setShowClearConfirm(false)}
+          />
+          <DialogBody>
+            <p className="lt-dialog-note">
               Tus canciones, pistas y marcadores seguirán <strong>completamente intactos en tu biblioteca</strong>. Podrás volver a agregarlas en cualquier momento.
             </p>
-            <div className="flex items-center justify-end gap-2 pt-2">
-              <button
-                type="button"
-                onClick={() => setShowClearConfirm(false)}
-                className="px-3.5 py-2 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-xs text-neutral-300 font-medium cursor-pointer"
-              >
-                Cancelar
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setShowClearConfirm(false);
-                  onClearSetlist?.();
-                }}
-                className="px-4 py-2 rounded-lg bg-amber-500 hover:bg-amber-400 text-neutral-950 font-bold text-xs flex items-center gap-1.5 cursor-pointer shadow-lg shadow-amber-500/20"
-              >
-                <RotateCcw className="w-3.5 h-3.5" />
-                <span>Limpiar sesión</span>
-              </button>
-            </div>
-          </div>
-        </div>
+          </DialogBody>
+          <DialogFooter>
+            {/* Quitar canciones del setlist en directo no es trivial: el foco empieza en Cancelar. */}
+            <button type="button" data-autofocus onClick={() => setShowClearConfirm(false)} className="lt-control">
+              Cancelar
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setShowClearConfirm(false);
+                onClearSetlist?.();
+              }}
+              className="lt-control lt-btn-primary"
+            >
+              <RotateCcw size={14} aria-hidden="true" />
+              <span>Limpiar sesión</span>
+            </button>
+          </DialogFooter>
+        </Dialog>
       )}
     </section>
   );

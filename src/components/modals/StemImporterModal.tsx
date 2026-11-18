@@ -108,6 +108,7 @@ export const StemImporterModal: React.FC<StemImporterModalProps> = ({
           {/* Selector de carpeta */}
           <button
             type="button"
+            data-autofocus
             className="lt-dropzone"
             onClick={() => {
               if (isDesktopApp()) {

@@ -1367,36 +1367,7 @@
 .lt-empty p { font-size: 14px; color: var(--lt-mut); max-width: 46ch; line-height: 1.55; }
 
 /* Explorador de canciones superpuesto (añadir al setlist). */
-.lt-picker-backdrop {
-  position: fixed;
-  inset: 0;
-  z-index: 60;
-  background: rgb(0 0 0 / .62);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: clamp(10px, 4vh, 40px) clamp(10px, 4vw, 40px);
-}
-.lt-picker {
-  width: min(880px, 100%);
-  max-height: min(640px, 100%);
-  display: flex;
-  flex-direction: column;
-  background: var(--lt-panel);
-  border: 1px solid var(--lt-line);
-  border-radius: 14px;
-  box-shadow: 0 24px 70px rgb(0 0 0 / .7);
-  overflow: hidden;
-}
-.lt-picker-header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 14px 16px 10px;
-}
-.lt-picker-header h2 { font-size: 17px; font-weight: 650; letter-spacing: -.01em; }
-.lt-picker-header p { color: var(--lt-mut); font-size: 12px; margin-top: 2px; }
+.lt-dialog-panel.lt-picker { max-height: min(640px, 100%); }
 .lt-picker-toolbar {
   display: flex;
   flex-wrap: wrap;
@@ -1944,3 +1915,26 @@ html { zoom: var(--ui-zoom); }
 .lt-dropzone span { color: var(--lt-mut); font-size: 12px; }
 .lt-dropzone:hover, .lt-dropzone:focus-visible { border-color: var(--lt-accent); outline: none; }
 @media (max-width: 520px) { .lt-dropzones { grid-template-columns: 1fr; } }
+
+/* Instrumentos elegibles (cambiar el instrumento de una pista). */
+.lt-instruments { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
+.lt-instrument { display: flex; align-items: center; gap: 8px; padding: 7px 10px; border: 1px solid var(--lt-line); border-radius: 8px; background: var(--lt-track); color: var(--lt-text); font-size: 13px; text-align: left; cursor: pointer; }
+.lt-instrument:hover { background: var(--lt-strip); }
+.lt-instrument[aria-pressed="true"] { border-color: var(--lt-accent); background: color-mix(in srgb, var(--lt-accent) 10%, transparent); color: var(--lt-accent); }
+.lt-instrument-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; }
+.lt-instrument-text { min-width: 0; display: grid; }
+.lt-instrument-text > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lt-instrument-text > span + span { color: var(--lt-mut); font-size: 12px; }
+.lt-dialog-note code { font-family: var(--font-mono); color: var(--lt-text); font-size: 12px; }
+
+/* Envoltorio sin caja propia: reparte su contenido en el panel del diálogo y recoge el teclado de todo él. */
+.lt-dialog-keys { display: contents; }
+
+/* Pasos de un asistente, en la cabecera del diálogo. */
+.lt-steps { display: flex; align-items: center; gap: 6px; margin-right: 4px; font-size: 12px; }
+.lt-steps li { display: flex; align-items: center; gap: 6px; padding: 3px 9px; border: 1px solid var(--lt-line); border-radius: 999px; color: var(--lt-mut); }
+.lt-steps li[data-active] { border-color: var(--lt-accent); color: var(--lt-accent); }
+.lt-steps li[data-done] { color: var(--lt-text); }
+.lt-steps span { font-weight: 600; display: inline-flex; }
+@media (max-width: 640px) { .lt-steps { display: none; } }
+.lt-dialog-badge { display: inline-block; margin-left: 6px; padding: 1px 8px; border: 1px solid var(--lt-line); border-radius: 999px; color: var(--lt-text); font-size: 12px; font-weight: 600; vertical-align: 2px; font-variant-numeric: tabular-nums; }

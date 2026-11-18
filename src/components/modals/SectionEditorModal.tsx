@@ -1,7 +1,8 @@
 import React, { useRef, useState } from 'react';
-import { Plus, Trash2, X, Flag, Clock } from 'lucide-react';
+import { Plus, Trash2, Flag, Clock } from 'lucide-react';
 import { SongProject, SongSection } from '../../types/project';
 import { formatMmSs } from '../TransportDeck';
+import { Dialog, DialogHeader } from '../ui/Dialog';
 
 /* ============================================================================
  * TIME-BASED SECTION MARKER EDITOR MODAL (MM:SS)
@@ -195,26 +196,17 @@ export const SectionEditorModal: React.FC<SectionEditorModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4">
-      <div className="bg-studio-panel border border-neutral-800 rounded-2xl max-w-3xl w-full p-6 space-y-5 max-h-[90vh] flex flex-col shadow-2xl">
-        <div className="flex items-center justify-between">
-          <div>
-            <h2 className="text-lg font-bold text-neutral-100">
-              Marcadores de Sección por Tiempo (Minutos y Segundos)
-            </h2>
-            <p className="text-xs text-neutral-400">
-              Define en qué minuto y segundo (<code className="text-studio-ink">mm:ss</code>) empieza y termina cada parte de la canción.
-            </p>
-          </div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="text-neutral-400 hover:text-white p-1 cursor-pointer"
-          >
-            <X className="w-5 h-5" />
-          </button>
-        </div>
-
+    <Dialog label="Marcadores de sección por tiempo" onClose={onClose} size="lg">
+      <DialogHeader
+        title="Marcadores de sección por tiempo (minutos y segundos)"
+        description={
+          <>
+            Define en qué minuto y segundo (<code>mm:ss</code>) empieza y termina cada parte de la canción.
+          </>
+        }
+        onClose={onClose}
+      />
+      <div className="flex-1 min-h-0 flex flex-col gap-4 px-4 pb-4">
         {/* Playhead Quick Insert Box */}
         <div className="bg-studio-ground border border-neutral-800 rounded-xl p-3.5 space-y-2.5">
           <div className="flex flex-wrap items-center justify-between gap-2">
@@ -409,6 +401,6 @@ export const SectionEditorModal: React.FC<SectionEditorModalProps> = ({
           </div>
         </div>
       </div>
-    </div>
+    </Dialog>
   );
 };
