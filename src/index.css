@@ -1821,12 +1821,12 @@ html { zoom: var(--ui-zoom); }
 .lt-console-full .lt-fx { width: 100%; }
 
 /* Ventana «¿Montar esta canción?»: tres botones del mismo tamaño y estilo; el rojo solo marca el texto y el icono de lo destructivo. */
-.lt-confirm-actions { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; padding-top: 4px; }
+.lt-dialog-footer.lt-confirm-actions { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .lt-confirm-actions .lt-control { display: inline-flex; align-items: center; gap: 6px; width: 100%; min-height: 40px; padding: 0 10px; white-space: nowrap; }
 .lt-confirm-primary { background: var(--lt-text); color: var(--lt-bg); font-weight: 650; }
 .lt-confirm-actions .lt-confirm-primary:hover:not(:disabled) { background: #ddd; }
 .lt-confirm-danger { color: var(--lt-mute); }
-@media (max-width: 420px) { .lt-confirm-actions { grid-template-columns: 1fr; } }
+@media (max-width: 420px) { .lt-dialog-footer.lt-confirm-actions { grid-template-columns: 1fr; } }
 
 /* Biblioteca: barra de búsqueda y orden; lista larga por tandas. */
 .lt-library-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; }
@@ -1875,3 +1875,72 @@ html { zoom: var(--ui-zoom); }
 .lt-dialog-close { flex: none; width: 32px; min-height: 32px; margin: -4px -6px 0 0; }
 .lt-dialog-body { flex: 1; min-height: 0; overflow: auto; padding: 4px 16px 16px; }
 .lt-dialog-footer { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; padding: 12px 16px; border-top: 1px solid var(--lt-line); }
+.lt-dialog-icon[data-tone="danger"] { color: var(--lt-mute); }
+.lt-dialog-icon[data-tone="warning"] { color: var(--lt-solo); }
+.lt-dialog-body > * + * { margin-top: 12px; }
+.lt-dialog-note { color: var(--lt-mut); font-size: 13px; line-height: 1.55; }
+.lt-dialog-note strong { color: var(--lt-text); font-weight: 600; }
+.lt-dialog-note-small { color: var(--lt-mut); font-size: 12px; line-height: 1.5; }
+
+/* Datos clave-valor dentro de un diálogo. */
+.lt-facts { display: grid; gap: 8px; padding: 12px; border-radius: 8px; background: var(--lt-track); font-size: 13px; }
+.lt-facts > div { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.lt-facts dt { color: var(--lt-mut); }
+.lt-facts dd { font-weight: 600; text-align: right; }
+.lt-facts-sep { padding-top: 8px; border-top: 1px solid var(--lt-line); }
+
+/* Acción principal y destructiva de un diálogo (junto a .lt-control). */
+.lt-control.lt-btn-primary { background: var(--lt-text); color: var(--lt-bg); font-weight: 650; }
+.lt-control.lt-btn-primary:hover:not(:disabled) { background: #ddd; }
+.lt-control.lt-btn-danger { background: var(--lt-mute); color: #1c0d0d; font-weight: 650; }
+.lt-control.lt-btn-danger:hover:not(:disabled) { background: #e07d7b; }
+
+/* Lista de opciones de la que se elige una. */
+.lt-choices { display: grid; gap: 6px; max-height: 200px; overflow: auto; }
+.lt-choice { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 10px; border: 1px solid var(--lt-line); border-radius: 8px; font-size: 13px; cursor: pointer; }
+.lt-choice:hover { background: var(--lt-strip); }
+.lt-choice[data-selected] { border-color: var(--lt-accent); background: color-mix(in srgb, var(--lt-accent) 8%, transparent); }
+.lt-choice input { accent-color: var(--lt-accent); }
+.lt-choice-main { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.lt-choice-main span:last-child { color: var(--lt-mut); }
+.lt-choice-ratio { color: var(--lt-solo); font-weight: 600; white-space: nowrap; }
+
+/* Aviso breve: vive en la capa superior del navegador (popover) para que un diálogo abierto no lo tape. */
+.lt-toast {
+  inset: auto 12px 12px auto;
+  margin: 0;
+  width: max-content;
+  max-width: min(420px, calc(100vw - 24px));
+  padding: 10px 16px;
+  border: 1px solid var(--lt-line);
+  border-radius: 10px;
+  background: var(--lt-raised);
+  color: var(--lt-text);
+  font-size: 13px;
+  font-weight: 500;
+  box-shadow: 0 12px 30px #0008;
+}
+
+/* Formulario dentro de un diálogo: el <form> contiene el cuerpo y los botones, así que debe respetar el reparto del panel. */
+.lt-dialog-form { display: flex; flex-direction: column; min-height: 0; }
+.lt-dialog-form > .lt-dialog-body { display: grid; gap: 12px; align-content: start; }
+.lt-dialog-form > .lt-dialog-body > * + * { margin-top: 0; }
+.lt-field-row { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.lt-field-row > .lt-field { margin-top: 0; }
+
+/* Selector de dos o tres opciones excluyentes dentro de un diálogo (usa .lt-control con aria-pressed). */
+.lt-segmented { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 6px; }
+.lt-segmented .lt-control { justify-content: center; }
+
+/* Zonas de elección grandes (elegir archivos o carpeta). */
+.lt-dropzones { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.lt-dropzone {
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px;
+  padding: 22px 14px; border: 1px dashed var(--lt-line); border-radius: 10px; background: var(--lt-track);
+  text-align: center; cursor: pointer; color: var(--lt-text);
+}
+.lt-dropzone svg { color: var(--lt-accent); margin-bottom: 4px; }
+.lt-dropzone strong { font-size: 13px; font-weight: 600; }
+.lt-dropzone span { color: var(--lt-mut); font-size: 12px; }
+.lt-dropzone:hover, .lt-dropzone:focus-visible { border-color: var(--lt-accent); outline: none; }
+@media (max-width: 520px) { .lt-dropzones { grid-template-columns: 1fr; } }

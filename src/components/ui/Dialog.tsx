@@ -82,15 +82,17 @@ interface DialogHeaderProps {
   title: React.ReactNode;
   description?: React.ReactNode;
   icon?: LucideIcon;
+  /** Color del icono: `danger` para lo destructivo, `warning` para un aviso. */
+  tone?: 'danger' | 'warning';
   /** Si se indica, se muestra la X de cierre. */
   onClose?: () => void;
   /** Acciones extra a la derecha de la X (por ejemplo «Restablecer»). */
   actions?: React.ReactNode;
 }
 
-export const DialogHeader: React.FC<DialogHeaderProps> = ({ title, description, icon: Icon, onClose, actions }) => (
+export const DialogHeader: React.FC<DialogHeaderProps> = ({ title, description, icon: Icon, tone, onClose, actions }) => (
   <header className="lt-dialog-header">
-    {Icon && <Icon size={18} aria-hidden="true" className="lt-dialog-icon" />}
+    {Icon && <Icon size={18} aria-hidden="true" className="lt-dialog-icon" data-tone={tone} />}
     <div className="lt-dialog-heading">
       <h2>{title}</h2>
       {description && <p>{description}</p>}
