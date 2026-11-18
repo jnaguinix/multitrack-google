@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React from 'react';
+import React, { useEffect, useMemo, useRef } from 'react';
 import { Pause, Play, Repeat, SkipBack, SkipForward, Square, X } from 'lucide-react';
 import {
   QuantizeMode,
@@ -15,7 +15,7 @@ import {
 import { audioEngine } from '../audio/audioEngine';
 import { nativeAudioEngine } from '../audio/nativeAudioEngine';
 import { isDesktopApp } from '../utils/nativeDialog';
-import { getSongWaveformPeaks } from '../utils/songWaveform';
+import { drawSectionWaveBars, getSongWaveformPeaks } from '../utils/songWaveform';
 
 /**
  * LIVE SET — the performance page.
@@ -86,15 +86,40 @@ const STATUS_LABEL: Record<SongStatus, string> = {
   pending: 'Sin preparar',
 };
 
+/**
+ * Onda del mapa de la canción, dibujada con la misma función que el mapa del Setlist: cada barra con el color de su
+ * sección. Va debajo de los bloques de sección (que la tiñen con su color y llevan el nombre y los tiempos).
+ */
 const LiveWaveform = React.memo(function LiveWaveform({ project, duration }: { project: SongProject; duration: number }) {
-  const peaks = getSongWaveformPeaks(project, duration);
-  if (!peaks.some((peak) => peak > 0)) return null;
-  const points = peaks.map((peak, index) => `M${index + 0.5} ${50 - 43 * peak}v${86 * peak}`).join('');
-  return (
-    <svg className="lt-live-waveform" viewBox={`0 0 ${peaks.length} 100`} preserveAspectRatio="none" aria-hidden="true">
-      <path d={points} stroke="currentColor" strokeWidth="0.72" fill="none" />
-    </svg>
-  );
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const peaks = useMemo(() => getSongWaveformPeaks(project, duration), [project, duration]);
+  const sections = useMemo(() => [...project.sections].sort((a, b) => a.startTimeSec - b.startTimeSec), [project.sections]);
+  const hasPeaks = peaks.some((peak) => peak > 0);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    const ctx = canvas?.getContext('2d');
+    if (!canvas || !ctx) return;
+    const draw = () => {
+      const { clientWidth: width, clientHeight: height } = canvas;
+      if (!width || !height) return;
+      const dpr = window.devicePixelRatio || 1;
+      if (canvas.width !== Math.round(width * dpr)) canvas.width = Math.round(width * dpr);
+      if (canvas.height !== Math.round(height * dpr)) canvas.height = Math.round(height * dpr);
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.clearRect(0, 0, width, height);
+      // Arriba van el nombre de la sección y abajo su duración: la onda ocupa la franja del medio.
+      const top = Math.min(56, Math.max(30, height * 0.2));
+      const bottom = height - Math.min(44, Math.max(24, height * 0.15));
+      drawSectionWaveBars(ctx, { width, height, peaks, sections, totalDurationSec: duration, top, bottom });
+    };
+    draw();
+    const observer = new ResizeObserver(draw);
+    observer.observe(canvas);
+    return () => observer.disconnect();
+  }, [peaks, sections, duration, hasPeaks]);
+
+  return hasPeaks ? <canvas ref={canvasRef} className="lt-live-waveform" aria-hidden="true" /> : null;
 });
 
 export const LiveSetView: React.FC<LiveSetViewProps> = ({
