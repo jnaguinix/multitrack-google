@@ -4,7 +4,8 @@ import { nativeAudioEngine } from '../audio/nativeAudioEngine';
 import { audioEngine } from '../audio/audioEngine';
 import { saveProjectToDb } from '../storage/projectDb';
 import { deleteProjectNativeCache } from '../utils/nativeDialog';
-import { loadDesktopLibrary, saveDesktopLibrary } from '../storage/desktopLibrary';
+import { loadDesktopLibrary, loadDesktopSongPeaks, saveDesktopLibrary } from '../storage/desktopLibrary';
+import { songLacksPeaks, withSongPeaks } from '../utils/songPeaks';
 
 interface UseSetlistDeps {
   projectsRef: React.MutableRefObject<SongProject[]>;
@@ -92,6 +93,17 @@ export function useSetlist({
           return updated;
         });
       });
+
+      // La biblioteca solo trae los picos de las canciones que ya estaban en el setlist: la ficha de esta necesita
+      // los suyos para dibujar su mini onda sin tener que abrirla.
+      if (isDesktopApp && songLacksPeaks(song)) {
+        loadDesktopSongPeaks(projectId)
+          .then((peaks) => {
+            if (Object.keys(peaks).length === 0) return;
+            setProjects((prev) => prev.map((p) => (p.id === projectId ? withSongPeaks(p, peaks) : p)));
+          })
+          .catch(logAsyncError('leer los picos de la canción'));
+      }
     };
 
     if (isDesktopApp && song.folderPath) {

@@ -502,7 +502,9 @@ export async function loadAllProjectsFromDb(): Promise<SongProject[]> {
         inSetlist: inSet,
       });
       // Los nombres de pista de versiones anteriores del catálogo pasan a los actuales (Guitarra, Piano, Pad, Strings).
-      return normalizeProjectSectionsToTime({ ...loaded, tracks: migrateTrackNames(loaded.tracks || []) });
+      // Las canciones fuera del setlist llegan sin picos (el motor los devuelve al abrirlas): lista vacía, no `undefined`.
+      const tracks = migrateTrackNames(loaded.tracks || []).map((t) => (Array.isArray(t.peaks) ? t : { ...t, peaks: [] }));
+      return normalizeProjectSectionsToTime({ ...loaded, tracks });
     });
     userProjects.sort((a, b) => b.updatedAt - a.updatedAt);
     return userProjects;
