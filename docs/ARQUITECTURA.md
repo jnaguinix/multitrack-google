@@ -65,7 +65,8 @@ desktop/src-tauri/src/audio/playback/
 Gestiona el catálogo de canciones y la integridad de metadatos locales:
 - **`mod.rs`**:
   - Implementa la persistencia atómica de `library.json` mediante `atomic_write_file` (escritura en `.tmp`, reemplazo atómico y copia de seguridad en `.backup.json`).
-  - Manejo del archivo sidecar `omnitracks.project.json` en la carpeta de origen de cada canción (con fallback de lectura en `.omnitracks.json` para retrocompatibilidad).
+  - Manejo del archivo sidecar `omnitracks.project.json` en la carpeta de origen de cada canción (con fallback de lectura en `.omnitracks.json` para retrocompatibilidad). No guarda los picos de forma de onda (`sidecar_json`): eran ~90 % de sus líneas y se regeneran con la caché PCM.
+  - Picos de forma de onda fuera de `library.json`: `peaks/<id>.json` (`store_song_peaks`, `attach_song_peaks`, `remove_song_peaks`). Se guardan solo si cambiaron (resumen hash en memoria), se unen a cada canción al cargar y una biblioteca antigua con los picos dentro se migra sola; si no se pueden escribir, se quedan en `library.json`.
   - Comandos Tauri IPC expuestos: `library_load`, `library_save`, `library_save_song`, `library_delete_song`, `library_update_song_folder`, `library_write_sidecar`, `library_read_sidecar`.
 
 ---
