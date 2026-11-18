@@ -223,6 +223,7 @@ export function createPreviewBackend() {
       return null;
     },
     library_update_song_folder: () => null,
+    library_get_song_peaks: () => ({}),
     library_read_sidecar: () => null,
 
     // ---- Motor: carga

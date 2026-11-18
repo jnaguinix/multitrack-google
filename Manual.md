@@ -288,7 +288,7 @@ if (invoke) {
 - **Importación y caché:** `audio_scan_folder`, `audio_scan_files`, `audio_import_tracks`, `audio_import_track_bytes_raw`, `audio_cancel_import`, `audio_get_project_cache_status`, `audio_delete_project_cache`, `audio_get_cache_stats`, `audio_clean_orphan_caches`, `audio_check_files_exist`.
 - **Proyecto/transporte:** `audio_load_project`, `audio_preload_project`, `audio_switch_to_preloaded`, `audio_configure_song`, `audio_play`, `audio_pause`, `audio_stop`, `audio_seek`, `audio_get_playback_state`, `audio_queue_jump`, `audio_cancel_jump`, `audio_toggle_vamp`.
 - **Mezcla y ruteo:** `audio_set_track_controls`, `audio_set_master_gains`, `audio_set_pitch`, `audio_set_metronome`, `audio_set_split_mono`.
-- **Biblioteca:** `library_load`, `library_save`, `library_save_song`, `library_delete_song`, `library_update_song_folder`, `library_read_sidecar`, `library_write_sidecar`.
+- **Biblioteca:** `library_load`, `library_get_song_peaks`, `library_save`, `library_save_song`, `library_delete_song`, `library_update_song_folder`, `library_read_sidecar`, `library_write_sidecar`.
 - Además, `dialog:allow-open` (plugin de diálogos) para los selectores nativos.
 
 ### 8.3. Reglas obligatorias para cambios de audio

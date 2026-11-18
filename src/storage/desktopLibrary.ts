@@ -93,6 +93,22 @@ export async function updateDesktopSongFolder(
 /**
  * Reads omnitracks.project.json (or fallback .omnitracks.json) from a folder.
  */
+/**
+ * Picos de forma de onda de una canción, por ID de pista. La biblioteca solo trae los de las canciones del setlist;
+ * esto los pide al añadir otra al setlist. Devuelve `{}` si no hay o si falla (el fallo queda en la consola).
+ */
+export async function loadDesktopSongPeaks(songId: string): Promise<Record<string, number[]>> {
+  if (!isDesktopApp()) return {};
+  const invoke = (window as any).__TAURI__?.core?.invoke;
+  if (!invoke) return {};
+  try {
+    return (await invoke('library_get_song_peaks', { songId })) ?? {};
+  } catch (err) {
+    console.warn(`[Library] No se pudieron leer los picos de '${songId}':`, err);
+    return {};
+  }
+}
+
 export async function readDesktopSidecar(folderPath: string): Promise<any | null> {
   if (!isDesktopApp()) return null;
   const invoke = (window as any).__TAURI__?.core?.invoke;
