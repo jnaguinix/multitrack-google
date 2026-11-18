@@ -30,7 +30,7 @@ import { audioEngine } from '../audio/audioEngine';
 import { nativeAudioEngine } from '../audio/nativeAudioEngine';
 import { extractAudioFilesFromDataTransfer } from '../utils/fileImportHelper';
 import { formatMmSs, formatTimecode } from './TransportDeck';
-import { getSongWaveformPeaks } from '../utils/songWaveform';
+import { drawSectionWaveBars, getSongWaveformPeaks } from '../utils/songWaveform';
 import { MultitrackMixer, gainToDb } from './MultitrackMixer';
 import { isDesktopApp } from '../utils/nativeDialog';
 import { SongPickerModal } from './SongPickerModal';
@@ -208,35 +208,17 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
         ctx.fillRect(startX, 0, 1, height);
       }
 
-      const barCount = Math.min(masterPeaks.length, Math.max(1, Math.floor(width / 4)));
-      const stepX = width / Math.max(1, barCount);
-      // Onda simétrica sobre el eje central, normalizada al pico más alto para que ocupe todo el alto
-      // aunque la mezcla de varias pistas sea baja. Deja arriba una franja libre para los círculos.
-      const top = 34;
-      const bottom = height - 8;
-      const centerY = (top + bottom) / 2;
-      const halfMax = (bottom - top) / 2;
-      let maxPeak = 0;
-      for (let index = 0; index < masterPeaks.length; index++) maxPeak = Math.max(maxPeak, masterPeaks[index]);
-      const norm = maxPeak > 0 ? 1 / maxPeak : 1;
-      ctx.lineCap = 'round';
-      ctx.lineWidth = Math.max(1.5, Math.min(3, stepX * 0.62));
-      ctx.globalAlpha = 1;
-      for (let i = 0; i < barCount; i++) {
-        const first = Math.floor(i * masterPeaks.length / barCount);
-        const last = Math.max(first + 1, Math.floor((i + 1) * masterPeaks.length / barCount));
-        let peak = 0;
-        for (let index = first; index < last; index++) peak = Math.max(peak, masterPeaks[index] ?? 0);
-        const half = Math.max(1.5, Math.sqrt(peak * norm) * halfMax);
-        const seconds = ((i + 0.5) / barCount) * totalDurationSec;
-        const section = sections.find((item) => item.startTimeSec <= seconds && seconds < item.endTimeSec);
-        const x = (i + 0.5) * stepX;
-        ctx.strokeStyle = section?.color || '#F5F5F3';
-        ctx.beginPath();
-        ctx.moveTo(x, centerY - half);
-        ctx.lineTo(x, centerY + half);
-        ctx.stroke();
-      }
+      // Onda simétrica por colores de sección (la misma función que el mapa de En vivo). Deja arriba una franja
+      // libre para los círculos de las secciones.
+      drawSectionWaveBars(ctx, {
+        width,
+        height,
+        peaks: masterPeaks,
+        sections,
+        totalDurationSec,
+        top: 34,
+        bottom: height - 8,
+      });
       ctx.globalAlpha = 1;
     };
     draw();
