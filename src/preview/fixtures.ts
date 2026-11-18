@@ -127,6 +127,15 @@ export function createSampleLibrary(): { version: number; updatedAt: number; act
       sections: [['Intro', 'IN'], ['Verso', 'V1'], ['Coro', 'CO'], ['Final', 'FI']],
     }),
   ];
+  // Sonoridad de ejemplo (en escritorio la mide el motor): una canción normal, otra más baja y otra más fuerte.
+  const demoLoudness = (lufs: number, peak: number) => ({
+    integratedLufs: lufs, loudnessRangeLu: 6.2, truePeakDbtp: peak, samplePeakDbfs: peak - 0.2,
+    durationSec: 260, tracksMeasured: 6, signature: 'demo', referenceVersion: 1, analyzedAt: 1,
+  });
+  songs[0].loudness = demoLoudness(-14.1, -2.6);
+  songs[1].loudness = demoLoudness(-19.4, -6.0);
+  songs[2].loudness = demoLoudness(-11.2, 0.4);
+  songs[2].masterGain = 0.9;
   return { version: 1, updatedAt: Date.now(), activeSetlist: songs.map((s) => s.id), songs };
 }
 

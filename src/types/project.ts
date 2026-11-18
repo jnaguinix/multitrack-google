@@ -60,6 +60,25 @@ export interface TrackChannel {
 
 export type RepertoireFolder = 'imported' | 'setlist' | 'demos';
 
+/**
+ * Sonoridad (EBU R128) de la mezcla de referencia de una canción, medida por el motor en segundo plano: las pistas de
+ * música a ganancia 1, sin click ni guía y sin volumen master (ese se aplica al mostrarla, ver `utils/loudness.ts`).
+ */
+export interface SongLoudness {
+  /** LUFS integrados; `null` si la mezcla es silencio o dura menos de 400 ms. */
+  integratedLufs: number | null;
+  loudnessRangeLu: number | null;
+  /** Pico real (True Peak) antes del limitador, en dBTP. */
+  truePeakDbtp: number | null;
+  samplePeakDbfs: number | null;
+  durationSec: number;
+  tracksMeasured: number;
+  /** Qué caché y reparto de pistas se midió. */
+  signature: string;
+  referenceVersion: number;
+  analyzedAt: number;
+}
+
 export interface SongProject {
   id: string;
   title: string;
@@ -81,6 +100,8 @@ export interface SongProject {
   clickPan?: number;
   clickSubdivision: 1 | 2; // 1 = quarter notes, 2 = eighth notes
   masterGain: number;
+  /** Sonoridad medida por el motor (solo escritorio, en segundo plano). */
+  loudness?: SongLoudness;
   cueMasterGain?: number; // Master output gain for the Click / Cue bus ("Auriculares banda")
   /** Volumen general de las pistas marcadas «Aur.» en los auriculares (1 = sin cambio). */
   monitorGain?: number;

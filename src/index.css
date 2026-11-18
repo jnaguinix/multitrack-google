@@ -1595,6 +1595,9 @@
 .lt-tile[data-dragging] { border-color: var(--lt-text); }
 .lt-tile-top { display: flex; align-items: center; justify-content: space-between; color: var(--lt-mut); font-size: 12px; }
 .lt-tile-num { display: inline-flex; align-items: center; gap: 4px; }
+.lt-tile-loud { display: flex; align-items: baseline; justify-content: space-between; gap: 6px; margin-top: -2px; color: var(--lt-mut); font-size: 12px; font-variant-numeric: tabular-nums; cursor: help; }
+.lt-tile-loud em { font-style: normal; color: var(--lt-mut); }
+.lt-tile-loud[data-tone="warn"] em { color: var(--lt-solo); font-weight: 600; }
 .lt-tile-wave { display: flex; align-items: flex-end; gap: 2px; height: 34px; }
 .lt-tile-wave i { flex: 1; min-height: 3px; border-radius: 1px; background: var(--lt-line); }
 .lt-tile-wave[data-active] i { background: var(--lt-vivid); }

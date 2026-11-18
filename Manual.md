@@ -285,7 +285,7 @@ if (invoke) {
 - **Servidor LAN:** `remote_status`, `remote_start`, `remote_stop`, `remote_kick`, `remote_exchange`.
 - **Actualizaciones:** `desktop_update_check`, `desktop_update_download`, `desktop_update_install`.
 - **Dispositivo/estado:** `audio_list_hosts`, `audio_list_devices`, `audio_get_config`, `audio_set_config`, `audio_get_stats`, `audio_reset_stats`, `audio_test_tone`, `audio_reopen_stream`.
-- **Importación y caché:** `audio_scan_folder`, `audio_scan_files`, `audio_import_tracks`, `audio_import_track_bytes_raw`, `audio_cancel_import`, `audio_get_project_cache_status`, `audio_delete_project_cache`, `audio_get_cache_stats`, `audio_clean_orphan_caches`, `audio_check_files_exist`.
+- **Importación y caché:** `audio_scan_folder`, `audio_scan_files`, `audio_import_tracks`, `audio_import_track_bytes_raw`, `audio_analyze_loudness`, `audio_cancel_import`, `audio_get_project_cache_status`, `audio_delete_project_cache`, `audio_get_cache_stats`, `audio_clean_orphan_caches`, `audio_check_files_exist`.
 - **Proyecto/transporte:** `audio_load_project`, `audio_preload_project`, `audio_switch_to_preloaded`, `audio_configure_song`, `audio_play`, `audio_pause`, `audio_stop`, `audio_seek`, `audio_get_playback_state`, `audio_queue_jump`, `audio_cancel_jump`, `audio_toggle_vamp`.
 - **Mezcla y ruteo:** `audio_set_track_controls`, `audio_set_master_gains`, `audio_set_pitch`, `audio_set_metronome`, `audio_set_split_mono`.
 - **Biblioteca:** `library_load`, `library_get_song_peaks`, `library_save`, `library_save_song`, `library_delete_song`, `library_update_song_folder`, `library_read_sidecar`, `library_write_sidecar`.

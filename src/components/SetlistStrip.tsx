@@ -16,6 +16,7 @@ import {
 import { SetlistTransitionMode, SongProject } from '../types/project';
 import { getSongWaveformPeaks } from '../utils/songWaveform';
 import { resolveTransition, TRANSITION_LABELS } from '../utils/setlistTransition';
+import { describeLoudness, setlistReferenceLufs } from '../utils/loudness';
 import { formatMmSs } from './TransportDeck';
 import { MenuItem, MenuLabel, MenuSeparator, PopoverMenu } from './ui/Menu';
 
@@ -111,6 +112,10 @@ export const SetlistStrip: React.FC<SetlistStripProps> = ({
 }) => {
   const [dragOverIdx, setDragOverIdx] = useState<number | null>(null);
 
+  // Sonoridad de cada canción frente a la mediana del setlist (lo que suena: referencia medida + volumen master).
+  const loudnessReference = useMemo(() => setlistReferenceLufs(songs), [songs]);
+  const loudnessOf = (song: SongProject) => describeLoudness(song, loudnessReference);
+
   return (
     <div className="lt-strip-row" role="group" aria-label="Canciones del setlist">
       {songs.map((song, idx) => {
@@ -120,6 +125,7 @@ export const SetlistStrip: React.FC<SetlistStripProps> = ({
         const mode = resolveTransition(song, globalMode);
         const hasOwnTransition = Boolean(song.transitionToNext);
         const durSec = songDuration(song);
+        const loudness = loudnessOf(song);
 
         return (
           <React.Fragment key={song.id}>
@@ -162,6 +168,12 @@ export const SetlistStrip: React.FC<SetlistStripProps> = ({
                 </span>
                 <span className="lt-tile-dur">{formatMmSs(durSec)}</span>
               </div>
+              {loudness && (
+                <div className="lt-tile-loud" data-tone={loudness.tone} title={loudness.title}>
+                  <span>{loudness.text}</span>
+                  {loudness.delta && <em>{loudness.delta}</em>}
+                </div>
+              )}
 
               <TileWave song={song} active={isCurrent} />
 

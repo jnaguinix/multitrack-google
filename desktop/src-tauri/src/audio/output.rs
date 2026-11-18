@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use tokio::sync::Mutex;
+use crate::audio::loudness::LoudnessQueue;
 use crate::audio::playback::PlaybackEngine;
 use crate::audio::routing::RoutingStore;
 
@@ -152,6 +153,8 @@ pub struct AudioEngineState {
     pub stats: Arc<AudioStreamStats>,
     pub import_cancellation: Mutex<std::collections::HashMap<String, Arc<AtomicBool>>>,
     pub playback: Arc<PlaybackEngine>,
+    /// Cola de análisis de sonoridad (un hilo, en segundo plano; se detiene mientras suena algo).
+    pub loudness: Arc<LoudnessQueue>,
     /// Ruteo de salidas guardado por dispositivo (`audio_routing.json`).
     pub routing_store: std::sync::Mutex<RoutingStore>,
 }
@@ -161,13 +164,16 @@ impl AudioEngineState {
         let initial_settings = load_settings_from_disk(&settings_path).unwrap_or_default();
         let routing_store = RoutingStore::load(&settings_path.with_file_name("audio_routing.json"));
         let stats = Arc::new(AudioStreamStats::default());
+        let playback = Arc::new(PlaybackEngine::new(Arc::clone(&stats)));
+        let loudness = Arc::new(LoudnessQueue::new(Arc::clone(&playback.is_playing)));
         Self {
             active_test_stream: Arc::new(Mutex::new(None)),
             settings_path,
             current_settings: Mutex::new(initial_settings),
             stats: Arc::clone(&stats),
             import_cancellation: Mutex::new(std::collections::HashMap::new()),
-            playback: Arc::new(PlaybackEngine::new(Arc::clone(&stats))),
+            playback,
+            loudness,
             routing_store: std::sync::Mutex::new(routing_store),
         }
     }
