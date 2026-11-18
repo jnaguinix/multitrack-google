@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { Search, Download, MoreHorizontal, Trash2, CheckCircle2, FolderPlus, ListPlus, ListMinus, Zap, HardDrive, Edit3, type LucideIcon } from 'lucide-react';
+import { Search, Download, MoreHorizontal, Trash2, CheckCircle2, FolderPlus, ListPlus, ListMinus, Zap, HardDrive, Edit3 } from 'lucide-react';
 import { SongProject } from '../types/project';
 import { audioEngine } from '../audio/audioEngine';
 import { isFsAccessSupported } from '../storage/sourceFiles';
@@ -8,6 +8,7 @@ import { formatMmSs } from './TransportDeck';
 import { SongMetadataEditModal } from './modals/SongMetadataEditModal';
 import { filterSongs } from '../utils/songSearch';
 import { useProgressiveList } from '../hooks/useProgressiveList';
+import { MenuItem, MenuSeparator, PopoverMenu } from './ui/Menu';
 
 interface LibraryViewProps {
   projects: SongProject[];
@@ -175,18 +176,18 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                       <button type="button" popoverTarget={`library-song-${index}`} aria-label={`Acciones de ${proj.title}`} className="lt-control lt-icon-control">
                         <MoreHorizontal size={17} />
                       </button>
-                      <div id={`library-song-${index}`} popover="auto" role="menu" aria-label={`Acciones de ${proj.title}`} className="lt-popover lt-library-actions">
+                      <PopoverMenu id={`library-song-${index}`} label={`Acciones de ${proj.title}`}>
                         {proj.inSetlist && onRemoveFromSetlist ? (
-                          <LibraryMenuItem
+                          <MenuItem
                             icon={ListMinus}
                             label="Quitar del Setlist"
                             title="Quitar esta canción del Setlist (permanece en la biblioteca)"
                             onSelect={() => onRemoveFromSetlist(proj.id)}
                           />
                         ) : (
-                          <LibraryMenuItem icon={ListPlus} label="Añadir al Setlist" onSelect={() => onAddToSetlist(proj.id)} />
+                          <MenuItem icon={ListPlus} label="Añadir al Setlist" onSelect={() => onAddToSetlist(proj.id)} />
                         )}
-                        <LibraryMenuItem
+                        <MenuItem
                           icon={Edit3}
                           label="Editar metadatos"
                           title="Editar título, artista, BPM, compás y tono"
@@ -194,7 +195,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                         />
                         {/* Volver a enlazar los archivos originales (carpeta movida o renombrada, o permiso perdido). */}
                         {onRelinkProject && (isDesktopApp() || (!isPcmReady && isFsAccessSupported())) && (
-                          <LibraryMenuItem
+                          <MenuItem
                             icon={FolderPlus}
                             label="Ubicar carpeta"
                             title="Elegir la carpeta donde están ahora los stems originales de esta canción"
@@ -202,28 +203,28 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                           />
                         )}
                         {!isPcmReady && proj.tracks.length > 0 && (
-                          <LibraryMenuItem
+                          <MenuItem
                             icon={Zap}
                             label="Generar caché"
                             title="Generar la caché PCM nativa de esta canción"
                             onSelect={() => onOptimizeProject(proj)}
                           />
                         )}
-                        <LibraryMenuItem
+                        <MenuItem
                           icon={Download}
                           label="Exportar JSON"
                           title="Exportar configuración del proyecto en JSON"
                           onSelect={() => onExportJson(proj)}
                         />
-                        <div role="separator" className="lt-menu-separator" />
-                        <LibraryMenuItem
+                        <MenuSeparator />
+                        <MenuItem
                           icon={Trash2}
                           label="Eliminar canción"
                           title="Eliminar la canción de la biblioteca (los archivos originales no se tocan)"
                           danger
                           onSelect={() => onDeleteProject(proj.id)}
                         />
-                      </div>
+                      </PopoverMenu>
                     </div>
                   </div>
                 );
@@ -255,38 +256,3 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
     </div>
   );
 };
-
-/**
- * Opción del menú «⋯» de una canción en la Biblioteca. Todas iguales (icono y texto en una fila, misma altura), como
- * los demás menús de la app; `danger` solo para la acción destructiva, que va al final tras un separador.
- */
-function LibraryMenuItem({
-  icon: Icon,
-  label,
-  title,
-  danger = false,
-  onSelect,
-}: {
-  icon: LucideIcon;
-  label: string;
-  title?: string;
-  danger?: boolean;
-  onSelect: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      role="menuitem"
-      title={title}
-      data-danger={danger || undefined}
-      onClick={(event) => {
-        event.currentTarget.closest<HTMLElement>('[popover]')?.hidePopover();
-        onSelect();
-      }}
-      className="lt-menu-item"
-    >
-      <Icon size={16} aria-hidden="true" />
-      <span>{label}</span>
-    </button>
-  );
-}

@@ -36,6 +36,7 @@ import { isDesktopApp } from '../utils/nativeDialog';
 import { SongPickerModal } from './SongPickerModal';
 import { SetlistStrip, SongTileStatus } from './SetlistStrip';
 import { SECTION_TEMPLATES } from '../utils/sectionTemplates';
+import { MenuItem, MenuLabel, PopoverMenu } from './ui/Menu';
 import { useSetlistMeta } from '../hooks/useSetlistMeta';
 
 interface SetlistPageViewProps {
@@ -96,10 +97,6 @@ interface SetlistPageViewProps {
 
 function songDuration(song: SongProject): number {
   return song.durationSec || ((song.totalBars || 24) * 4 * 60) / (song.bpm || 120);
-}
-
-function closePopover(event: React.MouseEvent<HTMLButtonElement>) {
-  event.currentTarget.closest<HTMLElement>('[popover]')?.hidePopover();
 }
 
 function formatTrackDb(gain: number): string {
@@ -339,25 +336,17 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
               <Sliders size={16} /> Mezcla
             </button>
           </div>
-          <div id="section-templates" popover="auto" className="lt-popover space-y-0.5">
-            <div className="px-2.5 py-1 text-xs text-studio-muted font-semibold">
-              Añadir en {formatTimecode(playheadSec)}
-            </div>
+          <PopoverMenu id="section-templates" label={`Añadir sección en ${formatTimecode(playheadSec)}`}>
+            <MenuLabel>Añadir en {formatTimecode(playheadSec)}</MenuLabel>
             {SECTION_TEMPLATES.map((tpl) => (
-              <button
+              <MenuItem
                 key={tpl.key}
-                type="button"
-                onClick={(event) => {
-                  onAddSectionTemplate(tpl.key);
-                  closePopover(event);
-                }}
-                className="w-full px-2.5 py-1.5 text-left rounded-lg hover:bg-neutral-800 text-neutral-100 flex items-center gap-2.5 cursor-pointer"
-              >
-                <span className="lt-code" style={{ '--sec': tpl.color } as React.CSSProperties}>{tpl.code}</span>
-                {tpl.name}
-              </button>
+                label={tpl.name}
+                leading={<span className="lt-code" style={{ '--sec': tpl.color } as React.CSSProperties}>{tpl.code}</span>}
+                onSelect={() => onAddSectionTemplate(tpl.key)}
+              />
             ))}
-          </div>
+          </PopoverMenu>
         </header>
 
         <div className="lt-waveform lt-map-wave relative shrink-0 overflow-hidden">
