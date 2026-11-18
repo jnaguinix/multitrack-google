@@ -3,64 +3,96 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use crate::audio::resampler::TrackResampler;
 
+/// Lee hasta llenar `buf` o llegar al final. Devuelve los bytes leídos y el error de lectura, si lo hubo (llegar al
+/// final del archivo no es un error).
+fn read_available<R: Read>(reader: &mut R, buf: &mut [u8]) -> (usize, Option<std::io::Error>) {
+    let mut filled = 0;
+    while filled < buf.len() {
+        match reader.read(&mut buf[filled..]) {
+            Ok(0) => break,
+            Ok(n) => filled += n,
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(e) => return (filled, Some(e)),
+        }
+    }
+    (filled, None)
+}
+
+/// Lee `frames` fotogramas en `out_l`/`out_r`. Lo que el archivo ya no tiene (pasado su final) sale en silencio.
 pub fn read_frames_to_slices<R: Read>(
     reader: &mut R,
     is_mono: bool,
     frames: usize,
     out_l: &mut [f32],
     out_r: &mut [f32],
-) {
+) -> Option<std::io::Error> {
     let bytes_per_frame = if is_mono { 2 } else { 4 };
     let mut buf = vec![0u8; frames * bytes_per_frame];
-    if reader.read_exact(&mut buf).is_ok() {
+    let (got, err) = read_available(reader, &mut buf);
+    let real = got / bytes_per_frame;
+    for i in 0..real {
         if is_mono {
-            for i in 0..frames {
-                let s = i16::from_le_bytes([buf[i * 2], buf[i * 2 + 1]]) as f32 / 32768.0;
-                out_l[i] = s;
-                out_r[i] = s;
-            }
+            let s = i16::from_le_bytes([buf[i * 2], buf[i * 2 + 1]]) as f32 / 32768.0;
+            out_l[i] = s;
+            out_r[i] = s;
         } else {
-            for i in 0..frames {
-                out_l[i] = i16::from_le_bytes([buf[i * 4], buf[i * 4 + 1]]) as f32 / 32768.0;
-                out_r[i] = i16::from_le_bytes([buf[i * 4 + 2], buf[i * 4 + 3]]) as f32 / 32768.0;
-            }
+            out_l[i] = i16::from_le_bytes([buf[i * 4], buf[i * 4 + 1]]) as f32 / 32768.0;
+            out_r[i] = i16::from_le_bytes([buf[i * 4 + 2], buf[i * 4 + 3]]) as f32 / 32768.0;
         }
-    } else {
-        out_l[..frames].fill(0.0);
-        out_r[..frames].fill(0.0);
     }
+    out_l[real..frames].fill(0.0);
+    out_r[real..frames].fill(0.0);
+    err
 }
 
+/// Añade a `staging` **exactamente** `frames` fotogramas: los que haya en el archivo y, pasado su final, silencio.
+///
+/// Así una pista más corta que la canción sigue avanzando al ritmo del reloj aunque ya no tenga audio: su posición
+/// coincide siempre con la de la canción y, si un salto de sección o un vamp vuelve a una zona donde sí tiene audio,
+/// vuelve a sonar en su sitio. (Antes, al acabarse el archivo no se añadía nada —ni siquiera la parte que sí estaba—
+/// y la pista se quedaba muda tras saltar hacia atrás.)
 pub fn read_into_staging<R: Read>(
     reader: &mut R,
     is_mono: bool,
     frames: usize,
     staging: &mut [Vec<f32>],
-) {
+) -> Option<std::io::Error> {
     if frames == 0 {
-        return;
+        return None;
     }
     let bytes_per_frame = if is_mono { 2 } else { 4 };
     let mut buf = vec![0u8; frames * bytes_per_frame];
-    if let Ok(()) = reader.read_exact(&mut buf) {
-        if is_mono {
-            let ch0 = &mut staging[0];
-            ch0.reserve(frames);
-            for i in 0..frames {
-                let s = i16::from_le_bytes([buf[i * 2], buf[i * 2 + 1]]) as f32 / 32768.0;
-                ch0.push(s);
-            }
-        } else {
-            let (ch0, rest) = staging.split_at_mut(1);
-            let ch1 = &mut rest[0];
-            ch0[0].reserve(frames);
-            ch1.reserve(frames);
-            for i in 0..frames {
-                let l = i16::from_le_bytes([buf[i * 4], buf[i * 4 + 1]]) as f32 / 32768.0;
-                let r = i16::from_le_bytes([buf[i * 4 + 2], buf[i * 4 + 3]]) as f32 / 32768.0;
-                ch0[0].push(l);
-                ch1.push(r);
-            }
+    let (got, err) = read_available(reader, &mut buf);
+    let real = got / bytes_per_frame;
+    if is_mono {
+        let ch0 = &mut staging[0];
+        ch0.reserve(frames);
+        for i in 0..real {
+            ch0.push(i16::from_le_bytes([buf[i * 2], buf[i * 2 + 1]]) as f32 / 32768.0);
+        }
+        ch0.resize(ch0.len() + (frames - real), 0.0);
+    } else {
+        let (ch0, rest) = staging.split_at_mut(1);
+        let (ch0, ch1) = (&mut ch0[0], &mut rest[0]);
+        ch0.reserve(frames);
+        ch1.reserve(frames);
+        for i in 0..real {
+            ch0.push(i16::from_le_bytes([buf[i * 4], buf[i * 4 + 1]]) as f32 / 32768.0);
+            ch1.push(i16::from_le_bytes([buf[i * 4 + 2], buf[i * 4 + 3]]) as f32 / 32768.0);
+        }
+        ch0.resize(ch0.len() + (frames - real), 0.0);
+        ch1.resize(ch1.len() + (frames - real), 0.0);
+    }
+    err
+}
+
+/// Registra el primer fallo de lectura del archivo de una pista. Los siguientes se omiten para no inundar el
+/// registro (el hilo de lectura lee cada ~20 ms); lo que no se pudo leer ya sonó como silencio.
+pub fn report_read_error(already_reported: &mut bool, path: &std::path::Path, err: Option<std::io::Error>) {
+    if let Some(e) = err {
+        if !*already_reported {
+            *already_reported = true;
+            eprintln!("[Feeder] Error leyendo {}: {e}. Lo que no se pudo leer suena en silencio.", path.display());
         }
     }
 }

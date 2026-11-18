@@ -12,8 +12,9 @@ pub const BUFFERING_EXIT_MS: u64 = 150;
 ///
 /// - Una pista cuyo anillo aún no se vació para la generación de seek vigente (`flush_done`) impide
 ///   salir: puede contener audio de la posición anterior.
-/// - Una pista terminada (`eof`) no impide salir: no va a recibir más audio y exigirle 150 ms dejaría
-///   toda la canción en buffering (p. ej. una guía corta tras un seek más allá de su final).
+/// - Una pista sin hilo de lectura (`eof`: el transporte la marca si su feeder no confirmó el seek) no impide
+///   salir: no va a recibir más audio y exigirle 150 ms dejaría toda la canción en buffering. Una pista más corta
+///   que la canción no es `eof`: su feeder sigue empujando silencio pasado el final de su archivo.
 /// - Las demás deben tener al menos [`BUFFERING_EXIT_MS`] disponibles.
 ///
 /// Solo usa atómicos y `try_lock`: es seguro llamarla desde el callback de audio.
@@ -43,7 +44,7 @@ pub fn buffering_ready(tracks: &[StreamTrackHandle], generation: u64, sample_rat
 /// - Los fotogramas que faltan suenan como silencio y se anotan en `skip_frames`. Cuando el feeder se
 ///   recupera, entrega el audio que debía haber sonado durante el hueco: se descarta esa cantidad para que
 ///   la pista siga alineada con el reloj y con las demás, en lugar de quedarse atrasada. Una pista
-///   terminada (`eof`) no acumula: no va a llegar nada más.
+///   sin hilo de lectura (`eof`) no acumula: no va a llegar nada más.
 ///
 /// Sin memoria dinámica, sin bloqueos, sin registro: es seguro en el callback de audio.
 #[inline]
