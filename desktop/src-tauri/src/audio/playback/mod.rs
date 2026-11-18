@@ -11,6 +11,7 @@ use tokio::sync::Mutex as TokioMutex;
 use crate::audio::cache::{get_project_cache_dir, read_track_metadata};
 use crate::audio::metronome::{MetronomeConfig, MetronomeEngine};
 use crate::audio::output::{get_device_name, resolve_output_config, AudioEngineState, AudioStreamStats};
+use crate::audio::pitch::{new_pitch_shifter, PitchShifter};
 use crate::audio::resampler::TrackResampler;
 use crate::audio::routing::{self, RouteTable, RoutingSlot};
 
@@ -282,14 +283,19 @@ impl PlaybackEngine {
                     let channels_count = if is_mono { 1 } else { 2 };
                     let mut current_frame = 0u64;
 
-                    let mut last_pitch = thread_pitch.load(Ordering::Relaxed);
                     let mut resampler = TrackResampler::new(
                         device_sample_rate,
                         device_sample_rate,
-                        last_pitch,
                         chunk_frames,
                         channels_count,
                     ).expect("Failed to initialize track resampler");
+                    // Cambio de tono real (la duración no cambia). Solo existe mientras el tono no es 0 y se
+                    // (re)crea en cada seek: `set_pitch` del transporte hace un seek al cambiar el tono.
+                    let mut shifter: Option<PitchShifter> = new_pitch_shifter(
+                        device_sample_rate,
+                        channels_count,
+                        thread_pitch.load(Ordering::Relaxed),
+                    );
 
                     let mut input_staging: Vec<Vec<f32>> = vec![Vec::with_capacity(chunk_frames * 4); channels_count];
                     let mut output_staging: Vec<f32> = Vec::with_capacity(chunk_frames * 8);
@@ -308,8 +314,11 @@ impl PlaybackEngine {
                             }
                             output_staging.clear();
                             resampler.reset();
-                            let cur_pitch = thread_pitch.load(Ordering::Relaxed);
-                            let _ = resampler.set_pitch(cur_pitch, false);
+                            shifter = new_pitch_shifter(
+                                device_sample_rate,
+                                channels_count,
+                                thread_pitch.load(Ordering::Relaxed),
+                            );
                             delay_compensated = false;
                             // Ya no se empujará audio de la posición anterior: se confirma la generación
                             // y se espera a que el transporte vacíe el anillo antes de producir nada.
@@ -325,12 +334,8 @@ impl PlaybackEngine {
                             continue;
                         }
 
-                        // 2. Check pitch change
-                        let cur_pitch = thread_pitch.load(Ordering::Relaxed);
-                        if cur_pitch != last_pitch {
-                            last_pitch = cur_pitch;
-                            let _ = resampler.set_pitch(cur_pitch, true);
-                        }
+                        // 2. (El cambio de tono no se atiende aquí: `set_pitch` hace un seek y el feeder recrea
+                        // el cambio de tono al atenderlo, con el anillo vacío.)
 
                         // 3. Drain pending output_staging samples into ring buffer
                         while !output_staging.is_empty() && producer.slots() > 0 {
@@ -464,6 +469,7 @@ impl PlaybackEngine {
                             current_frame += chunk_frames as u64;
                             drain_staging_through_resampler(
                                 &mut resampler,
+                                shifter.as_mut(),
                                 is_mono,
                                 &mut input_staging,
                                 &mut output_staging,
@@ -631,10 +637,21 @@ impl PlaybackEngine {
 
     pub async fn set_pitch(&self, semitones: i32) {
         let clamped = semitones.clamp(-6, 6);
-        self.pitch_semitones.store(clamped, Ordering::SeqCst);
-        let tracks = self.tracks.lock().await;
-        for trk in tracks.iter() {
-            trk.pitch_semitones.store(clamped, Ordering::Relaxed);
+        let previous = self.pitch_semitones.swap(clamped, Ordering::SeqCst);
+        let has_tracks = {
+            let tracks = self.tracks.lock().await;
+            for trk in tracks.iter() {
+                trk.pitch_semitones.store(clamped, Ordering::Relaxed);
+            }
+            !tracks.is_empty()
+        };
+        // El cambio de tono vive en el feeder de cada pista y el anillo ya trae ~350 ms con el tono anterior:
+        // se reposiciona en el mismo punto (como un seek, con su micro-fundido) para que suene el tono nuevo
+        // enseguida. El reloj de la canción no cambia: el tono ya no altera la velocidad.
+        if previous != clamped && has_tracks {
+            let sr = self.sample_rate.load(Ordering::SeqCst).max(1);
+            let position_sec = self.current_frame.load(Ordering::SeqCst) as f64 / sr as f64;
+            self.seek(position_sec).await;
         }
     }
 
@@ -898,7 +915,6 @@ impl PlaybackEngine {
             master_gain: Arc::clone(&self.master_gain),
             cue_master_gain: Arc::clone(&self.cue_master_gain),
             monitor_gain: Arc::clone(&self.monitor_gain),
-            pitch_semitones: Arc::clone(&self.pitch_semitones),
             is_vamping: Arc::clone(&self.is_vamping),
             routing: Arc::clone(&self.routing),
             bus_meters: Arc::clone(&self.bus_meters),

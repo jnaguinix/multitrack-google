@@ -8,6 +8,11 @@
 
 use ssstretch::Stretch;
 
+/// Cambio de tono para un tono dado, o `None` si el tono es 0 (la pista pasa tal cual, sin coste).
+pub fn new_pitch_shifter(sample_rate: u32, channels: usize, semitones: i32) -> Option<PitchShifter> {
+    (semitones != 0).then(|| PitchShifter::new(sample_rate, channels, semitones))
+}
+
 /// Cambia el tono de una pista (estéreo o mono), conservando la duración.
 pub struct PitchShifter {
     stretch: Stretch,

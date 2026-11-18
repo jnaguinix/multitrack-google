@@ -133,33 +133,32 @@
 
     #[test]
     fn test_click_alignment_pitch_non_zero() {
-        // Phase 4 Test 2: Pitch != 0 with varispeed resampler & delay compensation
+        // Con el tono distinto de 0 el golpe de una pista se queda en su sitio (la salida no va retrasada ni
+        // adelantada respecto a la entrada) y la relación de remuestreo no cambia (ya no hay varispeed).
         let sample_rate = 48000u32;
-        let pitch_semitones = 2i32; // +2 semitones
-        let ratio = 2.0f64.powf(-(pitch_semitones as f64) / 12.0); // ~0.890898
-
-        let mut res = TrackResampler::new(sample_rate, sample_rate, pitch_semitones, 512, 1).unwrap();
-
-        // Feed an impulse at input sample 256
-        let chunk_size = 512;
-        let mut in_ch = vec![0.0f32; chunk_size];
-        in_ch[256] = 1.0;
-
-        let processed = res.process(&[in_ch]).unwrap();
-        assert!(!processed.is_empty());
-
-        let expected_out_frame = (256.0 * ratio).round() as usize;
-        let ch = &processed[0];
-        let mut max_idx = 0;
-        let mut max_val = 0.0f32;
-        for (i, &s) in ch.iter().enumerate() {
-            if s.abs() > max_val {
-                max_val = s.abs();
-                max_idx = i;
-            }
+        let chunk = 1024usize;
+        let mut res = TrackResampler::new(sample_rate, sample_rate, chunk, 1).unwrap();
+        assert_eq!(res.resample_ratio(), 1.0, "el tono no debe tocar la relación de remuestreo");
+        let mut shifter = crate::audio::pitch::new_pitch_shifter(sample_rate, 1, 2);
+        let mut input = vec![vec![0.0f32; 0]];
+        let impulse_at = 30_000usize;
+        let total = 60_000usize;
+        for i in 0..total {
+            // Un golpe corto con contenido tonal para que el algoritmo lo reproduzca.
+            let v = if (impulse_at..impulse_at + 200).contains(&i) {
+                (((i - impulse_at) as f32) * 0.37).sin() * 0.9 * (1.0 - (i - impulse_at) as f32 / 200.0)
+            } else {
+                0.0
+            };
+            input[0].push(v);
         }
-        let diff = (max_idx as i64 - expected_out_frame as i64).abs();
-        assert!(diff <= 1, "Transient deviation {diff} exceeded +/- 1 sample (got {max_idx}, expected {expected_out_frame})");
+        let mut out_staging = Vec::new();
+        let mut compensado = false;
+        drain_staging_through_resampler(&mut res, shifter.as_mut(), true, &mut input, &mut out_staging, &mut compensado, false);
+        let mono: Vec<f32> = out_staging.chunks_exact(2).map(|c| c[0]).collect();
+        let (peak_idx, _) = mono.iter().enumerate().fold((0usize, 0.0f32), |a, (i, v)| if v.abs() > a.1 { (i, v.abs()) } else { a });
+        let diff = (peak_idx as i64 - impulse_at as i64).abs();
+        assert!(diff < 480, "el golpe debe quedar en su sitio (±10 ms): desviación {diff} fotogramas");
     }
 
     #[test]
@@ -168,7 +167,7 @@
         let src_rate = 44100u32;
         let target_rate = 48000u32;
 
-        let mut res = TrackResampler::new(src_rate, target_rate, 0, 1024, 1).unwrap();
+        let mut res = TrackResampler::new(src_rate, target_rate, 1024, 1).unwrap();
 
         // Impulse at 0.010 s in 44.1 kHz = sample 441
         let mut in_ch = vec![0.0f32; 1024];
@@ -197,7 +196,7 @@
         let target_rate = 48000u32;
 
         // Track A at 44.1 kHz, impulse at 0.020 s = sample 882
-        let mut res_a = TrackResampler::new(44100, target_rate, 0, 1024, 1).unwrap();
+        let mut res_a = TrackResampler::new(44100, target_rate, 1024, 1).unwrap();
         let mut in_a = vec![0.0f32; 1024];
         in_a[882] = 1.0;
         let out_a = res_a.process(&[in_a]).unwrap();
@@ -392,11 +391,12 @@
     }
 
     #[test]
-    fn test_feeder_varispeed_continuity_and_frequency_mono_stereo() {
+    fn test_feeder_cambio_de_tono_conserva_duracion_y_da_la_frecuencia() {
+        // El tono cambia pero la canción dura lo mismo: entra y sale el mismo número de fotogramas, y la
+        // frecuencia es la esperada. Pasa por el mismo camino que el feeder (remuestreador + cambio de tono).
         let sample_rate = 48000u32;
         let base_freq = 440.0f32;
-        let duration_sec = 10.0f64;
-        let total_frames = (duration_sec * sample_rate as f64).round() as usize; // 480,000 frames
+        let total_frames = (8.0 * sample_rate as f64) as usize;
         let amplitude = 0.8f32;
 
         let make_sine = |channels: usize| -> Vec<Vec<f32>> {
@@ -413,202 +413,78 @@
 
         let measure_frequency = |samples: &[f32]| -> f32 {
             let mut crossings = Vec::new();
-            let start = 5000;
-            let end = samples.len().saturating_sub(5000);
-            for i in start..end {
-                if samples[i] <= 0.0 && samples[i + 1] > 0.0 {
-                    let fraction = -samples[i] / (samples[i + 1] - samples[i]);
-                    crossings.push(i as f64 + fraction as f64);
+            for i in 1..samples.len() {
+                if samples[i - 1] <= 0.0 && samples[i] > 0.0 {
+                    let fraction = -samples[i - 1] / (samples[i] - samples[i - 1]);
+                    crossings.push(i as f64 - 1.0 + fraction as f64);
                 }
             }
             assert!(crossings.len() > 100, "Not enough zero crossings found");
             let total_cycles = (crossings.len() - 1) as f64;
             let total_samples = crossings.last().unwrap() - crossings.first().unwrap();
-            let freq = (total_cycles / total_samples) * sample_rate as f64;
-            freq as f32
+            ((total_cycles / total_samples) * sample_rate as f64) as f32
         };
 
         let block_sizes = [128, 256, 1024, 512, 768, 384, 1500, 2048, 100];
 
-        // 1. Test Mono with Pitch +1 semitone
-        {
-            let mono_input = make_sine(1);
-            let mut resampler = TrackResampler::new(sample_rate, sample_rate, 1, 1024, 1).unwrap();
-            let mut input_staging: Vec<Vec<f32>> = vec![Vec::new(); 1];
+        // Pasa `input` por el camino del feeder con el tono dado; devuelve el canal izquierdo de salida.
+        let run = |input: &[Vec<f32>], semitones: i32| -> Vec<f32> {
+            let channels = input.len();
+            let mut resampler = TrackResampler::new(sample_rate, sample_rate, 1024, channels).unwrap();
+            let mut shifter = crate::audio::pitch::new_pitch_shifter(sample_rate, channels, semitones);
+            let mut input_staging: Vec<Vec<f32>> = vec![Vec::new(); channels];
             let mut output_staging = Vec::new();
             let mut delay_compensated = false;
-
-            let mut out_samples = Vec::new();
+            let mut out = Vec::new();
             let mut in_pos = 0;
             let mut b_idx = 0;
-
-            while in_pos < total_frames || !input_staging[0].is_empty() {
-                if in_pos < total_frames {
-                    let b_size = block_sizes[b_idx % block_sizes.len()].min(total_frames - in_pos);
-                    b_idx += 1;
-                    input_staging[0].extend_from_slice(&mono_input[0][in_pos..in_pos + b_size]);
-                    in_pos += b_size;
+            while in_pos < total_frames {
+                let b_size = block_sizes[b_idx % block_sizes.len()].min(total_frames - in_pos);
+                b_idx += 1;
+                for (ch, src) in input_staging.iter_mut().zip(input) {
+                    ch.extend_from_slice(&src[in_pos..in_pos + b_size]);
                 }
-
-                let allow_partial = in_pos >= total_frames;
+                in_pos += b_size;
                 drain_staging_through_resampler(
                     &mut resampler,
-                    true,
+                    shifter.as_mut(),
+                    channels == 1,
                     &mut input_staging,
                     &mut output_staging,
                     &mut delay_compensated,
-                    allow_partial,
+                    false,
                 );
-
                 for chunk in output_staging.chunks_exact(2) {
-                    out_samples.push(chunk[0]);
+                    out.push(chunk[0]);
                 }
                 output_staging.clear();
             }
+            out
+        };
 
-            let expected_freq = base_freq * 2.0f32.powf(1.0 / 12.0); // ~466.164 Hz
-            let max_step_theory = 2.0 * amplitude * (std::f32::consts::PI * expected_freq / sample_rate as f32).sin();
-            let threshold = max_step_theory * 1.35;
+        // Con tono 0 el camino no toca la duración (ni siquiera el retardo del remuestreador sobra).
+        let reference_len = run(&make_sine(2), 0).len();
+        let latency = crate::audio::pitch::PitchShifter::new(sample_rate, 2, 1).latency_frames();
 
-            for i in 100..out_samples.len().saturating_sub(100) {
-                let diff = (out_samples[i + 1] - out_samples[i]).abs();
-                assert!(
-                    diff <= threshold,
-                    "Discontinuity detected in Mono +1 st at sample {i}: diff={diff} > threshold={threshold}"
-                );
-            }
-
-            let measured = measure_frequency(&out_samples);
+        for (channels, semitones) in [(1usize, 1i32), (2, 6), (2, -6), (2, -3)] {
+            let out = run(&make_sine(channels), semitones);
+            // Misma duración que sin cambio de tono, salvo lo que el algoritmo aún retiene al terminar (su retardo,
+            // que en reproducción continua no se nota: el feeder sigue alimentándolo) y el bloque que no llegó a salir.
+            let missing = reference_len as i64 - out.len() as i64;
             assert!(
-                (measured - expected_freq).abs() < 0.5,
-                "Measured frequency {measured} does not match expected {expected_freq}"
+                (0..=(latency as i64 + 2048)).contains(&missing),
+                "{semitones} tonos: la duración debe ser la misma ({} vs {reference_len} fotogramas)",
+                out.len()
+            );
+            let expected = base_freq * 2.0f32.powf(semitones as f32 / 12.0);
+            let measured = measure_frequency(&out[sample_rate as usize..out.len() - sample_rate as usize]);
+            assert!(
+                (measured - expected).abs() / expected < 0.01,
+                "{channels} canal(es), {semitones} tonos: {measured} Hz, se esperaba {expected} Hz"
             );
         }
-
-        // 2. Test Stereo with Pitch +6 semitones
-        {
-            let stereo_input = make_sine(2);
-            let mut resampler = TrackResampler::new(sample_rate, sample_rate, 6, 1024, 2).unwrap();
-            let mut input_staging: Vec<Vec<f32>> = vec![Vec::new(); 2];
-            let mut output_staging = Vec::new();
-            let mut delay_compensated = false;
-
-            let mut out_l = Vec::new();
-            let mut out_r = Vec::new();
-            let mut in_pos = 0;
-            let mut b_idx = 0;
-
-            while in_pos < total_frames || !input_staging[0].is_empty() {
-                if in_pos < total_frames {
-                    let b_size = block_sizes[b_idx % block_sizes.len()].min(total_frames - in_pos);
-                    b_idx += 1;
-                    input_staging[0].extend_from_slice(&stereo_input[0][in_pos..in_pos + b_size]);
-                    input_staging[1].extend_from_slice(&stereo_input[1][in_pos..in_pos + b_size]);
-                    in_pos += b_size;
-                }
-
-                let allow_partial = in_pos >= total_frames;
-                drain_staging_through_resampler(
-                    &mut resampler,
-                    false,
-                    &mut input_staging,
-                    &mut output_staging,
-                    &mut delay_compensated,
-                    allow_partial,
-                );
-
-                for chunk in output_staging.chunks_exact(2) {
-                    out_l.push(chunk[0]);
-                    out_r.push(chunk[1]);
-                }
-                output_staging.clear();
-            }
-
-            let expected_freq = base_freq * 2.0f32.powf(6.0 / 12.0); // ~622.254 Hz
-            let max_step_theory = 2.0 * amplitude * (std::f32::consts::PI * expected_freq / sample_rate as f32).sin();
-            let threshold = max_step_theory * 1.35;
-
-            for i in 100..out_l.len().saturating_sub(100) {
-                let diff_l = (out_l[i + 1] - out_l[i]).abs();
-                let diff_r = (out_r[i + 1] - out_r[i]).abs();
-                assert!(diff_l <= threshold, "Discontinuity in Stereo L +6 st at sample {i}: diff={diff_l} > {threshold}");
-                assert!(diff_r <= threshold, "Discontinuity in Stereo R +6 st at sample {i}: diff={diff_r} > {threshold}");
-            }
-
-            let measured_l = measure_frequency(&out_l);
-            let measured_r = measure_frequency(&out_r);
-            assert!((measured_l - expected_freq).abs() < 0.5, "Stereo L freq mismatch: {measured_l} vs {expected_freq}");
-            assert!((measured_r - expected_freq).abs() < 0.5, "Stereo R freq mismatch: {measured_r} vs {expected_freq}");
-        }
-
-        // 3. Test Dynamic Pitch Change (0 st -> +1 st -> +6 st -> 0 st) without recreating resampler
-        {
-            let stereo_input = make_sine(2);
-            let mut resampler = TrackResampler::new(sample_rate, sample_rate, 0, 1024, 2).unwrap();
-            let mut input_staging: Vec<Vec<f32>> = vec![Vec::new(); 2];
-            let mut output_staging = Vec::new();
-            let mut delay_compensated = false;
-
-            let mut out_l = Vec::new();
-            let mut in_pos = 0;
-            let mut b_idx = 0;
-
-            let mut last_applied_pitch = 0;
-
-            while in_pos < total_frames || !input_staging[0].is_empty() {
-                let current_sec = in_pos as f64 / sample_rate as f64;
-                let target_pitch = if current_sec < 2.5 {
-                    0
-                } else if current_sec < 5.0 {
-                    1
-                } else if current_sec < 7.5 {
-                    6
-                } else {
-                    0
-                };
-
-                if target_pitch != last_applied_pitch {
-                    last_applied_pitch = target_pitch;
-                    resampler.set_pitch(target_pitch, true).unwrap();
-                }
-
-                if in_pos < total_frames {
-                    let b_size = block_sizes[b_idx % block_sizes.len()].min(total_frames - in_pos);
-                    b_idx += 1;
-                    input_staging[0].extend_from_slice(&stereo_input[0][in_pos..in_pos + b_size]);
-                    input_staging[1].extend_from_slice(&stereo_input[1][in_pos..in_pos + b_size]);
-                    in_pos += b_size;
-                }
-
-                let allow_partial = in_pos >= total_frames;
-                drain_staging_through_resampler(
-                    &mut resampler,
-                    false,
-                    &mut input_staging,
-                    &mut output_staging,
-                    &mut delay_compensated,
-                    allow_partial,
-                );
-
-                for chunk in output_staging.chunks_exact(2) {
-                    out_l.push(chunk[0]);
-                }
-                output_staging.clear();
-            }
-
-            let max_freq_6st = base_freq * 2.0f32.powf(6.0 / 12.0);
-            let max_step_theory = 2.0 * amplitude * (std::f32::consts::PI * max_freq_6st / sample_rate as f32).sin();
-            let threshold = max_step_theory * 1.35;
-
-            for i in 100..out_l.len().saturating_sub(100) {
-                let diff = (out_l[i + 1] - out_l[i]).abs();
-                assert!(
-                    diff <= threshold,
-                    "Discontinuity during dynamic pitch shift at sample {i}: diff={diff} > {threshold}"
-                );
-            }
-        }
     }
+
 
     #[test]
     fn test_feeder_output_staging_limit() {
@@ -1526,11 +1402,11 @@
         // Tramo de 320 fotogramas de señal (menos que un bloque de 1024). Antes de la corrección, rubato
         // devolvía un bloque entero de salida (958 fotogramas) y el empalme insertaba ~640 de relleno.
         for (n, ya_compensado) in [(320usize, false), (320, true), (1000, true), (5, true)] {
-            let mut r = TrackResampler::new(48000, 48000, 0, 1024, 2).unwrap();
+            let mut r = TrackResampler::new(48000, 48000, 1024, 2).unwrap();
             let mut compensado = ya_compensado;
             let mut input: Vec<Vec<f32>> = vec![vec![0.5; n]; 2];
             let mut out = Vec::new();
-            drain_staging_through_resampler(&mut r, false, &mut input, &mut out, &mut compensado, true);
+            drain_staging_through_resampler(&mut r, None, false, &mut input, &mut out, &mut compensado, true);
             let fotogramas = out.len() / 2;
             let esperado = n + if ya_compensado { r.output_delay() } else { 0 };
             assert_eq!(fotogramas, esperado, "n={n}, compensado={ya_compensado}");
@@ -1539,13 +1415,11 @@
 
     #[test]
     fn test_a15_tras_un_empalme_el_remuestreador_empieza_un_tramo_nuevo() {
-        let mut r = TrackResampler::new(48000, 48000, 0, 1024, 2).unwrap();
+        let mut r = TrackResampler::new(48000, 48000, 1024, 2).unwrap();
         let mut compensado = true;
-        begin_new_segment(&mut r, &mut compensado, 0);
+        begin_new_segment(&mut r, &mut compensado);
         assert!(!compensado, "el retardo del filtro debe volver a compensarse");
-        assert_eq!(r.resample_ratio(), 1.0);
-        begin_new_segment(&mut r, &mut compensado, 12);
-        assert!((r.resample_ratio() - 0.5).abs() < 1e-9, "una octava arriba reduce a la mitad los fotogramas de salida");
+        assert_eq!(r.resample_ratio(), 1.0, "el remuestreador ya no cambia de relación (el tono lo hace otro módulo)");
     }
 
     #[test]
@@ -1610,6 +1484,43 @@
         }
         assert!(con_audio > 50, "casi no sonó audio ({con_audio} bloques)");
         assert!(desajustes <= 1, "el reloj no coincide con el audio en reproducción normal ({desajustes} bloques)");
+    }
+
+    #[tokio::test]
+    async fn test_el_tono_no_cambia_la_velocidad_de_la_cancion() {
+        // Antes el tono se cambiaba remuestreando: con +6 tonos el reloj avanzaba un 41 % más deprisa. Ahora el
+        // tono se cambia sin tocar la duración: el reloj avanza lo mismo que el bloque (480 fotogramas).
+        for tono in [6, -6] {
+            let engine = motor_real("tono_reloj", &[("pista", 480_000)], vec![seccion("a", 0.0, 10.0)]).await;
+            engine.set_pitch(tono).await;
+            assert_eq!(engine.pitch_semitones.load(Ordering::SeqCst), tono);
+            reproducir(&engine).await;
+
+            // Espera a que salga de buffering (el cambio de tono añade ~120 ms de retardo inicial a cada pista).
+            let limite = Instant::now() + std::time::Duration::from_secs(5);
+            while Instant::now() < limite && engine.is_buffering.load(Ordering::SeqCst) {
+                bloque(&engine);
+            }
+            assert!(!engine.is_buffering.load(Ordering::SeqCst), "{tono} tonos: no salió de buffering");
+
+            let (mut bloques, mut con_audio) = (0u64, 0);
+            let inicio = engine.current_frame.load(Ordering::SeqCst);
+            let limite = Instant::now() + std::time::Duration::from_secs(8);
+            while Instant::now() < limite && bloques < 100 {
+                let before = engine.current_frame.load(Ordering::SeqCst);
+                let (pos, reloj) = bloque(&engine);
+                if reloj > before {
+                    assert_eq!(reloj - before, 480, "{tono} tonos: el reloj debe avanzar lo que dura el bloque");
+                    bloques += 1;
+                    if pos.is_some() || tono != 0 {
+                        con_audio += 1;
+                    }
+                }
+            }
+            assert!(bloques >= 100, "{tono} tonos: no avanzó el reloj ({bloques} bloques)");
+            assert_eq!(engine.current_frame.load(Ordering::SeqCst) - inicio, 480 * bloques);
+            assert!(con_audio > 50, "{tono} tonos: casi no sonó audio");
+        }
     }
 
     #[tokio::test]
