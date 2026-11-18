@@ -4,6 +4,7 @@ pub mod import;
 pub mod loudness;
 pub mod metronome;
 pub mod output;
+pub mod pitch;
 pub mod playback;
 pub mod resampler;
 pub mod routing;
