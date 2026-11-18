@@ -171,7 +171,7 @@ export const SetlistStrip: React.FC<SetlistStripProps> = ({
               {loudness && (
                 <div className="lt-tile-loud" data-tone={loudness.tone} title={loudness.title}>
                   <span>{loudness.text}</span>
-                  {loudness.delta && <em>{loudness.delta} LU</em>}
+                  {loudness.delta && <em>{loudness.delta}</em>}
                 </div>
               )}
 
