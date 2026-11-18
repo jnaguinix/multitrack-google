@@ -262,7 +262,6 @@ impl PlaybackEngine {
             let thread_alive = Arc::clone(&feeder_alive_track);
             let thread_stats = Arc::clone(&self.stats);
             let is_mono = meta.channels == 1;
-            let total_trk_frames = meta.frame_count;
             let crossfade_frames = ((FADE_MS / 1000.0) * device_sample_rate as f32).round().max(1.0) as usize;
 
             // Feeder thread for this track: pre-reads PCM from disk and maintains >= 350 ms in ring buffer
@@ -295,6 +294,7 @@ impl PlaybackEngine {
                     let mut input_staging: Vec<Vec<f32>> = vec![Vec::with_capacity(chunk_frames * 4); channels_count];
                     let mut output_staging: Vec<f32> = Vec::with_capacity(chunk_frames * 8);
                     let mut delay_compensated = false;
+                    let mut read_error_reported = false;
 
                     while !thread_stop.load(Ordering::Relaxed) {
                         // 1. Check seek requests
@@ -341,15 +341,10 @@ impl PlaybackEngine {
                             output_staging.drain(..n_to_push);
                         }
 
-                        // Fin de pista: ya se empujó todo lo que quedaba (o el destino de un seek cae más
-                        // allá del final). El callback no espera audio de esta pista para salir de
-                        // buffering.
-                        let at_end = current_frame >= total_trk_frames
-                            && input_staging[0].is_empty()
-                            && output_staging.is_empty();
-                        if thread_eof.load(Ordering::Relaxed) != at_end {
-                            thread_eof.store(at_end, Ordering::SeqCst);
-                        }
+                        // Pasado el final de su archivo la pista NO se da por terminada: sigue avanzando con
+                        // silencio (`read_into_staging`), al ritmo de la canción. Así un salto o un vamp que vuelve
+                        // a una zona donde tiene audio la encuentra en su sitio. `eof` solo lo marca el transporte
+                        // cuando este hilo ya no responde.
 
                         // 4. Check queued jump requests
                         let queued_jump_opt = {
@@ -368,7 +363,8 @@ impl PlaybackEngine {
                                 if current_frame < jump.transition_frame {
                                     let pre_frames = (jump.transition_frame - current_frame) as usize;
                                     if pre_frames > 0 {
-                                        read_into_staging(&mut file, is_mono, pre_frames, &mut input_staging);
+                                        let err = read_into_staging(&mut file, is_mono, pre_frames, &mut input_staging);
+                                        report_read_error(&mut read_error_reported, &thread_pcm_path, err);
                                     }
                                 }
 
@@ -378,10 +374,12 @@ impl PlaybackEngine {
                                 let mut in_l = vec![0.0f32; m];
                                 let mut in_r = vec![0.0f32; m];
 
-                                read_frames_to_slices(&mut file, is_mono, m, &mut out_l, &mut out_r);
+                                let err = read_frames_to_slices(&mut file, is_mono, m, &mut out_l, &mut out_r);
+                                report_read_error(&mut read_error_reported, &thread_pcm_path, err);
                                 let in_offset = jump.target_frame * bytes_per_frame as u64;
                                 let _ = file.seek(SeekFrom::Start(in_offset));
-                                read_frames_to_slices(&mut file, is_mono, m, &mut in_l, &mut in_r);
+                                let err = read_frames_to_slices(&mut file, is_mono, m, &mut in_l, &mut in_r);
+                                report_read_error(&mut read_error_reported, &thread_pcm_path, err);
 
                                 for i in 0..m {
                                     let alpha = i as f32 / m as f32;
@@ -417,7 +415,8 @@ impl PlaybackEngine {
                                     if current_frame < loop_end {
                                         let pre_frames = (loop_end - current_frame) as usize;
                                         if pre_frames > 0 {
-                                            read_into_staging(&mut file, is_mono, pre_frames, &mut input_staging);
+                                            let err = read_into_staging(&mut file, is_mono, pre_frames, &mut input_staging);
+                                            report_read_error(&mut read_error_reported, &thread_pcm_path, err);
                                         }
                                     }
 
@@ -427,10 +426,12 @@ impl PlaybackEngine {
                                     let mut in_l = vec![0.0f32; m];
                                     let mut in_r = vec![0.0f32; m];
 
-                                    read_frames_to_slices(&mut file, is_mono, m, &mut out_l, &mut out_r);
+                                    let err = read_frames_to_slices(&mut file, is_mono, m, &mut out_l, &mut out_r);
+                                    report_read_error(&mut read_error_reported, &thread_pcm_path, err);
                                     let in_offset = loop_start * bytes_per_frame as u64;
                                     let _ = file.seek(SeekFrom::Start(in_offset));
-                                    read_frames_to_slices(&mut file, is_mono, m, &mut in_l, &mut in_r);
+                                    let err = read_frames_to_slices(&mut file, is_mono, m, &mut in_l, &mut in_r);
+                                    report_read_error(&mut read_error_reported, &thread_pcm_path, err);
 
                                     for i in 0..m {
                                         let alpha = i as f32 / m as f32;
@@ -455,13 +456,12 @@ impl PlaybackEngine {
                         let min_target = (device_sample_rate as f32 * 0.35) as usize * 2;
                         let staging_limit = chunk_frames * 2;
 
-                        if total_buffered < min_target && current_frame < total_trk_frames && output_staging.len() < staging_limit {
+                        // Pasado el final del archivo, cada bloque es silencio: la pista sigue el reloj de la canción.
+                        if total_buffered < min_target && output_staging.len() < staging_limit {
                             let t_feeder_start = Instant::now();
-                            let frames_to_read = chunk_frames.min((total_trk_frames - current_frame) as usize);
-                            if frames_to_read > 0 {
-                                read_into_staging(&mut file, is_mono, frames_to_read, &mut input_staging);
-                                current_frame += frames_to_read as u64;
-                            }
+                            let err = read_into_staging(&mut file, is_mono, chunk_frames, &mut input_staging);
+                            report_read_error(&mut read_error_reported, &thread_pcm_path, err);
+                            current_frame += chunk_frames as u64;
                             drain_staging_through_resampler(
                                 &mut resampler,
                                 is_mono,
@@ -492,37 +492,6 @@ impl PlaybackEngine {
                                 }
                                 output_staging.drain(..n_to_push);
                             }
-                        } else if current_frame >= total_trk_frames && !input_staging[0].is_empty() && output_staging.len() < staging_limit {
-                            let t_feeder_start = Instant::now();
-                            drain_staging_through_resampler(
-                                &mut resampler,
-                                is_mono,
-                                &mut input_staging,
-                                &mut output_staging,
-                                &mut delay_compensated,
-                                true,
-                            );
-                            let dur_us = t_feeder_start.elapsed().as_micros() as u64;
-                            let mut cur_max = thread_stats.max_feeder_block_duration_us.load(Ordering::Relaxed);
-                            while dur_us > cur_max {
-                                match thread_stats.max_feeder_block_duration_us.compare_exchange_weak(
-                                    cur_max,
-                                    dur_us,
-                                    Ordering::Relaxed,
-                                    Ordering::Relaxed,
-                                ) {
-                                    Ok(_) => break,
-                                    Err(actual) => cur_max = actual,
-                                }
-                            }
-                            while !output_staging.is_empty() && producer.slots() > 0 {
-                                let n_to_push = output_staging.len().min(producer.slots());
-                                for &s in &output_staging[..n_to_push] {
-                                    let _ = producer.push(s);
-                                }
-                                output_staging.drain(..n_to_push);
-                            }
-                            std::thread::sleep(std::time::Duration::from_millis(10));
                         } else {
                             std::thread::sleep(std::time::Duration::from_millis(5));
                         }

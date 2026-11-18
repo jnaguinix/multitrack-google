@@ -1496,6 +1496,32 @@
     }
 
     #[test]
+    fn test_la_lectura_siempre_entrega_lo_pedido_y_pasado_el_final_es_silencio() {
+        // Archivo estéreo de 3 fotogramas: (1,2) (3,4) (5,6) en i16.
+        let bytes: Vec<u8> = [1i16, 2, 3, 4, 5, 6].iter().flat_map(|v| v.to_le_bytes()).collect();
+        let mut archivo = std::io::Cursor::new(bytes);
+        let mut staging: Vec<Vec<f32>> = vec![Vec::new(), Vec::new()];
+        let k = 1.0 / 32768.0;
+
+        // Se piden 5 y solo hay 3: llegan los 3 reales y 2 de silencio, nunca menos de lo pedido.
+        assert!(read_into_staging(&mut archivo, false, 5, &mut staging).is_none(), "llegar al final no es un error");
+        assert_eq!(staging[0], vec![1.0 * k, 3.0 * k, 5.0 * k, 0.0, 0.0]);
+        assert_eq!(staging[1], vec![2.0 * k, 4.0 * k, 6.0 * k, 0.0, 0.0]);
+
+        // Ya pasado el final: todo silencio, con la cantidad exacta.
+        assert!(read_into_staging(&mut archivo, false, 4, &mut staging).is_none());
+        assert_eq!(staging[0].len(), 9);
+        assert!(staging[0][5..].iter().chain(&staging[1][5..]).all(|&v| v == 0.0));
+
+        // Mono y el cruce de 8 ms: mismo criterio.
+        let mut mono = std::io::Cursor::new([7i16].iter().flat_map(|v| v.to_le_bytes()).collect::<Vec<u8>>());
+        let (mut l, mut r) = (vec![9.0f32; 3], vec![9.0f32; 3]);
+        assert!(read_frames_to_slices(&mut mono, true, 3, &mut l, &mut r).is_none());
+        assert_eq!(l, vec![7.0 * k, 0.0, 0.0]);
+        assert_eq!(r, l);
+    }
+
+    #[test]
     fn test_a15_el_vaciado_parcial_no_añade_relleno_de_silencio() {
         // Tramo de 320 fotogramas de señal (menos que un bloque de 1024). Antes de la corrección, rubato
         // devolvía un bloque entero de salida (958 fotogramas) y el empalme insertaba ~640 de relleno.
@@ -1616,6 +1642,94 @@
         let estado = engine.get_playback_state();
         assert_eq!(estado.queued_section_id, None, "el salto ya se aplicó: no debe seguir en cola");
         assert_eq!(estado.active_section_id.as_deref(), Some("a"));
+    }
+
+    /// Cuenta, en los bloques cuyo reloj cae en `[desde, hasta)`, cuántos suenan con las dos rampas sumadas en su sitio
+    /// (pista larga + pista corta) y cuántos no. Si la pista corta está muda, la salida es una sola rampa y la
+    /// posición leída con `pistas = 2` sale a la mitad del reloj.
+    fn contar_dos_pistas_en_sitio(
+        engine: &PlaybackEngine,
+        desde: u64,
+        hasta: u64,
+        mut seguir: impl FnMut(u64) -> bool,
+        segundos: u64,
+    ) -> (u32, u32) {
+        let (mut en_sitio, mut fuera) = (0u32, 0u32);
+        let limite = Instant::now() + std::time::Duration::from_secs(segundos);
+        while Instant::now() < limite && engine.is_playing.load(Ordering::SeqCst) {
+            let (pos, reloj) = bloque_n(engine, 2.0);
+            if !engine.is_buffering.load(Ordering::SeqCst) && (desde..hasta).contains(&reloj) {
+                if desajustado(pos, reloj) || pos.is_none() {
+                    fuera += 1;
+                } else {
+                    en_sitio += 1;
+                }
+            }
+            if !seguir(reloj) {
+                break;
+            }
+        }
+        (en_sitio, fuera)
+    }
+
+    #[tokio::test]
+    async fn test_una_pista_corta_vuelve_a_sonar_tras_un_salto_hacia_atras() {
+        // Pista larga de 6 s y pista corta de 1 s. Se reproduce desde los 3 s (la corta ya terminó) y se salta a la
+        // sección A (0 s): al volver, la corta tiene audio y debe sonar en su sitio, no quedarse muda.
+        let secciones = vec![seccion("a", 0.0, 2.0), seccion("b", 2.0, 4.0), seccion("c", 4.0, 6.0)];
+        let engine = motor_real("corta_salto", &[("larga", 288_000), ("corta", 48_000)], secciones).await;
+        engine.seek(3.0).await;
+        reproducir(&engine).await;
+        let salto = engine.queue_section_jump("a", Some("1-bar")).await.unwrap();
+        assert_eq!((salto.transition_frame, salto.target_frame), (192_000, 0));
+
+        let mut volvio = false;
+        let (en_sitio, fuera) = contar_dos_pistas_en_sitio(
+            &engine,
+            4_800,
+            40_000,
+            |reloj| {
+                if reloj < 100_000 {
+                    volvio = true;
+                }
+                !(volvio && reloj >= 40_000)
+            },
+            10,
+        );
+        assert!(volvio, "el salto hacia atrás no se aplicó");
+        assert!(en_sitio >= 20, "casi no se midió audio tras el salto ({en_sitio} bloques en sitio, {fuera} fuera)");
+        assert!(fuera <= 3, "la pista corta no volvió a sonar tras el salto: {fuera} bloques fuera de sitio, {en_sitio} en sitio");
+    }
+
+    #[tokio::test]
+    async fn test_una_pista_corta_vuelve_a_sonar_en_cada_vuelta_de_un_vamp_que_acaba_despues_que_ella() {
+        // Pista larga de 6 s y corta de 3 s. Vamp en B (2–4 s): el bucle termina después de la corta. En cada vuelta
+        // la canción regresa a los 2 s, donde la corta sí tiene audio, y debe sonar ahí.
+        let secciones = vec![seccion("a", 0.0, 2.0), seccion("b", 2.0, 4.0), seccion("c", 4.0, 6.0)];
+        let engine = motor_real("corta_vamp", &[("larga", 288_000), ("corta", 144_000)], secciones).await;
+        engine.seek(2.5).await;
+        reproducir(&engine).await;
+        assert!(engine.toggle_vamp(Some(true)).await);
+
+        // Primero se deja pasar una vuelta completa (el reloj supera los 3 s y vuelve a los 2 s).
+        let (mut paso_el_final, mut vueltas, mut previo) = (false, 0u32, 0u64);
+        let limite = Instant::now() + std::time::Duration::from_secs(10);
+        while Instant::now() < limite && vueltas == 0 {
+            let (_, reloj) = bloque_n(&engine, 2.0);
+            if reloj > 150_000 {
+                paso_el_final = true;
+            }
+            if paso_el_final && reloj + 24_000 < previo {
+                vueltas += 1;
+            }
+            previo = reloj;
+        }
+        assert!(vueltas > 0, "el vamp no dio la vuelta");
+
+        // Tras la vuelta, entre 2,1 s y 2,9 s las dos pistas deben sonar en su sitio.
+        let (en_sitio, fuera) = contar_dos_pistas_en_sitio(&engine, 100_800, 139_200, |reloj| reloj < 139_200, 10);
+        assert!(en_sitio >= 20, "casi no se midió audio tras la vuelta ({en_sitio} bloques en sitio, {fuera} fuera)");
+        assert!(fuera <= 3, "la pista corta no volvió a sonar en la vuelta del vamp: {fuera} bloques fuera de sitio, {en_sitio} en sitio");
     }
 
     #[tokio::test]
