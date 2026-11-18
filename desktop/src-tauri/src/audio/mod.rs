@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 pub mod cache;
 pub mod import;
+pub mod loudness;
 pub mod metronome;
 pub mod output;
 pub mod playback;
@@ -98,6 +99,34 @@ pub async fn audio_test_tone(
     Ok(result)
 }
 
+/// Encola el análisis de sonoridad de una canción, o de todas las del setlist si no se indica ninguna. Lo que ya está
+/// medido y al día se omite en la propia cola. Devuelve cuántas canciones se encolaron.
+#[tauri::command]
+pub async fn audio_analyze_loudness(
+    app: tauri::AppHandle,
+    state: State<'_, AudioEngineState>,
+    project_id: Option<String>,
+) -> Result<usize, String> {
+    let local_data = app
+        .path()
+        .app_local_data_dir()
+        .map_err(|e| format!("Error resolviendo app_local_data_dir: {e}"))?;
+    let preferred_rate = state.current_settings.lock().await.sample_rate.unwrap_or(48000);
+    let ids = match project_id {
+        Some(id) => vec![id],
+        None => crate::library::setlist_song_ids(&local_data)?,
+    };
+    let mut queued = 0;
+    for id in ids {
+        // Sin caché todavía no hay nada que medir: se encolará al terminar de generarla.
+        let Some(rate) = loudness::resolve_cache_rate(&local_data, &id, preferred_rate) else { continue };
+        if state.loudness.enqueue(&app, &id, rate) {
+            queued += 1;
+        }
+    }
+    Ok(queued)
+}
+
 #[tauri::command]
 pub async fn audio_cancel_import(
     state: State<'_, AudioEngineState>,
@@ -126,6 +155,9 @@ pub async fn audio_import_tracks(
         let settings = state.current_settings.lock().await;
         settings.sample_rate.unwrap_or(48000)
     };
+
+    // La caché de esta canción va a cambiar: lo que se estuviera midiendo ya no vale.
+    state.loudness.cancel(&project_id);
 
     // 1. Check free disk space before starting (with 1.2x safety margin)
     let mut total_estimated_needed: u64 = 0;
@@ -231,6 +263,10 @@ pub async fn audio_import_tracks(
     );
 
     let is_cancelled = cancel_flag.load(std::sync::atomic::Ordering::Relaxed);
+    if !is_cancelled && errors.is_empty() && !tracks.is_empty() {
+        // Caché completa: se mide su sonoridad en segundo plano (no compite con la reproducción).
+        state.loudness.enqueue(&app, &project_id, sample_rate);
+    }
     if !is_cancelled {
         if let Err(e) = app.emit(
             "audio://import-progress",
@@ -1031,6 +1067,7 @@ pub async fn audio_delete_project_cache(
         .app_local_data_dir()
         .map_err(|e| format!("Error resolviendo app_local_data_dir: {e}"))?;
 
+    state.loudness.cancel(&project_id);
     let pcm_base = local_data.join("pcm");
     let proj_dir = pcm_base.join(&project_id);
     if proj_dir.exists() {

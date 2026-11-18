@@ -53,6 +53,7 @@
     "allow-audio-get-cache-stats",
     "allow-audio-clean-orphan-caches",
     "allow-audio-check-files-exist",
+    "allow-audio-analyze-loudness",
     "allow-library-load",
     "allow-library-get-song-peaks",
     "allow-library-save",

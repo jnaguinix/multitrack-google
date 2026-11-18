@@ -7,6 +7,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, MutexGuard, OnceLock};
 use tauri::{AppHandle, Manager, State};
 
+use crate::audio::loudness::SongLoudness;
 use crate::audio::output::AudioEngineState;
 
 pub const SIDECAR_CANONICAL_FILENAME: &str = "omnitracks.project.json";
@@ -183,6 +184,10 @@ pub struct LibrarySong {
     pub sections: Vec<LibrarySongSection>,
     #[serde(default)]
     pub tracks: Vec<LibraryTrack>,
+    /// Sonoridad de la mezcla de referencia (EBU R128), medida por el motor en segundo plano (`audio/loudness.rs`).
+    /// Es un dato derivado de la caché: el sidecar no lo lleva y un guardado de la interfaz que no lo trae no lo borra.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub loudness: Option<SongLoudness>,
     pub updated_at: u64,
 }
 
@@ -248,6 +253,7 @@ pub fn sidecar_json(song: &LibrarySong) -> Result<String, String> {
     for track in &mut slim.tracks {
         track.peaks = None;
     }
+    slim.loudness = None;
     serde_json::to_string_pretty(&slim).map_err(|e| format!("Error serializando sidecar: {e}"))
 }
 
@@ -602,6 +608,43 @@ pub fn save_library_internal(local_data: &Path, library: &LibraryFile) -> Result
     Ok(())
 }
 
+/// La sonoridad la mide el motor, no la interfaz: si esta guarda la canción sin ella (aún no se había enterado de la
+/// medida), se conserva la que ya estaba guardada.
+fn preserve_loudness(incoming: &mut LibrarySong, stored: Option<&LibrarySong>) {
+    if incoming.loudness.is_none() {
+        incoming.loudness = stored.and_then(|s| s.loudness.clone());
+    }
+}
+
+/// Una canción de la biblioteca (sin picos), o `None` si no existe.
+pub fn read_song(local_data: &Path, song_id: &str) -> Result<Option<LibrarySong>, String> {
+    let _guard = lock_library();
+    Ok(load_library_internal(local_data)?.songs.into_iter().find(|s| s.id == song_id))
+}
+
+/// IDs de las canciones del setlist (marcador de la canción o, sin él, lista del setlist activo).
+pub fn setlist_song_ids(local_data: &Path) -> Result<Vec<String>, String> {
+    let _guard = lock_library();
+    let lib = load_library_internal(local_data)?;
+    Ok(lib
+        .songs
+        .iter()
+        .filter(|s| s.in_setlist.unwrap_or_else(|| lib.active_setlist.contains(&s.id)))
+        .map(|s| s.id.clone())
+        .collect())
+}
+
+/// Guarda (o borra) la sonoridad de una canción sin tocar nada más de ella (ni su fecha de modificación: «Recientes»
+/// no debe cambiar porque el motor haya medido). `false` si la canción ya no está.
+pub fn set_song_loudness(local_data: &Path, song_id: &str, loudness: Option<SongLoudness>) -> Result<bool, String> {
+    let _guard = lock_library();
+    let mut lib = load_library_internal(local_data)?;
+    let Some(song) = lib.songs.iter_mut().find(|s| s.id == song_id) else { return Ok(false) };
+    song.loudness = loudness;
+    save_library_internal(local_data, &lib)?;
+    Ok(true)
+}
+
 // ==========================================
 // TAURI COMMANDS
 // ==========================================
@@ -634,6 +677,12 @@ pub async fn library_save(app: AppHandle, library: LibraryFile) -> Result<(), St
         .app_local_data_dir()
         .map_err(|e| format!("Error resolviendo app_local_data_dir: {e}"))?;
     let _guard = lock_library();
+    let mut library = library;
+    if let Ok(existing) = load_library_internal(&local_data) {
+        for song in &mut library.songs {
+            preserve_loudness(song, existing.songs.iter().find(|s| s.id == song.id));
+        }
+    }
     save_library_internal(&local_data, &library)
 }
 
@@ -648,10 +697,13 @@ pub async fn library_save_song(app: AppHandle, song: LibrarySong) -> Result<(), 
         // Leer, modificar y escribir como una sola operación: dos guardados a la vez no se pisan.
         let _guard = lock_library();
         let mut lib = load_library_internal(&local_data)?;
+        // La sonoridad la mide el motor: si la interfaz guarda la canción sin ella (aún no se había enterado), se conserva.
+        let mut stored = song.clone();
         if let Some(idx) = lib.songs.iter().position(|s| s.id == song.id) {
-            lib.songs[idx] = song.clone();
+            preserve_loudness(&mut stored, Some(&lib.songs[idx]));
+            lib.songs[idx] = stored;
         } else {
-            lib.songs.push(song.clone());
+            lib.songs.push(stored);
         }
 
         if let Some(in_set) = song.in_setlist {
@@ -1125,6 +1177,68 @@ mod tests {
         assert_eq!(final_lib.songs.len(), 8 * 25, "ningún guardado simultáneo debe perder su canción");
         let on_disk = fs::read_to_string(dir.join(LIBRARY_FILENAME)).unwrap();
         assert!(serde_json::from_str::<LibraryFile>(&on_disk).is_ok());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    // ---- Sonoridad medida por el motor
+
+    fn sonoridad(lufs: f64) -> SongLoudness {
+        SongLoudness {
+            integrated_lufs: Some(lufs),
+            loudness_range_lu: Some(5.0),
+            true_peak_dbtp: Some(-1.0),
+            sample_peak_dbfs: Some(-1.2),
+            duration_sec: 200.0,
+            tracks_measured: 8,
+            signature: "v1:48000:abc".to_string(),
+            reference_version: 1,
+            analyzed_at: 1,
+        }
+    }
+
+    #[test]
+    fn un_guardado_sin_sonoridad_conserva_la_que_ya_estaba_y_uno_con_sonoridad_la_sustituye() {
+        let mut guardada = LibrarySong { id: "s".to_string(), ..Default::default() };
+        guardada.loudness = Some(sonoridad(-14.0));
+
+        let mut sin = LibrarySong { id: "s".to_string(), title: "Nuevo título".to_string(), ..Default::default() };
+        preserve_loudness(&mut sin, Some(&guardada));
+        assert_eq!(sin.loudness, Some(sonoridad(-14.0)), "la interfaz no sabía de la medida: no se pierde");
+        assert_eq!(sin.title, "Nuevo título", "lo demás es lo que mandó la interfaz");
+
+        let mut con = LibrarySong { id: "s".to_string(), loudness: Some(sonoridad(-9.0)), ..Default::default() };
+        preserve_loudness(&mut con, Some(&guardada));
+        assert_eq!(con.loudness, Some(sonoridad(-9.0)), "si trae medida, manda la suya");
+
+        let mut nueva = LibrarySong::default();
+        preserve_loudness(&mut nueva, None);
+        assert!(nueva.loudness.is_none(), "una canción nueva sin medida sigue sin ella");
+    }
+
+    #[test]
+    fn la_sonoridad_se_guarda_en_la_biblioteca_sin_tocar_el_resto_y_el_sidecar_no_la_lleva() {
+        let dir = carpeta_de_prueba("sonoridad");
+        let song = LibrarySong { id: "s".to_string(), title: "Canción".to_string(), updated_at: 777, in_setlist: Some(true), ..Default::default() };
+        let otra = LibrarySong { id: "o".to_string(), title: "Otra".to_string(), updated_at: 5, ..Default::default() };
+        save_library_internal(&dir, &LibraryFile { songs: vec![song.clone(), otra], ..Default::default() }).unwrap();
+
+        assert!(set_song_loudness(&dir, "s", Some(sonoridad(-12.5))).unwrap());
+        assert!(!set_song_loudness(&dir, "no-existe", Some(sonoridad(-1.0))).unwrap(), "una canción que ya no está se avisa, no se inventa");
+
+        let leida = read_song(&dir, "s").unwrap().unwrap();
+        assert_eq!(leida.loudness, Some(sonoridad(-12.5)));
+        assert_eq!(leida.updated_at, 777, "medir no cambia la fecha de modificación («Recientes»)");
+        assert_eq!(leida.title, "Canción");
+        assert!(read_song(&dir, "o").unwrap().unwrap().loudness.is_none());
+        assert_eq!(setlist_song_ids(&dir).unwrap(), vec!["s".to_string()]);
+
+        // La interfaz recibe los nombres en camelCase y el sidecar de la carpeta no lleva el dato derivado.
+        let json = serde_json::to_string(&leida).unwrap();
+        assert!(json.contains("\"integratedLufs\":-12.5") && json.contains("\"truePeakDbtp\""), "{json}");
+        assert!(!sidecar_json(&leida).unwrap().contains("loudness"), "el sidecar solo lleva configuración");
+
+        set_song_loudness(&dir, "s", None).unwrap();
+        assert!(read_song(&dir, "s").unwrap().unwrap().loudness.is_none());
         let _ = fs::remove_dir_all(&dir);
     }
 
