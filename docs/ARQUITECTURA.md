@@ -94,6 +94,7 @@ src/hooks/
 ├── useNativeCacheBanner.ts  # Avisos: dispositivo desconectado y canción sin caché («Generar caché nativa»)
 ├── useTrackInstruments.ts   # «Editar pistas» y «Cambiar instrumento» (renumera las demás)
 ├── useSongEditing.ts        # Notas, transición por canción, plantilla de sección y marcador en el cursor
+├── useAlwaysMountedSong.ts  # Monta una canción cuando el DAW queda vacío (abrir app, primera importación, borrar la actual)
 ├── useRelinkProject.ts      # «Reubicar carpeta» de una canción
 ├── useLibraryDeletion.ts    # Eliminar de la biblioteca (tras confirmar)
 ├── useToast.ts              # Aviso breve en pantalla
