@@ -43,3 +43,7 @@ percent-encoding = "2.3"
 [dev-dependencies]
 futures-util = "0.3"
 tokio-tungstenite = "0.29"
+
+# El cambio de tono (C++) sin optimizar es lentisimo y deja sin procesador a las pruebas con tiempos.
+[profile.dev.package.ssstretch]
+opt-level = 3
