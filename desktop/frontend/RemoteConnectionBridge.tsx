@@ -64,6 +64,7 @@ export default memo(function RemoteConnectionBridge({ project, setlist, activati
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState('');
   const [updatesEnabled, setUpdatesEnabled] = useState(false);
+  const [bigQr, setBigQr] = useState<Role | null>(null);
 
   useLayoutEffect(() => {
     source.current = { project, setlist };
@@ -308,7 +309,12 @@ export default memo(function RemoteConnectionBridge({ project, setlist, activati
                 <section key={pairing.role}>
                   <h3>{roleName[pairing.role]}</h3>
                   <p className="lt-remote-hint">{roleHint[pairing.role]}</p>
-                  <img src={pairing.qr} width="192" height="192" alt={'QR de acceso para ' + roleName[pairing.role].toLowerCase()} />
+                  <img src={pairing.qr} className="lt-remote-qr" data-big={bigQr === pairing.role}
+                    alt={'QR de acceso para ' + roleName[pairing.role].toLowerCase()} />
+                  <button type="button" className="lt-control" aria-pressed={bigQr === pairing.role}
+                    onClick={() => setBigQr((current) => current === pairing.role ? null : pairing.role)}>
+                    {bigQr === pairing.role ? 'Reducir QR' : 'Ampliar QR'}
+                  </button>
                   <input aria-label={'URL de ' + roleName[pairing.role].toLowerCase()} readOnly value={pairing.url}
                     onFocus={(event) => event.currentTarget.select()} />
                   <button type="button" className="lt-control" onClick={() => {

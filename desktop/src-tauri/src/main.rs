@@ -63,7 +63,8 @@ fn connection_info(server: &Server) -> Result<ConnectionInfo, String> {
             let image = QrCode::new(url.as_bytes())
                 .map_err(|error| format!("No se pudo generar el QR: {error}"))?
                 .render::<svg::Color>()
-                .min_dimensions(192, 192)
+                // Módulos enteros de 8 px: bordes nítidos y fáciles de enfocar desde el teléfono.
+                .module_dimensions(8, 8)
                 .build();
             Ok(Pairing {
                 role,
