@@ -56,6 +56,18 @@ function section(section: SongSection | undefined) {
   return section ? { name: section.name, startSec: section.startTimeSec } : null;
 }
 
+/** Mapa de secciones para los teléfonos: nombre, tramo y color, ordenadas por inicio. */
+function sectionMap(project: SongProject | null | undefined) {
+  return [...(project?.sections ?? [])]
+    .sort((a, b) => a.startTimeSec - b.startTimeSec)
+    .map((entry) => ({
+      name: entry.name,
+      startSec: entry.startTimeSec,
+      endSec: entry.endTimeSec,
+      color: entry.color || '',
+    }));
+}
+
 export function snapshot(
   source: Source,
   transport: TransportState,
@@ -93,6 +105,7 @@ export function snapshot(
     currentSection: section(active),
     nextSection: section(upcoming),
     queuedJump: queued && { section: queued, targetBar: transport.queuedTargetBar },
+    sections: sectionMap(project),
     vamping: transport.isVamping,
     clock: canReuse ? previousClock : { positionSec, durationSec, sampledAtMs: nowMs, rate, playing },
     tracks: project?.tracks.map(({ id, name, color, gain, muted, pan, soloed }) => ({

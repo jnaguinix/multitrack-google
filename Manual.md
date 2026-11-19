@@ -236,7 +236,7 @@ Objetivo: el callback no reserva memoria, no hace E/S ni *logging* y no se bloqu
 ## 7. Servidor LAN y protocolo remoto (`lan.rs`, `protocol.rs`, `desktop/web/`)
 
 ### 7.1. Arranque
-Lo inicia el usuario desde **Conexión remota** (`RemoteConnectionBridge`). `remote_start(address)` exige una IPv4 **privada** de este equipo y escucha en `address:8765`. `remote_stop(epoch)` lo apaga. Cada arranque genera un `epoch`, un token por rol y los QR; apagar/encender los regenera y termina todas las sesiones.
+Lo inicia el usuario desde **Conexión remota** (`RemoteConnectionBridge`). `remote_start(address)` exige una IPv4 **privada** de este equipo y escucha en `address:8765`. `remote_stop(epoch)` lo apaga. Cada arranque genera un `epoch`, un token por rol y los enlaces; apagar/encender los regenera y termina todas las sesiones.
 
 ### 7.2. Rutas HTTP/WS
 | Ruta | Función |
@@ -250,7 +250,7 @@ Lo inicia el usuario desde **Conexión remota** (`RemoteConnectionBridge`). `rem
 Roles: `monitor` (solo lectura: canción, sección, cuenta atrás, reloj, setlist) y `mezclador` (además recibe pistas, `revision`, niveles y puede enviar comandos).
 
 ### 7.3. Emparejamiento y seguridad
-1. El QR codifica `http://<IP>:8765/<rol>#<token>`; el token va en el **fragmento** (no viaja en la petición HTTP).
+1. El enlace de emparejamiento es `http://<IP>:8765/<rol>#<token>`; el token va en el **fragmento** (no viaja en la petición HTTP).
 2. La página hace `POST /session/{rol}` con el token; el servidor lo compara en tiempo constante (`subtle`) y comprueba el `Origin`.
 3. Responde con cookie `lt_monitor` / `lt_mixer` (`HttpOnly; SameSite=Strict; Path=/`, valor de 43 caracteres aleatorios).
 4. El WebSocket valida cookie y `Origin`; mensajes y *frames* limitados a **1024 bytes**, cuerpo HTTP limitado a 1 KB.

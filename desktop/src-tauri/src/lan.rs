@@ -38,6 +38,14 @@ pub fn random_token() -> io::Result<String> {
     Ok(URL_SAFE_NO_PAD.encode(bytes))
 }
 
+/// Código de emparejamiento del enlace: 18 bytes (144 bits, 24 caracteres). Más corto que `random_token` para que el
+/// enlace sea fácil de copiar y de escribir; sigue siendo imposible de adivinar.
+pub fn pairing_token() -> io::Result<String> {
+    let mut bytes = [0u8; 18];
+    getrandom::fill(&mut bytes).map_err(|error| io::Error::other(error.to_string()))?;
+    Ok(URL_SAFE_NO_PAD.encode(bytes))
+}
+
 struct Session {
     id: u32,
     role: Role,
@@ -98,8 +106,8 @@ impl Hub {
             host: addr.to_string(),
             origin: format!("http://{addr}"),
             epoch: random_token()?,
-            monitor_token: random_token()?,
-            mixer_token: random_token()?,
+            monitor_token: pairing_token()?,
+            mixer_token: pairing_token()?,
             cancel: CancellationToken::new(),
             inner: Mutex::new(Inner::default()),
             latest: watch::channel(Arc::new(Snapshot::default())).0,

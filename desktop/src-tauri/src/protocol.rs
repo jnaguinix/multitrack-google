@@ -51,6 +51,16 @@ pub struct Section {
     pub start_sec: f64,
 }
 
+/// Sección del mapa de la canción (nombre, tramo y color), para dibujar el mapa en los teléfonos.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct MapSection {
+    pub name: String,
+    pub start_sec: f64,
+    pub end_sec: f64,
+    pub color: String,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct Jump {
@@ -91,6 +101,8 @@ pub struct Snapshot {
     pub current_section: Option<Section>,
     pub next_section: Option<Section>,
     pub queued_jump: Option<Jump>,
+    #[serde(default)]
+    pub sections: Vec<MapSection>,
     pub vamping: bool,
     pub clock: Clock,
     pub tracks: Vec<Track>,
@@ -107,6 +119,7 @@ impl Snapshot {
             "currentSection": self.current_section,
             "nextSection": self.next_section,
             "queuedJump": self.queued_jump,
+            "sections": self.sections,
             "vamping": self.vamping,
             "clock": self.clock,
         })

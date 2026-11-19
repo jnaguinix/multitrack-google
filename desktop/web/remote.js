@@ -31,8 +31,15 @@
     byId('live-beat').hidden = false;
     byId('performance').append(details);
     details.append(summary, cues);
+    byId('mix').classList.add('is-mixer');
   }
   if (token) history.replaceState(null, '', location.pathname);
+
+  // En el teléfono el setlist empieza plegado para que lo esencial quepa sin hacer scroll.
+  const wide = matchMedia('(min-width: 60rem)');
+  const syncQueue = () => { byId('queue').open = wide.matches; };
+  syncQueue();
+  wide.addEventListener('change', syncQueue);
 
   function mmss(seconds) {
     const safe = Math.max(0, Math.floor(seconds));
@@ -45,12 +52,60 @@
     return Math.min(clock.durationSec, Math.max(0, clock.positionSec + elapsed * clock.rate));
   }
 
+  const COLOR = /^#(?:[\da-f]{3}|[\da-f]{6})$/i;
+  const map = byId('map');
+  let mapItems = [];
+  let mapIndex = -2;
+
+  function buildMap() {
+    const sections = state.sections ?? [];
+    byId('map-wrap').hidden = sections.length === 0;
+    mapIndex = -2;
+    byId('map-label').textContent = '';
+    mapItems = sections.map((section) => {
+      const item = document.createElement('li');
+      const name = document.createElement('span');
+      const fill = document.createElement('i');
+      name.textContent = section.name;
+      item.append(name, fill);
+      item.style.flexGrow = String(Math.max(0.5, section.endSec - section.startSec));
+      item.style.setProperty('--c', COLOR.test(section.color) ? section.color : '#8dd6cd');
+      item.title = section.name;
+      return { item, fill, section };
+    });
+    map.replaceChildren(...mapItems.map(({ item }) => item));
+  }
+
+  /** Marca la sección que suena según la posición interpolada y rellena su avance. */
+  function renderMap(current) {
+    if (!mapItems.length) return;
+    let index = mapItems.findIndex(({ section }) => current >= section.startSec && current < section.endSec);
+    if (index < 0) index = current >= (mapItems.at(-1).section.endSec) ? mapItems.length - 1 : -1;
+    if (index !== mapIndex) {
+      mapIndex = index;
+      byId('map-label').textContent = index >= 0 ? 'Sección ' + (index + 1) + ' de ' + mapItems.length : '';
+      mapItems.forEach(({ item }, i) => {
+        item.toggleAttribute('aria-current', i === index);
+        item.dataset.past = String(i < index);
+      });
+    }
+    if (index >= 0) {
+      const { section, fill } = mapItems[index];
+      const span = Math.max(0.001, section.endSec - section.startSec);
+      fill.style.width = (Math.min(1, Math.max(0, (current - section.startSec) / span)) * 100).toFixed(1) + '%';
+      const left = byId('section-left');
+      const text = 'Quedan ' + mmss(Math.ceil(Math.max(0, section.endSec - current))) + ' en esta sección';
+      if (left.textContent !== text) left.textContent = text;
+    }
+  }
+
   function renderClock() {
     const duration = clock?.durationSec || 0;
     const current = position();
     progress.max = duration || 1;
     progress.value = current;
     time.textContent = mmss(current) + ' / ' + mmss(duration);
+    renderMap(current);
     if (canMix) {
       const song = state.currentSong;
       const beat = song ? Math.floor(current * song.bpm / 60) : 0;
@@ -62,6 +117,13 @@
       remainingProgress.max = duration || 1;
       remainingProgress.value = left;
     }
+  }
+
+  function renderLink() {
+    const link = byId('link');
+    link.dataset.state = connected ? 'on' : 'off';
+    link.setAttribute('aria-label', connected ? 'Conectado' : 'Sin conexión');
+    byId('link-text').textContent = connected ? 'Conectado' : 'Sin conexión';
   }
 
   function renderPlayState() {
@@ -313,6 +375,10 @@
       }
       renderClock();
     }
+    if ('sections' in changes) {
+      buildMap();
+      renderMap(position());
+    }
     if ('currentSong' in changes || 'nextSong' in changes || 'setlist' in changes) {
       const song = state.currentSong;
       byId('song').textContent = song ? song.title : 'Sin canción cargada';
@@ -351,6 +417,7 @@
     if ('nextSection' in changes) byId('next-section').textContent = state.nextSection?.name || '—';
     if ('queuedJump' in changes) {
       const jump = state.queuedJump;
+      byId('jump').parentElement.hidden = !jump;
       byId('jump').textContent = jump ? jump.section.name + (canMix && jump.targetBar ? ' · Compás ' + jump.targetBar : '') : '—';
     }
     if ('tracks' in changes || 'acceptingCommands' in changes || 'revision' in changes) {
@@ -362,6 +429,7 @@
     byId('monitor').hidden = canMix;
     byId('mix').hidden = !canMix;
     byId('queue').hidden = false;
+    byId('map-wrap').hidden = !(state.sections ?? []).length;
     if ('clock' in changes || 'currentSong' in changes) renderPlayState();
   }
 
@@ -369,13 +437,14 @@
     try {
       const session = await fetch(sessionUrl, { cache: 'no-store' });
       if (session.status === 401 || session.status === 403) {
-        connection.textContent = 'Sesión terminada. Escanea el QR del portátil.';
+        connection.textContent = 'Sesión terminada. Abre de nuevo el enlace del portátil.';
         return;
       }
       if (!session.ok) throw new Error('session unavailable');
       socket = new WebSocket('ws://' + location.host + '/ws/' + role);
       socket.onopen = () => {
         connected = true;
+        renderLink();
         retryMs = 500;
         connection.textContent = '';
       };
@@ -383,11 +452,12 @@
       socket.onclose = (event) => {
         if (clock) clock = { ...clock, positionSec: position(), playing: false };
         connected = false;
+        renderLink();
         renderPlayState();
         renderTracks(false);
         renderMeters();
         if (event.code === 4403 || event.code === 1008) {
-          connection.textContent = 'Sesión cerrada por el portátil. Escanea el QR para entrar.';
+          connection.textContent = 'Sesión cerrada por el portátil. Abre el enlace otra vez para entrar.';
         } else {
           retry();
         }
@@ -413,7 +483,7 @@
           cache: 'no-store',
         });
         if (response.status === 503) {
-          connection.textContent = 'El portátil no admite más dispositivos en este momento. Libera un cupo y vuelve a abrir el QR.';
+          connection.textContent = 'El portátil no admite más dispositivos en este momento. Libera un cupo y vuelve a abrir el enlace.';
           return;
         }
         if (!response.ok) throw new Error('pairing failed');
@@ -421,7 +491,7 @@
       await connect();
       setInterval(renderClock, 200);
     } catch {
-      connection.textContent = 'No se pudo abrir la sesión. Escanea el QR vigente.';
+      connection.textContent = 'No se pudo abrir la sesión. Abre el enlace vigente del portátil.';
     }
   }
 

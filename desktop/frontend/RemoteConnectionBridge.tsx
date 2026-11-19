@@ -13,7 +13,7 @@ import './connection.css';
 type Invoke = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
 type Role = 'monitor' | 'mixer';
 type Device = { id: number; role: Role; address: string };
-type Pairing = { role: Role; url: string; qr: string };
+type Pairing = { role: Role; url: string };
 type Connection = { epoch: string; devices: Device[]; pairings: Pairing[] };
 type Status = { interfaces: { name: string; address: string }[]; connection: Connection | null; updatesEnabled: boolean };
 type Exchange = { commands: Dispatch[]; devices: Device[] };
@@ -29,6 +29,19 @@ const invoke = host.__TAURI__?.core.invoke ?? (import.meta.env.DEV ? previewInvo
 const EXCHANGE_MS = 100;
 const COMMIT_TIMEOUT_MS = 600;
 const roleName: Record<Role, string> = { monitor: 'Músicos', mixer: 'Sonidista' };
+const roleHint: Record<Role, string> = {
+  monitor: 'Solo ve: tiempo restante, secciones y setlist.',
+  mixer: 'Controla volumen, paneo, mute y solo de cada pista.',
+};
+
+/** IP del portátil dentro de una URL de emparejamiento (null si no se puede leer). */
+function urlHost(url: string): string | null {
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return null;
+  }
+}
 
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : String(error);
@@ -51,6 +64,7 @@ export default memo(function RemoteConnectionBridge({ project, setlist, activati
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState('');
   const [updatesEnabled, setUpdatesEnabled] = useState(false);
+  const [copied, setCopied] = useState<Role | null>(null);
 
   useLayoutEffect(() => {
     source.current = { project, setlist };
@@ -227,6 +241,11 @@ export default memo(function RemoteConnectionBridge({ project, setlist, activati
 
   if (!invoke) return null;
 
+  // La IP con la que se emitieron los enlaces ya no pertenece a ningún adaptador (cambió la red).
+  const serverHost = urlHost(connection?.pairings[0]?.url ?? '');
+  const staleAddress = serverHost && interfaces.length > 0
+    && !interfaces.some((entry) => entry.address === serverHost) ? serverHost : null;
+
   return (
     <>
       {triggerHost && createPortal(
@@ -240,7 +259,7 @@ export default memo(function RemoteConnectionBridge({ project, setlist, activati
           title={connection ? 'Conexión remota · Activa' : 'Conexión remota'}
           onClick={() => {
             dialog.current?.showModal();
-            if (!connection && !busy) void refresh();
+            if (!busy) void refresh();
           }}
         >
           <Wifi size={16} aria-hidden="true" />
@@ -275,33 +294,53 @@ export default memo(function RemoteConnectionBridge({ project, setlist, activati
         {notice && <p role="status">{notice}</p>}
         {connection && (
           <>
-            <p className="lt-remote-android-notice">
-              <strong>Permiso en Android.</strong> Al abrir el QR, permite al navegador acceder a
-              Dispositivos cercanos o a la red local si te lo solicita. Si ya lo rechazaste,
-              revisa los permisos del navegador en Ajustes de Android y vuelve a abrir el QR.
+            <p className="lt-remote-status" role="status">
+              <span className="lt-remote-dot" aria-hidden="true" />
+              Servidor activo en {urlHost(connection.pairings[0]?.url ?? '') ?? 'la red local'}
             </p>
+            {staleAddress && (
+              <p className="lt-remote-warning" role="alert">
+                La IP de este equipo cambió ({staleAddress} ya no existe). Apaga y enciende el servidor
+                para generar enlaces nuevos.
+              </p>
+            )}
             <div className="lt-remote-pairings">
               {connection.pairings.map((pairing) => (
                 <section key={pairing.role}>
                   <h3>{roleName[pairing.role]}</h3>
-                  <img src={pairing.qr} width="192" height="192" alt={'QR de acceso para ' + roleName[pairing.role].toLowerCase()} />
-                  <input aria-label={'URL de ' + roleName[pairing.role].toLowerCase()} readOnly value={pairing.url}
+                  <p className="lt-remote-hint">{roleHint[pairing.role]}</p>
+                  <input aria-label={'Enlace de ' + roleName[pairing.role].toLowerCase()} readOnly value={pairing.url}
                     onFocus={(event) => event.currentTarget.select()} />
-                  <button type="button" className="lt-control" onClick={() => {
+                  <button type="button" className="lt-control lt-btn-primary" onClick={() => {
                     void navigator.clipboard.writeText(pairing.url).then(
-                      () => setNotice('URL copiada.'),
-                      () => setNotice('Selecciona y copia la URL del campo.'),
+                      () => {
+                        setCopied(pairing.role);
+                        setNotice('');
+                      },
+                      () => setNotice('Selecciona el enlace del campo y cópialo a mano.'),
                     );
-                  }}>Copiar URL</button>
+                  }}>{copied === pairing.role ? 'Enlace copiado ✓' : 'Copiar enlace'}</button>
                 </section>
               ))}
             </div>
-            <h3>Dispositivos conectados</h3>
-            {devices.length === 0 ? <p>Aún no hay dispositivos conectados.</p> : (
+            <details className="lt-remote-help">
+              <summary>¿No abre el enlace?</summary>
+              <ul>
+                <li><strong>Misma red.</strong> El teléfono y este equipo deben estar en la misma Wi-Fi.</li>
+                <li><strong>Cortafuegos de Windows.</strong> La primera vez, permite OmniTracks en redes privadas.</li>
+                <li><strong>Android.</strong> Si el navegador pide acceso a Dispositivos cercanos o a la red local, acéptalo.
+                  Si ya lo rechazaste, actívalo en los permisos del navegador y vuelve a abrir el enlace.</li>
+              </ul>
+            </details>
+            <h3>Dispositivos conectados{devices.length > 0 ? ` (${devices.length})` : ''}</h3>
+            {devices.length === 0 ? <p>Aún no hay dispositivos conectados. Copia un enlace, envíalo al teléfono (WhatsApp, correo…) y ábrelo ahí.</p> : (
               <ul>
                 {devices.map((device) => (
                   <li key={device.id}>
-                    <span>Dispositivo {device.id} · {roleName[device.role]} · {device.address}</span>
+                    <span>
+                      <span className="lt-remote-dot" aria-hidden="true" />
+                      <strong>{roleName[device.role]}</strong> · {device.address}
+                    </span>
                     <button type="button" className="lt-control" disabled={busy} onClick={() => void kick(device.id)}>Expulsar</button>
                   </li>
                 ))}
