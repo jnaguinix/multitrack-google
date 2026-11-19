@@ -18,6 +18,7 @@ import { useNativeCacheBanner } from './hooks/useNativeCacheBanner';
 import { useSetlistCaching } from './hooks/useSetlistCaching';
 import { useLoudnessAnalysis } from './hooks/useLoudnessAnalysis';
 import { useProjectActivation } from './hooks/useProjectActivation';
+import { useAlwaysMountedSong } from './hooks/useAlwaysMountedSong';
 import { useProjectPersistence } from './hooks/useProjectPersistence';
 import { useTrackInstruments } from './hooks/useTrackInstruments';
 import { useSongEditing } from './hooks/useSongEditing';
@@ -178,6 +179,15 @@ export default function App() {
       isDesktopApp,
       showToast,
     });
+
+  // El DAW nunca se queda vacío: monta una canción al abrir, al importar la primera o al borrar la actual.
+  useAlwaysMountedSong({
+    projects,
+    currentProject,
+    setlistQueue,
+    busy: isActivatingProject || importStatusText !== null || importWizard !== null,
+    activateProject,
+  });
 
   const ramCacheVersion = useSetlistCaching({
     setlistQueue,

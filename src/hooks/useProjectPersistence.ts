@@ -29,7 +29,7 @@ export function useProjectPersistence({
   setCurrentProject,
   showToast,
 }: Deps) {
-  // Initial load from IndexedDB: ONLY loads the Repertoire list, NEVER auto-loads a song into the DAW
+  // Initial load from IndexedDB: carga la lista del repertorio; montar una canción en el DAW lo hace `useAlwaysMountedSong`
   useEffect(() => {
     let mounted = true;
     (async () => {
