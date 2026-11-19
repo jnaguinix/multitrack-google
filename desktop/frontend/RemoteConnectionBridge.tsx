@@ -29,6 +29,19 @@ const invoke = host.__TAURI__?.core.invoke ?? (import.meta.env.DEV ? previewInvo
 const EXCHANGE_MS = 100;
 const COMMIT_TIMEOUT_MS = 600;
 const roleName: Record<Role, string> = { monitor: 'Músicos', mixer: 'Sonidista' };
+const roleHint: Record<Role, string> = {
+  monitor: 'Solo ve: tiempo restante, secciones y setlist.',
+  mixer: 'Controla volumen, paneo, mute y solo de cada pista.',
+};
+
+/** IP del portátil dentro de una URL de emparejamiento (null si no se puede leer). */
+function urlHost(url: string): string | null {
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return null;
+  }
+}
 
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : String(error);
@@ -227,6 +240,11 @@ export default memo(function RemoteConnectionBridge({ project, setlist, activati
 
   if (!invoke) return null;
 
+  // La IP con la que se emitieron los QR ya no pertenece a ningún adaptador (cambió la red).
+  const serverHost = urlHost(connection?.pairings[0]?.url ?? '');
+  const staleAddress = serverHost && interfaces.length > 0
+    && !interfaces.some((entry) => entry.address === serverHost) ? serverHost : null;
+
   return (
     <>
       {triggerHost && createPortal(
@@ -240,7 +258,7 @@ export default memo(function RemoteConnectionBridge({ project, setlist, activati
           title={connection ? 'Conexión remota · Activa' : 'Conexión remota'}
           onClick={() => {
             dialog.current?.showModal();
-            if (!connection && !busy) void refresh();
+            if (!busy) void refresh();
           }}
         >
           <Wifi size={16} aria-hidden="true" />
@@ -275,15 +293,21 @@ export default memo(function RemoteConnectionBridge({ project, setlist, activati
         {notice && <p role="status">{notice}</p>}
         {connection && (
           <>
-            <p className="lt-remote-android-notice">
-              <strong>Permiso en Android.</strong> Al abrir el QR, permite al navegador acceder a
-              Dispositivos cercanos o a la red local si te lo solicita. Si ya lo rechazaste,
-              revisa los permisos del navegador en Ajustes de Android y vuelve a abrir el QR.
+            <p className="lt-remote-status" role="status">
+              <span className="lt-remote-dot" aria-hidden="true" />
+              Servidor activo en {urlHost(connection.pairings[0]?.url ?? '') ?? 'la red local'}
             </p>
+            {staleAddress && (
+              <p className="lt-remote-warning" role="alert">
+                La IP de este equipo cambió ({staleAddress} ya no existe). Apaga y enciende el servidor
+                para generar QR nuevos.
+              </p>
+            )}
             <div className="lt-remote-pairings">
               {connection.pairings.map((pairing) => (
                 <section key={pairing.role}>
                   <h3>{roleName[pairing.role]}</h3>
+                  <p className="lt-remote-hint">{roleHint[pairing.role]}</p>
                   <img src={pairing.qr} width="192" height="192" alt={'QR de acceso para ' + roleName[pairing.role].toLowerCase()} />
                   <input aria-label={'URL de ' + roleName[pairing.role].toLowerCase()} readOnly value={pairing.url}
                     onFocus={(event) => event.currentTarget.select()} />
@@ -296,12 +320,24 @@ export default memo(function RemoteConnectionBridge({ project, setlist, activati
                 </section>
               ))}
             </div>
-            <h3>Dispositivos conectados</h3>
-            {devices.length === 0 ? <p>Aún no hay dispositivos conectados.</p> : (
+            <details className="lt-remote-help">
+              <summary>¿No abre el QR?</summary>
+              <ul>
+                <li><strong>Misma red.</strong> El teléfono y este equipo deben estar en la misma Wi-Fi.</li>
+                <li><strong>Cortafuegos de Windows.</strong> La primera vez, permite OmniTracks en redes privadas.</li>
+                <li><strong>Android.</strong> Si el navegador pide acceso a Dispositivos cercanos o a la red local, acéptalo.
+                  Si ya lo rechazaste, actívalo en los permisos del navegador y vuelve a abrir el QR.</li>
+              </ul>
+            </details>
+            <h3>Dispositivos conectados{devices.length > 0 ? ` (${devices.length})` : ''}</h3>
+            {devices.length === 0 ? <p>Aún no hay dispositivos conectados. Escanea un QR con el teléfono.</p> : (
               <ul>
                 {devices.map((device) => (
                   <li key={device.id}>
-                    <span>Dispositivo {device.id} · {roleName[device.role]} · {device.address}</span>
+                    <span>
+                      <span className="lt-remote-dot" aria-hidden="true" />
+                      <strong>{roleName[device.role]}</strong> · {device.address}
+                    </span>
                     <button type="button" className="lt-control" disabled={busy} onClick={() => void kick(device.id)}>Expulsar</button>
                   </li>
                 ))}
