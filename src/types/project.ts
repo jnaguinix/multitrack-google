@@ -160,6 +160,8 @@ export interface NativeBusLevels {
   cue: { l: number; r: number };
   out: { l: number; r: number };
   click: { l: number; r: number };
+  /** Envío a auriculares («Aur.»); ausente en motores antiguos. */
+  monitor?: { l: number; r: number };
   clipping: boolean;
 }
 

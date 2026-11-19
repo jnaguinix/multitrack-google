@@ -27,6 +27,8 @@ export interface MixerLevels {
   click: StripLevels;
   main: StripLevels;
   cue: StripLevels;
+  /** Envío a auriculares («Aur.»), con el fader Monitor aplicado. */
+  monitor: StripLevels;
   /** Con niveles nativos la escala es dBFS (zonas de color de los medidores de pista). */
   nativeScale: boolean;
 }
@@ -112,6 +114,8 @@ export function computeMixerLevels(
     click: strip(nb?.click, clickStripLevel, 0.96),
     main: strip(nb?.main, mainBusOutLevel, 0.95),
     cue: strip(nb?.cue, cueBusOutLevel, 0.95),
+    // Sin niveles nativos no hay estimación: el envío a auriculares solo se mide en el motor.
+    monitor: strip(nb?.monitor, 0, 1),
     nativeScale: Boolean(meters.nativeBuses),
   };
 }

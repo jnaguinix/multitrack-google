@@ -24,6 +24,7 @@ const raw = (tracks: [string, number][], main = 0, clipped = false) => ({
   cue: { l: 0, r: 0 },
   out: { l: main, r: main },
   click: { l: 0.2, r: 0.2 },
+  monitor: { l: 0.4, r: 0.3 },
   clipped,
 });
 
@@ -45,6 +46,7 @@ async function main() {
   assert(s.tracks.otra.peak === 0, 'pista sin dato -> 0');
   assert(close(s.master.peak, 0.9), 'main real');
   assert(close(s.nativeBuses!.click.l, 0.2), 'click real');
+  assert(close(s.nativeBuses!.monitor!.l, 0.4) && close(s.nativeBuses!.monitor!.r, 0.3), 'monitor real');
   assert(close(s.tracks.a.l!, 0.8) && close(s.tracks.a.r!, 0.4), `canales de la pista por separado (L ${s.tracks.a.l}, R ${s.tracks.a.r})`);
   console.log('OK 2: valores reales, cada canal de la pista por separado y 0 para pistas sin dato');
 
