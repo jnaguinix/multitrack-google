@@ -5,26 +5,14 @@
  */
 type Invoke = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
 
-const qr = (seed: number) => {
-  const cells: string[] = [];
-  for (let y = 0; y < 21; y++) {
-    for (let x = 0; x < 21; x++) {
-      const finder = (x < 7 && y < 7) || (x > 13 && y < 7) || (x < 7 && y > 13);
-      if (finder || ((x * 7 + y * 13 + seed) % 5 < 2)) cells.push(`<rect x="${x}" y="${y}" width="1" height="1"/>`);
-    }
-  }
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="-1 -1 23 23"><rect x="-1" y="-1" width="23" height="23" fill="#fff"/><g fill="#000">${cells.join('')}</g></svg>`;
-  return 'data:image/svg+xml;utf8,' + encodeURIComponent(svg);
-};
-
 let running = false;
 
 const connection = () => ({
   epoch: 'vista-previa',
   devices: [],
   pairings: [
-    { role: 'monitor', url: 'http://192.168.0.10:8765/m/ejemplo-musicos', qr: qr(1) },
-    { role: 'mixer', url: 'http://192.168.0.10:8765/s/ejemplo-sonidista', qr: qr(3) },
+    { role: 'monitor', url: 'http://192.168.0.10:8765/m/ejemplo-musicos' },
+    { role: 'mixer', url: 'http://192.168.0.10:8765/s/ejemplo-sonidista' },
   ],
 });
 

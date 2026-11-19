@@ -77,7 +77,7 @@ Gestiona el catálogo de canciones y la integridad de metadatos locales:
 
 Servidor HTTP y WebSocket local embebido (basado en Axum y Tokio, puerto 8765):
 - **Funcionalidad**: Permite el control remoto en vivo desde smartphones de músicos (monitoreo personal) y sonidistas (ganancia, paneo, mute y solo por canal).
-- **Seguridad**: Emparejamiento por token y código QR en pantalla, con roles estrictos (`Musician`, `SoundEngineer`) y límite de 16 sesiones concurrentes con reciclaje FIFO de sesiones desconectadas.
+- **Seguridad**: Emparejamiento por token en un enlace que se copia desde la pantalla (sin QR), con roles estrictos (`Musician`, `SoundEngineer`) y límite de 16 sesiones concurrentes con reciclaje FIFO de sesiones desconectadas.
 - **Sincronización**: Intercambio de snapshots de transporte y deltas de mezcla (`remote_exchange`), desacoplado del motor de audio principal.
 
 ---

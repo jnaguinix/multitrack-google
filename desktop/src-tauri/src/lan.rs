@@ -38,8 +38,8 @@ pub fn random_token() -> io::Result<String> {
     Ok(URL_SAFE_NO_PAD.encode(bytes))
 }
 
-/// Código de emparejamiento del QR: 18 bytes (144 bits, 24 caracteres). Más corto que `random_token` para que el
-/// QR tenga menos módulos y la cámara del teléfono lo lea a la primera; sigue siendo imposible de adivinar.
+/// Código de emparejamiento del enlace: 18 bytes (144 bits, 24 caracteres). Más corto que `random_token` para que el
+/// enlace sea fácil de copiar y de escribir; sigue siendo imposible de adivinar.
 pub fn pairing_token() -> io::Result<String> {
     let mut bytes = [0u8; 18];
     getrandom::fill(&mut bytes).map_err(|error| io::Error::other(error.to_string()))?;

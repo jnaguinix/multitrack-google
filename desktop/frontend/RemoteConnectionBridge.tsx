@@ -13,7 +13,7 @@ import './connection.css';
 type Invoke = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
 type Role = 'monitor' | 'mixer';
 type Device = { id: number; role: Role; address: string };
-type Pairing = { role: Role; url: string; qr: string };
+type Pairing = { role: Role; url: string };
 type Connection = { epoch: string; devices: Device[]; pairings: Pairing[] };
 type Status = { interfaces: { name: string; address: string }[]; connection: Connection | null; updatesEnabled: boolean };
 type Exchange = { commands: Dispatch[]; devices: Device[] };
@@ -64,7 +64,7 @@ export default memo(function RemoteConnectionBridge({ project, setlist, activati
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState('');
   const [updatesEnabled, setUpdatesEnabled] = useState(false);
-  const [bigQr, setBigQr] = useState<Role | null>(null);
+  const [copied, setCopied] = useState<Role | null>(null);
 
   useLayoutEffect(() => {
     source.current = { project, setlist };
@@ -241,7 +241,7 @@ export default memo(function RemoteConnectionBridge({ project, setlist, activati
 
   if (!invoke) return null;
 
-  // La IP con la que se emitieron los QR ya no pertenece a ningún adaptador (cambió la red).
+  // La IP con la que se emitieron los enlaces ya no pertenece a ningún adaptador (cambió la red).
   const serverHost = urlHost(connection?.pairings[0]?.url ?? '');
   const staleAddress = serverHost && interfaces.length > 0
     && !interfaces.some((entry) => entry.address === serverHost) ? serverHost : null;
@@ -301,7 +301,7 @@ export default memo(function RemoteConnectionBridge({ project, setlist, activati
             {staleAddress && (
               <p className="lt-remote-warning" role="alert">
                 La IP de este equipo cambió ({staleAddress} ya no existe). Apaga y enciende el servidor
-                para generar QR nuevos.
+                para generar enlaces nuevos.
               </p>
             )}
             <div className="lt-remote-pairings">
@@ -309,34 +309,31 @@ export default memo(function RemoteConnectionBridge({ project, setlist, activati
                 <section key={pairing.role}>
                   <h3>{roleName[pairing.role]}</h3>
                   <p className="lt-remote-hint">{roleHint[pairing.role]}</p>
-                  <img src={pairing.qr} className="lt-remote-qr" data-big={bigQr === pairing.role}
-                    alt={'QR de acceso para ' + roleName[pairing.role].toLowerCase()} />
-                  <button type="button" className="lt-control" aria-pressed={bigQr === pairing.role}
-                    onClick={() => setBigQr((current) => current === pairing.role ? null : pairing.role)}>
-                    {bigQr === pairing.role ? 'Reducir QR' : 'Ampliar QR'}
-                  </button>
-                  <input aria-label={'URL de ' + roleName[pairing.role].toLowerCase()} readOnly value={pairing.url}
+                  <input aria-label={'Enlace de ' + roleName[pairing.role].toLowerCase()} readOnly value={pairing.url}
                     onFocus={(event) => event.currentTarget.select()} />
-                  <button type="button" className="lt-control" onClick={() => {
+                  <button type="button" className="lt-control lt-btn-primary" onClick={() => {
                     void navigator.clipboard.writeText(pairing.url).then(
-                      () => setNotice('URL copiada.'),
-                      () => setNotice('Selecciona y copia la URL del campo.'),
+                      () => {
+                        setCopied(pairing.role);
+                        setNotice('');
+                      },
+                      () => setNotice('Selecciona el enlace del campo y cópialo a mano.'),
                     );
-                  }}>Copiar URL</button>
+                  }}>{copied === pairing.role ? 'Enlace copiado ✓' : 'Copiar enlace'}</button>
                 </section>
               ))}
             </div>
             <details className="lt-remote-help">
-              <summary>¿No abre el QR?</summary>
+              <summary>¿No abre el enlace?</summary>
               <ul>
                 <li><strong>Misma red.</strong> El teléfono y este equipo deben estar en la misma Wi-Fi.</li>
                 <li><strong>Cortafuegos de Windows.</strong> La primera vez, permite OmniTracks en redes privadas.</li>
                 <li><strong>Android.</strong> Si el navegador pide acceso a Dispositivos cercanos o a la red local, acéptalo.
-                  Si ya lo rechazaste, actívalo en los permisos del navegador y vuelve a abrir el QR.</li>
+                  Si ya lo rechazaste, actívalo en los permisos del navegador y vuelve a abrir el enlace.</li>
               </ul>
             </details>
             <h3>Dispositivos conectados{devices.length > 0 ? ` (${devices.length})` : ''}</h3>
-            {devices.length === 0 ? <p>Aún no hay dispositivos conectados. Escanea un QR con el teléfono.</p> : (
+            {devices.length === 0 ? <p>Aún no hay dispositivos conectados. Copia un enlace, envíalo al teléfono (WhatsApp, correo…) y ábrelo ahí.</p> : (
               <ul>
                 {devices.map((device) => (
                   <li key={device.id}>

@@ -62,19 +62,7 @@
 .lt-remote-help ul { margin: 8px 0 0; padding-inline-start: 18px; list-style: disc; }
 .lt-remote-dialog .lt-remote-help li { display: list-item; border: 0; padding-block: 3px; font-size: 13px; }
 .lt-remote-help strong { color: var(--lt-text); }
-.lt-remote-pairings { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr)); gap: 16px; margin-bottom: 16px; }
-.lt-remote-pairings section { display: grid; justify-items: start; gap: 8px; }
-.lt-remote-qr {
-  display: block;
-  width: min(100%, 240px);
-  height: auto;
-  aspect-ratio: 1;
-  border-radius: 4px;
-  image-rendering: pixelated;
-}
-/* Ampliado: el QR ocupa todo el ancho del diálogo para escanearlo desde más lejos. */
-.lt-remote-pairings:has(.lt-remote-qr[data-big="true"]) { grid-template-columns: 1fr; }
-.lt-remote-pairings:has(.lt-remote-qr[data-big="true"]) section:not(:has(.lt-remote-qr[data-big="true"])) { display: none; }
-.lt-remote-qr[data-big="true"] { width: min(100%, 520px); justify-self: center; }
-.lt-remote-pairings input { width: 100%; min-width: 0; border: 1px solid var(--lt-line); padding: 6px; font-size: 12px; }
+.lt-remote-pairings { display: grid; grid-template-columns: 1fr; gap: 14px; margin-bottom: 16px; }
+.lt-remote-pairings section { display: grid; justify-items: start; gap: 8px; padding: 14px; border: 1px solid var(--lt-line); border-radius: 12px; background: var(--lt-strip); }
+.lt-remote-pairings input { width: 100%; min-width: 0; border: 1px solid var(--lt-line); border-radius: 8px; padding: 9px 10px; background: var(--lt-bg); color: var(--lt-text); font-size: 13px; }
 .lt-remote-dialog li { padding-block: 8px; border-bottom: 1px solid var(--lt-line); font-size: 13px; }

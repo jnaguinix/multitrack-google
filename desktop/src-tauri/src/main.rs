@@ -1,9 +1,7 @@
-use base64::{engine::general_purpose::STANDARD, Engine};
 use omnitracks_desktop::{
     lan::{Device, Server},
     protocol::{Dispatch, Receipt, Role, Snapshot},
 };
-use qrcode::{render::svg, QrCode};
 use serde::Serialize;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use tauri::{Manager, State};
@@ -45,7 +43,6 @@ fn interfaces() -> Result<Vec<Interface>, String> {
 struct Pairing {
     role: Role,
     url: String,
-    qr: String,
 }
 
 #[derive(Serialize)]
@@ -58,20 +55,10 @@ struct ConnectionInfo {
 fn connection_info(server: &Server) -> Result<ConnectionInfo, String> {
     let pairings = [Role::Monitor, Role::Mixer]
         .into_iter()
-        .map(|role| {
-            let url = server.hub.pairing_url(role);
-            let image = QrCode::new(url.as_bytes())
-                .map_err(|error| format!("No se pudo generar el QR: {error}"))?
-                .render::<svg::Color>()
-                // Módulos enteros de 8 px: bordes nítidos y fáciles de enfocar desde el teléfono.
-                .module_dimensions(8, 8)
-                .build();
-            Ok(Pairing {
-                role,
-                url,
-                qr: format!("data:image/svg+xml;base64,{}", STANDARD.encode(image)),
-            })
-        })
+        .map(|role| Ok(Pairing {
+            role,
+            url: server.hub.pairing_url(role),
+        }))
         .collect::<Result<Vec<_>, String>>()?;
     Ok(ConnectionInfo {
         epoch: server.hub.epoch.clone(),

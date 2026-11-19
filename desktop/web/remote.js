@@ -437,7 +437,7 @@
     try {
       const session = await fetch(sessionUrl, { cache: 'no-store' });
       if (session.status === 401 || session.status === 403) {
-        connection.textContent = 'Sesión terminada. Escanea el QR del portátil.';
+        connection.textContent = 'Sesión terminada. Abre de nuevo el enlace del portátil.';
         return;
       }
       if (!session.ok) throw new Error('session unavailable');
@@ -457,7 +457,7 @@
         renderTracks(false);
         renderMeters();
         if (event.code === 4403 || event.code === 1008) {
-          connection.textContent = 'Sesión cerrada por el portátil. Escanea el QR para entrar.';
+          connection.textContent = 'Sesión cerrada por el portátil. Abre el enlace otra vez para entrar.';
         } else {
           retry();
         }
@@ -483,7 +483,7 @@
           cache: 'no-store',
         });
         if (response.status === 503) {
-          connection.textContent = 'El portátil no admite más dispositivos en este momento. Libera un cupo y vuelve a abrir el QR.';
+          connection.textContent = 'El portátil no admite más dispositivos en este momento. Libera un cupo y vuelve a abrir el enlace.';
           return;
         }
         if (!response.ok) throw new Error('pairing failed');
@@ -491,7 +491,7 @@
       await connect();
       setInterval(renderClock, 200);
     } catch {
-      connection.textContent = 'No se pudo abrir la sesión. Escanea el QR vigente.';
+      connection.textContent = 'No se pudo abrir la sesión. Abre el enlace vigente del portátil.';
     }
   }
 
