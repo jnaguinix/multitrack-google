@@ -15,6 +15,15 @@ use crate::audio::pitch::{new_pitch_shifter, PitchShifter};
 use crate::audio::resampler::TrackResampler;
 use crate::audio::routing::{self, RouteTable, RoutingSlot};
 
+/// Semitonos que se aplican a una pista: el tono del proyecto si su bus se transpone (música) y 0 si es click o guía.
+fn track_pitch(pitch: &AtomicI32, bus: &AtomicU8) -> i32 {
+    if TrackBus::from_u8(bus.load(Ordering::Relaxed)).transposes() {
+        pitch.load(Ordering::Relaxed)
+    } else {
+        0
+    }
+}
+
 pub mod fade;
 pub use fade::*;
 
@@ -240,6 +249,16 @@ impl PlaybackEngine {
             let is_vamping_track = Arc::clone(&self.is_vamping);
             let active_loop_track = Arc::new(std::sync::Mutex::new(None));
             let pitch_track = Arc::clone(&self.pitch_semitones);
+            // El bus inicial se deduce del ID; la interfaz lo fija después con `set_track_controls`. El feeder lo
+            // lee para saber si esta pista se transpone (el click y la guía no).
+            let lower_id = meta.track_id.to_ascii_lowercase();
+            let initial_bus = if lower_id.contains("click") || lower_id.contains("metronom") || lower_id.contains("guia") || lower_id.contains("guide") || lower_id.contains("cue") {
+                TrackBus::CueClick as u8
+            } else {
+                TrackBus::Main as u8
+            };
+            let bus_track = Arc::new(AtomicU8::new(initial_bus));
+            let thread_bus = Arc::clone(&bus_track);
             // Handshake de seek: arrancan en la generación vigente para no bloquear la primera salida de
             // buffering con un contador atrasado.
             let initial_generation = self.seek_generation.load(Ordering::SeqCst);
@@ -294,7 +313,7 @@ impl PlaybackEngine {
                     let mut shifter: Option<PitchShifter> = new_pitch_shifter(
                         device_sample_rate,
                         channels_count,
-                        thread_pitch.load(Ordering::Relaxed),
+                        track_pitch(&thread_pitch, &thread_bus),
                     );
 
                     let mut input_staging: Vec<Vec<f32>> = vec![Vec::with_capacity(chunk_frames * 4); channels_count];
@@ -317,7 +336,7 @@ impl PlaybackEngine {
                             shifter = new_pitch_shifter(
                                 device_sample_rate,
                                 channels_count,
-                                thread_pitch.load(Ordering::Relaxed),
+                                track_pitch(&thread_pitch, &thread_bus),
                             );
                             delay_compensated = false;
                             // Ya no se empujará audio de la posición anterior: se confirma la generación
@@ -505,13 +524,6 @@ impl PlaybackEngine {
                 })
                 .map_err(|e| format!("Error iniciando hilo feeder: {e}"))?;
 
-            let lower_id = meta.track_id.to_ascii_lowercase();
-            let initial_bus = if lower_id.contains("click") || lower_id.contains("metronom") || lower_id.contains("guia") || lower_id.contains("guide") || lower_id.contains("cue") {
-                TrackBus::CueClick as u8
-            } else {
-                TrackBus::Main as u8
-            };
-
             active_tracks.push(ActiveTrack {
                 track_id: meta.track_id.clone(),
                 file_path: pcm_path,
@@ -525,7 +537,7 @@ impl PlaybackEngine {
                 split: Arc::new(AtomicBool::new(false)),
                 cue_gain: Arc::new(AtomicU32::new(1.0f32.to_bits())),
                 cue_muted: Arc::new(AtomicBool::new(false)),
-                bus: Arc::new(AtomicU8::new(initial_bus)),
+                bus: bus_track,
                 consumer: Arc::new(std::sync::Mutex::new(consumer)),
                 stop_signal,
                 seek_request: seek_req,
@@ -772,6 +784,9 @@ impl PlaybackEngine {
         soloed: Option<bool>,
         bus: Option<&str>,
     ) {
+        // Si el bus cambia entre uno que se transpone y otro que no (y hay tono), el feeder debe recrear su
+        // cambio de tono: se reposiciona en el mismo punto, igual que `set_pitch`.
+        let mut needs_reseek = false;
         let tracks = self.tracks.lock().await;
         if let Some(trk) = tracks.iter().find(|t| t.track_id == track_id) {
             if let Some(g) = gain {
@@ -787,8 +802,17 @@ impl PlaybackEngine {
                 trk.soloed.store(s, Ordering::Relaxed);
             }
             if let Some(b) = bus {
-                trk.bus.store(TrackBus::from_str(b) as u8, Ordering::Relaxed);
+                let new_bus = TrackBus::from_str(b);
+                let old_bus = TrackBus::from_u8(trk.bus.swap(new_bus as u8, Ordering::Relaxed));
+                needs_reseek = old_bus.transposes() != new_bus.transposes()
+                    && trk.pitch_semitones.load(Ordering::Relaxed) != 0;
             }
+        }
+        drop(tracks);
+        if needs_reseek {
+            let sr = self.sample_rate.load(Ordering::SeqCst).max(1);
+            let position_sec = self.current_frame.load(Ordering::SeqCst) as f64 / sr as f64;
+            self.seek(position_sec).await;
         }
     }
 

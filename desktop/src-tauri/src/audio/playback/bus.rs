@@ -18,6 +18,12 @@ impl TrackBus {
         }
     }
 
+    /// Si el cambio de tono afecta a las pistas de este bus: la música sí; el click y la guía no (un click o una voz
+    /// de guía transpuestos no sirven: la guía debe seguir sonando natural y el click es solo un pulso).
+    pub fn transposes(self) -> bool {
+        matches!(self, TrackBus::Main | TrackBus::Both)
+    }
+
     pub fn from_u8(val: u8) -> Self {
         match val {
             1 => TrackBus::CueClick,

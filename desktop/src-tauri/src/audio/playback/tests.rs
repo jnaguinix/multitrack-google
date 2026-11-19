@@ -487,6 +487,32 @@
 
 
     #[test]
+    fn test_el_click_y_la_guia_no_se_transponen() {
+        let tono = AtomicI32::new(3);
+        for (bus, esperado) in [
+            (TrackBus::Main, 3),
+            (TrackBus::Both, 3),
+            (TrackBus::CueClick, 0),
+            (TrackBus::Guide, 0),
+        ] {
+            let b = std::sync::atomic::AtomicU8::new(bus as u8);
+            assert_eq!(super::track_pitch(&tono, &b), esperado, "bus {}", bus.name());
+        }
+    }
+
+    #[tokio::test]
+    async fn test_cambiar_el_bus_de_una_pista_inexistente_no_mueve_nada() {
+        // Una pista que pasa de música a click deja de transponerse (y al revés): el feeder recrea su cambio de
+        // tono con un seek en el mismo punto (no medido con un feeder real). Aquí solo se comprueba que un bus
+        // aplicado a una pista que no existe no reposiciona ni falla.
+        let engine = motor_de_prueba();
+        engine.set_pitch(2).await;
+        let antes = engine.current_frame.load(Ordering::SeqCst);
+        engine.set_track_controls("no-existe", None, None, None, None, Some("click")).await;
+        assert_eq!(engine.current_frame.load(Ordering::SeqCst), antes);
+    }
+
+    #[test]
     fn test_feeder_output_staging_limit() {
         let chunk_frames = 1024usize;
         let staging_limit = chunk_frames * 2; // 2048 samples
