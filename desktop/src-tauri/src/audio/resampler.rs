@@ -2,27 +2,29 @@ use rubato::{
     Resampler, SincFixedIn, SincInterpolationParameters, SincInterpolationType, WindowFunction,
 };
 
-/// Wrapper around rubato's SincFixedIn resampler with dynamic ratio adjustment and delay reporting.
+/// Envoltorio del remuestreador `SincFixedIn` de rubato (conversión de frecuencia de muestreo) que informa su retardo.
+///
+/// El tono NO se cambia aquí: variar la relación de remuestreo acelera o frena la canción (como un disco de vinilo).
+/// El cambio de tono sin tocar la velocidad lo hace `pitch::PitchShifter`.
 pub struct TrackResampler {
     resampler: SincFixedIn<f32>,
     pub chunk_size: usize,
     channels: usize,
     output_delay_frames: usize,
-    base_ratio: f64,
-    /// Relación salida/entrada vigente (la base por el factor de tono).
-    current_ratio: f64,
+    /// Relación salida/entrada: frecuencia de destino / frecuencia de origen.
+    ratio: f64,
 }
 
 impl TrackResampler {
     pub fn new(
         source_rate: u32,
         target_rate: u32,
-        initial_pitch_semitones: i32,
         chunk_size: usize,
         channels: usize,
     ) -> Result<Self, String> {
-        let base_ratio = target_rate as f64 / source_rate as f64;
-        let max_resample_ratio_relative = 2.5;
+        let ratio = target_rate as f64 / source_rate as f64;
+        // La relación no cambia nunca después de crear el remuestreador.
+        let max_resample_ratio_relative = 1.0;
 
         let params = SincInterpolationParameters {
             sinc_len: 64,
@@ -32,23 +34,14 @@ impl TrackResampler {
             window: WindowFunction::BlackmanHarris2,
         };
 
-        let mut resampler = SincFixedIn::<f32>::new(
-            base_ratio,
+        let resampler = SincFixedIn::<f32>::new(
+            ratio,
             max_resample_ratio_relative,
             params,
             chunk_size,
             channels,
         )
         .map_err(|e| format!("Error creando resampler rubato: {e}"))?;
-
-        let mut current_ratio = base_ratio;
-        if initial_pitch_semitones != 0 {
-            let pitch_factor = 2.0f64.powf(-(initial_pitch_semitones as f64) / 12.0);
-            resampler
-                .set_resample_ratio(base_ratio * pitch_factor, false)
-                .map_err(|e| format!("Error estableciendo tono inicial: {e}"))?;
-            current_ratio = base_ratio * pitch_factor;
-        }
 
         let output_delay_frames = resampler.output_delay();
 
@@ -57,14 +50,13 @@ impl TrackResampler {
             chunk_size,
             channels,
             output_delay_frames,
-            base_ratio,
-            current_ratio,
+            ratio,
         })
     }
 
-    /// Relación salida/entrada vigente: fotogramas de salida por cada fotograma de entrada.
+    /// Relación salida/entrada: fotogramas de salida por cada fotograma de entrada.
     pub fn resample_ratio(&self) -> f64 {
-        self.current_ratio
+        self.ratio
     }
 
     pub fn output_delay(&self) -> usize {
@@ -81,16 +73,6 @@ impl TrackResampler {
 
     pub fn nbr_channels(&self) -> usize {
         self.channels
-    }
-
-    /// Update pitch in semitones (-12 to +12) in real time with smooth ramping across the next chunk.
-    pub fn set_pitch(&mut self, semitones: i32, ramp: bool) -> Result<(), String> {
-        let pitch_factor = 2.0f64.powf(-(semitones as f64) / 12.0);
-        self.resampler
-            .set_resample_ratio_relative(pitch_factor, ramp)
-            .map_err(|e| format!("Error cambiando ratio relativo en rubato: {e}"))?;
-        self.current_ratio = self.base_ratio * pitch_factor;
-        Ok(())
     }
 
     /// Resamples a chunk of multi-channel audio data.

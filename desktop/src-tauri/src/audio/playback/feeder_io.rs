@@ -1,6 +1,7 @@
 use std::io::Read;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use crate::audio::pitch::PitchShifter;
 use crate::audio::resampler::TrackResampler;
 
 /// Lee hasta llenar `buf` o llegar al final. Devuelve los bytes leídos y el error de lectura, si lo hubo (llegar al
@@ -97,8 +98,12 @@ pub fn report_read_error(already_reported: &mut bool, path: &std::path::Path, er
     }
 }
 
+/// Pasa lo que haya en `input_staging` por el remuestreador y, si `shifter` es `Some`, por el cambio de tono (que
+/// conserva la duración: entra y sale lo mismo, salvo el retardo inicial que él mismo compensa). El vaciado parcial
+/// (`allow_partial`, solo lo usan las pruebas) no pasa por el cambio de tono.
 pub fn drain_staging_through_resampler(
     resampler: &mut TrackResampler,
+    mut shifter: Option<&mut PitchShifter>,
     is_mono: bool,
     input_staging: &mut [Vec<f32>],
     output_staging: &mut Vec<f32>,
@@ -114,7 +119,7 @@ pub fn drain_staging_through_resampler(
             in_chunk.push(chunk);
         }
 
-        if let Ok(processed) = resampler.process(&in_chunk) {
+        if let Ok(mut processed) = resampler.process(&in_chunk) {
             let out_frames = processed[0].len();
             let start_frame = if !*delay_compensated {
                 *delay_compensated = true;
@@ -123,15 +128,16 @@ pub fn drain_staging_through_resampler(
                 0
             };
 
-            for i in start_frame..out_frames {
-                if is_mono {
-                    let s = processed[0][i];
-                    output_staging.push(s);
-                    output_staging.push(s);
-                } else {
-                    output_staging.push(processed[0][i]);
-                    output_staging.push(processed[1][i]);
+            if let Some(sh) = shifter.as_deref_mut() {
+                if start_frame > 0 {
+                    for ch in processed.iter_mut() {
+                        ch.drain(..start_frame);
+                    }
                 }
+                processed = sh.process(&processed);
+                push_interleaved(&processed, 0, is_mono, output_staging);
+            } else {
+                push_interleaved(&processed, start_frame, is_mono, output_staging);
             }
         }
     }
@@ -190,10 +196,24 @@ pub fn drain_staging_through_resampler(
 /// Prepara el remuestreador para un tramo nuevo del archivo tras un empalme (salto de sección o
 /// vuelta de vamp): descarta el estado del tramo anterior y vuelve a compensar el retardo del filtro,
 /// igual que tras un seek.
-pub fn begin_new_segment(resampler: &mut TrackResampler, delay_compensated: &mut bool, pitch_semitones: i32) {
+pub fn begin_new_segment(resampler: &mut TrackResampler, delay_compensated: &mut bool) {
     resampler.reset();
-    let _ = resampler.set_pitch(pitch_semitones, false);
     *delay_compensated = false;
+}
+
+/// Añade al anillo de salida (intercalado L, R; el mono se duplica) los fotogramas de `block` desde `from`.
+fn push_interleaved(block: &[Vec<f32>], from: usize, is_mono: bool, output_staging: &mut Vec<f32>) {
+    let frames = block[0].len();
+    for i in from..frames {
+        if is_mono {
+            let s = block[0][i];
+            output_staging.push(s);
+            output_staging.push(s);
+        } else {
+            output_staging.push(block[0][i]);
+            output_staging.push(block[1][i]);
+        }
+    }
 }
 
 /// Marca `feeder_alive = false` cuando el hilo feeder termina por cualquier camino (incluido un pánico),

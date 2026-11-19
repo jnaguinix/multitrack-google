@@ -25,6 +25,7 @@ if-addrs = { version = "0.15", optional = true }
 qrcode = { version = "0.14", default-features = false, features = ["svg"], optional = true }
 rubato = "0.16"
 ebur128 = "0.1"
+ssstretch = "0.1"
 rtrb = "0.3"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -42,3 +43,7 @@ percent-encoding = "2.3"
 [dev-dependencies]
 futures-util = "0.3"
 tokio-tungstenite = "0.29"
+
+# El cambio de tono (C++) sin optimizar es lentisimo y deja sin procesador a las pruebas con tiempos.
+[profile.dev.package.ssstretch]
+opt-level = 3

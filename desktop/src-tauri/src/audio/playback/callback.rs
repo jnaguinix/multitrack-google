@@ -4,7 +4,7 @@
 //! Corre en el hilo de audio en tiempo real: sin asignaciones, sin registros y sin bloqueos que esperen
 //! (solo `try_lock`; si un recurso está ocupado, ese bloque sale en silencio o la pista se resincroniza después).
 
-use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
@@ -40,7 +40,6 @@ pub struct CallbackShared {
     pub master_gain: Arc<AtomicU32>,
     pub cue_master_gain: Arc<AtomicU32>,
     pub monitor_gain: Arc<AtomicU32>,
-    pub pitch_semitones: Arc<AtomicI32>,
     pub is_vamping: Arc<AtomicBool>,
     pub routing: Arc<RoutingSlot>,
     pub bus_meters: Arc<BusMeters>,
@@ -290,8 +289,9 @@ impl BlockMixer {
 
         // Metrónomo sintético.
         let start_song_f = s.current_frame.load(Ordering::Relaxed);
-        let pitch_ratio = 2.0f64.powf(s.pitch_semitones.load(Ordering::Relaxed) as f64 / 12.0);
-        let song_frames = (frames as f64 * pitch_ratio).round() as u64;
+        // El tono ya no altera la velocidad (lo cambia el feeder de cada pista sin tocar la duración): el reloj
+        // de la canción avanza exactamente lo que dura el bloque.
+        let song_frames = frames as u64;
         let end_song_f = start_song_f + song_frames;
 
         // Fundido de 8 ms al final natural de la canción (no en el vamp, que no termina).
@@ -327,7 +327,7 @@ impl BlockMixer {
         // Fuentes lógicas -> canales de salida según la matriz, con el micro-fundido y el limitador.
         for f in 0..frames {
             let end_g = if near_end {
-                end_of_song_gain(start_song_f + (f as f64 * pitch_ratio) as u64, total_song, end_fade_frames)
+                end_of_song_gain(start_song_f + f as u64, total_song, end_fade_frames)
             } else {
                 1.0
             };

@@ -1,0 +1,3 @@
+# ssstretch (cambio de tono) trae un parche de std::make_unique que choca con MSVC si no se activa __cplusplus.
+[env]
+CXXFLAGS_x86_64_pc_windows_msvc = "/Zc:__cplusplus"

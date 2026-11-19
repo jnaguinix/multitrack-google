@@ -214,7 +214,7 @@ Detalle de tamaños de búfer, saltos y decisiones: [`docs/MOTOR_NATIVO_DISENO.m
 - **`output.rs`:** `AudioSettings`, `AudioEngineState` (settings + estadísticas del stream + indicadores de import), `list_hosts()`/`list_devices(host)`, tono de prueba por canal, persistencia en `audio_settings.json`.
 - **`playback.rs`:**
   - *Feeders:* un hilo por pista lee el PCM, aplica el remuestreo y llena el `rtrb` respetando un horizonte de lectura.
-  - *Varispeed/pitch:* `resampler.rs::TrackResampler` envuelve `rubato::SincFixedIn` (`sinc_len` 64, interpolación lineal); `set_pitch` usa `set_resample_ratio_relative` sin recrear el remuestreador.
+  - *Cambio de tono:* `pitch.rs::PitchShifter` (Signalsmith Stretch) transpone sin cambiar la duración; `resampler.rs::TrackResampler` (`rubato::SincFixedIn`) solo convierte frecuencias. `set_pitch` hace un seek en el mismo punto para que el feeder recree el cambio de tono.
   - *Saltos y Vamp:* `audio_queue_jump` / `audio_cancel_jump` / `audio_toggle_vamp`; empalme con crossfade `FADE_MS = 8` ms (`crossfade_frames` según frecuencia del dispositivo). Limitación conocida: ver §10.
   - *Ruteo:* cada pista tiene un `TrackBus` (`Main`, `CueClick`, `Both`).
     - **Estéreo** (por defecto): mezcla Main+Both con `masterGain` y Cue+Both+click+guía con `cueMasterGain`, ambas sobre L/R.
@@ -310,7 +310,7 @@ Mantener **la misma versión** en `tauri.conf.json`, `Cargo.toml` y `desktop/pac
 
 1. `npm.cmd run lint` → `tsc --noEmit`.
 2. `npm.cmd test` → `tsx test/titleCleaning.test.ts && tsx test/trackFingerprint.test.ts`.
-3. `cargo test --locked --release --target x86_64-pc-windows-msvc --manifest-path desktop/src-tauri/Cargo.toml --no-default-features` → ≈48 tests: `playback.rs` (19: varispeed, click a la muestra, Split-Mono por bus, desconexión/reapertura, crossfade), `import.rs` (6), `cache.rs` (5), `output.rs` (4), `library/mod.rs` (4), `lan.rs` (2) y `tests/` de integración (`lan_protocol.rs` 4, `verify_manual_flow.rs` 2, `benchmark_import.rs` 2).
+3. `cargo test --locked --release --target x86_64-pc-windows-msvc --manifest-path desktop/src-tauri/Cargo.toml --no-default-features` → ≈48 tests: `playback.rs` (19: cambio de tono, click a la muestra, Split-Mono por bus, desconexión/reapertura, crossfade), `import.rs` (6), `cache.rs` (5), `output.rs` (4), `library/mod.rs` (4), `lan.rs` (2) y `tests/` de integración (`lan_protocol.rs` 4, `verify_manual_flow.rs` 2, `benchmark_import.rs` 2).
 4. Pruebas manuales de campo (hardware real, 20 pistas, teléfonos, firewall): [`desktop/README.md`](desktop/README.md) §«Pruebas reproducibles».
 
 ---

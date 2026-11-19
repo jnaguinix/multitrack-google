@@ -101,6 +101,8 @@ El mecanismo de control de transporte se diseña con una separación estricta de
     4. El callback recibe los nuevos frames y aplica un micro-fade-in de 8 ms.
     - *Búferes de reserva (Jump Reserve Buffers):* Para eliminar cualquier latencia de lectura de disco en saltos inmediatos entre secciones marcadas, el feeder mantiene en memoria intermedia los primeros 100 ms pre-decodificados de cada sección del proyecto. Ante un salto inmediato, inyecta este búfer pre-llenado de inmediato al ring buffer.
 
+> **Nota (2026-11-18): este diseño ya no está vigente.** El tono se cambia ahora sin tocar la velocidad (`audio/pitch.rs`) y el reloj de la canción avanza 1:1 con el dispositivo; lo de abajo describe el varispeed anterior.
+
 ### 1.4 Cálculo y reporte de posición exacta con cambio de tono (Varispeed) y frecuencias mixtas
 - El callback de audio mantiene un contador atómico de frames físicos de hardware renderizados: `device_frames_rendered: AtomicU64`.
 - Relación matemática de conversión a tiempo de canción:
