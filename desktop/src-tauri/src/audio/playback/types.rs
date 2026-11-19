@@ -133,6 +133,8 @@ pub struct BusMeters {
     pub out: PeakMeter,
     /// Click sintético, ya con el cue master aplicado (señal mono).
     pub click: PeakMeter,
+    /// Envío a auriculares («Aur.»): suma mono de las pistas marcadas, ya con el fader Monitor aplicado.
+    pub monitor: PeakMeter,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
@@ -164,6 +166,7 @@ pub struct MetersSnapshotDto {
     pub cue: LevelPair,
     pub out: LevelPair,
     pub click: LevelPair,
+    pub monitor: LevelPair,
     /// La salida superó 1.0 antes del recorte en algún momento desde la lectura anterior.
     pub clipped: bool,
 }

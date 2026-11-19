@@ -1962,6 +1962,33 @@
     }
 
     #[tokio::test]
+    async fn test_el_medidor_del_monitor_mide_el_envio_a_auriculares() {
+        let engine = solo_monitor("mon_medidor", &proponer_ruteo(2)).await;
+        // Sin pistas marcadas el medidor del Monitor queda en cero.
+        let _ = engine.take_meters();
+        picos_por_canal(&engine, 2, 40);
+        assert_eq!(engine.take_meters().monitor.l, 0.0, "sin «Aur.» no hay nivel en el Monitor");
+        // Con el piano marcado el medidor sube, y baja con el volumen del Monitor.
+        engine.set_track_monitor("musica", true).await;
+        engine.set_monitor_gain(1.0);
+        picos_por_canal(&engine, 2, 80);
+        let pleno = engine.take_meters().monitor;
+        assert!(pleno.l > 1e-3 && pleno.r > 1e-3, "el Monitor debe medir el envío: {pleno:?}");
+        // El medidor mide lo que sale por auriculares (con 2 salidas, la 0), con el fader Monitor aplicado.
+        engine.set_monitor_gain(0.5);
+        let salida = picos_por_canal(&engine, 2, 80);
+        let medio = engine.take_meters().monitor.l;
+        assert!(
+            (medio - salida[0]).abs() < 1e-3,
+            "el medidor coincide con la salida de auriculares ({medio} vs {})",
+            salida[0]
+        );
+        engine.set_monitor_gain(0.0);
+        picos_por_canal(&engine, 2, 40);
+        assert_eq!(engine.take_meters().monitor.l, 0.0, "con el fader a 0 el medidor queda en cero");
+    }
+
+    #[tokio::test]
     async fn test_monitor_con_4_salidas_va_con_la_guia_y_no_con_el_click() {
         let engine = solo_monitor("mon_guia", &proponer_ruteo(4)).await;
         engine.set_track_monitor("musica", true).await;

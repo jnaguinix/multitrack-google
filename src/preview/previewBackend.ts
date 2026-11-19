@@ -157,7 +157,10 @@ export function createPreviewBackend() {
     });
     const sum = Math.min(0.98, tracks.reduce((m, x) => Math.max(m, x.l), 0) * masterGain);
     const pair = (v: number) => ({ l: v, r: v * 0.95 });
-    return { tracks, main: pair(sum), cue: pair(0), out: pair(sum), click: pair(0), clipped: false };
+    // Envío a auriculares: pistas marcadas «Aur.» y audibles, con el fader Monitor.
+    const sent = tracks.reduce((m, x) => (controls.get(x.trackId)?.monitor ? Math.max(m, x.l) : m), 0);
+    const monitor = Math.min(0.98, sent * monitorGain);
+    return { tracks, main: pair(sum), cue: pair(0), out: pair(sum), click: pair(0), monitor: pair(monitor), clipped: false };
   };
 
   const snapshot = () => {

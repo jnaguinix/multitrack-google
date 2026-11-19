@@ -321,6 +321,7 @@ impl BlockMixer {
         // Medidores de bus: acumuladores locales en la pila; se publican una vez por bloque.
         let (mut mk_l, mut mk_r, mut ck, mut ok_l, mut ok_r) = (0.0f32, 0.0f32, 0.0f32, 0.0f32, 0.0f32);
         let mut clk_pk = 0.0f32;
+        let mut mon_pk = 0.0f32;
         // Muestras que tocaron el limitador en este bloque (se publican una vez al final).
         let mut limited: u64 = 0;
 
@@ -346,7 +347,8 @@ impl BlockMixer {
 
             mk_l = mk_l.max((m_l * env_gain).abs());
             mk_r = mk_r.max((m_r * env_gain).abs());
-            ck = ck.max(click_src.abs().max(guide_src.abs()).max(monitor_src.abs()) * env_gain);
+            ck = ck.max(click_src.abs().max(guide_src.abs()) * env_gain);
+            mon_pk = mon_pk.max(monitor_src.abs() * env_gain);
             for (ch, v) in frame.iter_mut().enumerate() {
                 let o = *v * env_gain;
                 if ch == 0 {
@@ -366,6 +368,7 @@ impl BlockMixer {
         s.bus_meters.cue.record(ck, ck);
         s.bus_meters.out.record(ok_l, ok_r);
         s.bus_meters.click.record(clk_pk, clk_pk);
+        s.bus_meters.monitor.record(mon_pk, mon_pk);
 
         let vamping_now = s.is_vamping.load(Ordering::Relaxed);
         let clock_now = advance_clock(&s.current_frame, &s.clock_jumps, song_frames, vamping_now);

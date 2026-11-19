@@ -388,7 +388,7 @@ export const MultitrackMixer: React.FC<MultitrackMixerProps> = ({
   const live = transport.isPlaying;
 
   // Niveles de los buses: cada medidor los calcula con su propia lectura (ver componentes hoja).
-  const busLevelsOf = (bus: 'click' | 'main' | 'cue') => (m: MetersSnapshot): MeterLevels => {
+  const busLevelsOf = (bus: 'click' | 'main' | 'cue' | 'monitor') => (m: MetersSnapshot): MeterLevels => {
     const lv = computeMixerLevels(project, transport, m);
     return { l: lv[bus].l, r: lv[bus].r, dbScale: lv.nativeScale };
   };
@@ -614,6 +614,7 @@ export const MultitrackMixer: React.FC<MultitrackMixerProps> = ({
               muted={false}
               dim={!project.tracks.some((tr) => tr.monitor)}
               noButtons
+              levelsOf={busLevelsOf('monitor')}
               onChangeGain={onChangeMonitorGain}
               onToggleMute={() => {}}
             />
