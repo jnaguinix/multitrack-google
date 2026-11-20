@@ -120,6 +120,8 @@ La parte de la importación nativa que no depende de React (filas y datos del as
 
 Páginas (`WorkspaceView` en `TopBar.tsx`): Setlist (`SetlistPageView.tsx`, `SetlistStrip.tsx`, `SongPickerModal.tsx`), En vivo (`LiveSetView.tsx`), Arreglo (`TimelineArranger.tsx`), Mezcla (`MultitrackMixer.tsx`) y Biblioteca (`LibraryView.tsx`; modales en `components/modals/`). La búsqueda de canciones está en `src/utils/songSearch.ts`.
 
+**Modo diagnóstico** (`src/utils/debugMode.ts`, `invokeTrace.ts`, `debugExport.ts`, `DebugBadge.tsx`): interruptor en Ajustes de audio → Diagnóstico o Ctrl+Mayús+D. Encendido registra con categoría cada comando a Tauri (`invokeTraceInstall` envuelve `core.invoke`, importado antes que `App`), los cambios de canción, el control remoto y los errores globales; las alarmas (comando lento, Play con la cola de controles sin vaciar, carga que termina tras cambiar de canción, puente remoto caído) quedan siempre, también en la caja negra. Solo interfaz: nada corre en el callback de Rust.
+
 Puentes con el escritorio en `desktop/frontend/`: `DesktopAudioSettings.tsx` (diálogo «Audio») con `AudioDiagnostics.tsx` (su sección «Diagnóstico») y `AudioRoutingPanel.tsx` (ruteo); `RemoteConnectionBridge.tsx` monta el diálogo «Conexión remota» y el botón de la barra superior mediante un portal; en `npm run dev` usa `previewInvoke.ts` (datos simulados, descartado de la compilación de producción) para poder ver el diseño sin Tauri.
 
 ---

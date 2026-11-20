@@ -4,6 +4,7 @@ import { createPortal } from 'react-dom';
 import { Wifi } from 'lucide-react';
 import type { SongProject } from '../../src/types/project';
 import { audioEngine } from '../../src/audio/audioEngine';
+import { debugMode } from '../../src/utils/debugMode';
 import { applyMix, matches, snapshot, targets, trackIdentity } from './remoteState';
 import type { Clock, Dispatch, Receipt, Source } from './remoteState';
 import { Dialog, DialogBody, DialogHeader } from '../../src/components/ui/Dialog';
@@ -176,6 +177,9 @@ export default memo(function RemoteConnectionBridge({ project, setlist, activati
           }
         }
         pending = awaiting;
+        for (const r of receipts) {
+          if (r.outcome !== 'applied') debugMode.trace('remoto', () => `comando ${r.id}: acuse «${r.outcome}»`);
+        }
         const state = snapshot({ ...source.current, activating: activationCount.current > 0 }, transport, currentRevision,
           clockRevision === currentRevision ? previousClock : undefined, Date.now());
         previousClock = state.clock;
@@ -199,6 +203,7 @@ export default memo(function RemoteConnectionBridge({ project, setlist, activati
         mixerConnected = reply.devices.some((device) => device.role === 'mixer');
         setDevices((previous) => sameDevices(previous, reply.devices) ? previous : reply.devices);
         if (reply.commands.length) {
+          debugMode.trace('remoto', () => `${reply.commands.length} comando(s) recibidos del celular`);
           const byControl = new Map<string, Dispatch>();
           const mounting = audioEngine.getTransportState().isMountingSong;
           for (const command of reply.commands) {
@@ -227,6 +232,7 @@ export default memo(function RemoteConnectionBridge({ project, setlist, activati
       } catch (error) {
         if (!active()) return;
         console.error('[OmniTracks LAN] Falló el puente', error);
+        debugMode.alarm('puente-remoto-caido', `un intercambio falló y se apaga el servidor: ${errorMessage(error)}`);
         setRemoteConnection(null);
         setNotice('Se interrumpió la conexión remota: ' + errorMessage(error));
         void call('remote_stop', { epoch: activeEpoch }).catch((stopError: unknown) => console.error('[OmniTracks LAN]', stopError));
