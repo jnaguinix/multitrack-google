@@ -48,6 +48,29 @@ pub fn resolve_output_config(
     ))
 }
 
+/// Frecuencia mínima aceptable para una caché PCM. Windows puede dejar la salida en un formato de teléfono
+/// (8 000 o 16 000 Hz) cuando algo usa el micrófono de unos auriculares; una caché generada así suena sin
+/// agudos y, si el stream queda abierto a otra frecuencia, en cámara lenta.
+pub const MIN_CACHE_RATE: u32 = 44_100;
+/// Frecuencia máxima aceptable (hardware de estudio).
+pub const MAX_CACHE_RATE: u32 = 192_000;
+/// Frecuencia de la caché cuando no se pide ninguna o la pedida no es razonable.
+pub const FALLBACK_CACHE_RATE: u32 = 48_000;
+
+/// La frecuencia a la que se genera y se busca la caché: la pedida si es razonable, y si no 48 000 Hz.
+pub fn effective_cache_rate(requested: Option<u32>) -> u32 {
+    match requested {
+        Some(r) if (MIN_CACHE_RATE..=MAX_CACHE_RATE).contains(&r) => r,
+        _ => FALLBACK_CACHE_RATE,
+    }
+}
+
+/// ¿Hay que reabrir el stream? Sí si hay uno abierto a una frecuencia distinta de la de la caché cargada: los
+/// feeders producen a la frecuencia de la caché y el callback consumiría a otra velocidad.
+pub fn stream_needs_reopen(open_rate: Option<u32>, cache_rate: Option<u32>) -> bool {
+    matches!((open_rate, cache_rate), (Some(open), Some(cache)) if open != cache)
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct AudioSettings {
@@ -56,6 +79,13 @@ pub struct AudioSettings {
     pub sample_rate: Option<u32>,
     pub buffer_size: Option<u32>,
     pub test_channel: Option<u16>,
+}
+
+impl AudioSettings {
+    /// Frecuencia de la caché PCM según los ajustes (ver `effective_cache_rate`).
+    pub fn cache_rate(&self) -> u32 {
+        effective_cache_rate(self.sample_rate)
+    }
 }
 
 impl Default for AudioSettings {
@@ -637,5 +667,37 @@ mod tests {
         assert_eq!(reset_stats.min_ring_buffer_level_ms, None);
 
         let _ = std::fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn test_una_frecuencia_de_telefono_no_se_usa_para_la_cache() {
+        // Caso real (2026-11-20): Windows dejó los auriculares a 8 000 Hz y se generó la caché a esa frecuencia.
+        assert_eq!(effective_cache_rate(Some(8_000)), 48_000);
+        assert_eq!(effective_cache_rate(Some(16_000)), 48_000);
+        assert_eq!(effective_cache_rate(Some(0)), 48_000);
+        assert_eq!(effective_cache_rate(Some(10_000_000)), 48_000);
+        assert_eq!(effective_cache_rate(None), 48_000);
+    }
+
+    #[test]
+    fn test_las_frecuencias_normales_se_respetan() {
+        for r in [44_100, 48_000, 88_200, 96_000, 192_000] {
+            assert_eq!(effective_cache_rate(Some(r)), r);
+        }
+        let ajustes = AudioSettings { sample_rate: Some(8_000), ..AudioSettings::default() };
+        assert_eq!(ajustes.cache_rate(), 48_000);
+        let ajustes = AudioSettings { sample_rate: Some(44_100), ..AudioSettings::default() };
+        assert_eq!(ajustes.cache_rate(), 44_100);
+    }
+
+    #[test]
+    fn test_un_stream_a_otra_frecuencia_que_la_cache_se_reabre() {
+        // Stream abierto a 8 000 Hz y caché a 48 000 Hz: sonaría 6 veces más lento.
+        assert!(stream_needs_reopen(Some(8_000), Some(48_000)));
+        assert!(stream_needs_reopen(Some(48_000), Some(44_100)));
+        // Misma frecuencia, sin stream o sin proyecto cargado: no hay nada que reabrir.
+        assert!(!stream_needs_reopen(Some(48_000), Some(48_000)));
+        assert!(!stream_needs_reopen(None, Some(48_000)));
+        assert!(!stream_needs_reopen(Some(48_000), None));
     }
 }

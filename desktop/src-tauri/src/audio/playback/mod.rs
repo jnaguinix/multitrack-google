@@ -10,7 +10,7 @@ use tokio::sync::Mutex as TokioMutex;
 
 use crate::audio::cache::{get_project_cache_dir, read_track_metadata};
 use crate::audio::metronome::{MetronomeConfig, MetronomeEngine};
-use crate::audio::output::{get_device_name, resolve_output_config, AudioEngineState, AudioStreamStats};
+use crate::audio::output::{get_device_name, resolve_output_config, stream_needs_reopen, AudioEngineState, AudioStreamStats};
 use crate::audio::pitch::{new_pitch_shifter, PitchShifter};
 use crate::audio::resampler::TrackResampler;
 use crate::audio::routing::{self, RouteTable, RoutingSlot};
@@ -65,6 +65,9 @@ pub struct PlaybackEngine {
     pub stream_tracks: Arc<std::sync::Mutex<Vec<StreamTrackHandle>>>,
     pub fade: Arc<std::sync::Mutex<FadeEnvelope>>,
     pub stream: TokioMutex<Option<cpal::Stream>>,
+    /// Frecuencia (Hz) a la que se abrió el stream actual; 0 si no hay ninguno. Distinta de `sample_rate`, que
+    /// pasa a ser la de la caché al cargar un proyecto: si difieren hay que reabrir (`stream_needs_reopen`).
+    pub stream_rate: AtomicU32,
     pub stats: Arc<AudioStreamStats>,
 
     // Phase 4 fields:
@@ -111,6 +114,7 @@ impl PlaybackEngine {
             stream_tracks: Arc::new(std::sync::Mutex::new(Vec::new())),
             fade: Arc::new(std::sync::Mutex::new(FadeEnvelope::new(FADE_MS, 48000))),
             stream: TokioMutex::new(None),
+            stream_rate: AtomicU32::new(0),
             stats,
             sections: Arc::new(std::sync::Mutex::new(Vec::new())),
             quantize_mode: Arc::new(std::sync::Mutex::new("1-bar".to_string())),
@@ -820,11 +824,20 @@ impl PlaybackEngine {
         let mut stream_guard = self.stream.lock().await;
         if stream_guard.is_some() {
             // Un stream abierto cuyo dispositivo se desconectó no sirve: se descarta y se vuelve a resolver
-            // (y a validar) el dispositivo antes de reproducir.
-            if !self.device_disconnected.load(Ordering::SeqCst) {
+            // (y a validar) el dispositivo antes de reproducir. Tampoco sirve uno abierto a otra frecuencia que
+            // la caché cargada (p. ej. abierto antes de montar la canción): sonaría a otra velocidad.
+            let open_rate = self.stream_rate.load(Ordering::SeqCst);
+            let cache_rate = if self.loaded_project_id.lock().await.is_some() {
+                Some(self.sample_rate.load(Ordering::SeqCst))
+            } else {
+                None
+            };
+            let rate_mismatch = stream_needs_reopen((open_rate != 0).then_some(open_rate), cache_rate);
+            if !self.device_disconnected.load(Ordering::SeqCst) && !rate_mismatch {
                 return Ok(());
             }
             *stream_guard = None;
+            self.stream_rate.store(0, Ordering::SeqCst);
             self.device_disconnected.store(false, Ordering::SeqCst);
         }
 
@@ -916,6 +929,7 @@ impl PlaybackEngine {
             .map_err(|e| format!("Error construyendo corriente de salida CPAL: {e}"))?;
 
         stream.play().map_err(|e| format!("Error iniciando stream: {e}"))?;
+        self.stream_rate.store(sample_rate_u32, Ordering::SeqCst);
         *stream_guard = Some(stream);
 
         Ok(())

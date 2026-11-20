@@ -112,7 +112,7 @@ pub async fn audio_analyze_loudness(
         .path()
         .app_local_data_dir()
         .map_err(|e| format!("Error resolviendo app_local_data_dir: {e}"))?;
-    let preferred_rate = state.current_settings.lock().await.sample_rate.unwrap_or(48000);
+    let preferred_rate = state.current_settings.lock().await.cache_rate();
     let ids = match project_id {
         Some(id) => vec![id],
         None => crate::library::setlist_song_ids(&local_data)?,
@@ -151,10 +151,10 @@ pub async fn audio_import_tracks(
         .unwrap_or_else(|_| PathBuf::from("."));
 
     let sample_rate = if let Some(r) = target_sample_rate {
-        r
+        output::effective_cache_rate(Some(r))
     } else {
         let settings = state.current_settings.lock().await;
-        settings.sample_rate.unwrap_or(48000)
+        settings.cache_rate()
     };
 
     // La caché de esta canción va a cambiar: lo que se estuviera midiendo ya no vale.
@@ -301,10 +301,10 @@ pub async fn audio_get_project_cache_status(
         .unwrap_or_else(|_| PathBuf::from("."));
 
     let rate = if let Some(r) = sample_rate {
-        r
+        output::effective_cache_rate(Some(r))
     } else {
         let settings = state.current_settings.lock().await;
-        settings.sample_rate.unwrap_or(48000)
+        settings.cache_rate()
     };
 
     let total_tracks_count = track_ids.len();
@@ -348,7 +348,7 @@ pub async fn audio_load_project(
         .map_err(|e| format!("Error resolviendo app_local_data_dir: {e}"))?;
 
     let settings = state.current_settings.lock().await;
-    let sr = settings.sample_rate.unwrap_or(48000);
+    let sr = settings.cache_rate();
 
     state
         .playback
@@ -644,7 +644,7 @@ pub async fn audio_preload_project(
         .map_err(|e| format!("Error resolviendo app_local_data_dir: {e}"))?;
 
     let settings = state.current_settings.lock().await;
-    let sr = settings.sample_rate.unwrap_or(48000);
+    let sr = settings.cache_rate();
 
     state.playback.preload_project(&local_data, &project_id, sr).await
 }
@@ -674,7 +674,7 @@ pub async fn audio_switch_to_preloaded(
         .map_err(|e| format!("Error resolviendo app_local_data_dir: {e}"))?;
 
     let settings = state.current_settings.lock().await;
-    let sr = settings.sample_rate.unwrap_or(48000);
+    let sr = settings.cache_rate();
 
     state.playback.switch_to_preloaded(&local_data, sr).await
 }
@@ -1001,10 +1001,10 @@ pub async fn audio_import_track_bytes_raw(
         .unwrap_or_else(|_| PathBuf::from("."));
 
     let sample_rate = if let Some(r) = target_sample_rate {
-        r
+        output::effective_cache_rate(Some(r))
     } else {
         let settings = state.current_settings.lock().await;
-        settings.sample_rate.unwrap_or(48000)
+        settings.cache_rate()
     };
 
     cache::check_free_disk_space(&local_data, (bytes.len() as u64) * 4)?;
