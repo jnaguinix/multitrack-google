@@ -10,6 +10,9 @@ import './connection.css';
 
 type Invoke = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
 
+/** Por debajo de esta frecuencia la salida no sirve para música (el motor también lo exige). */
+const MIN_WORK_SAMPLE_RATE = 44100;
+
 interface AudioDeviceInfo {
   id: string;
   name: string;
@@ -252,7 +255,9 @@ export default memo(function DesktopAudioSettings({ triggerHost }: Props) {
       const settingsToSave: AudioSettings = {
         host: selectedHost,
         deviceName: activeDevice ? activeDevice.name : null,
-        sampleRate: activeDevice ? activeDevice.defaultSampleRate : null,
+        // Una salida a menos de 44,1 kHz (formato de teléfono de unos auriculares con micrófono) no es una frecuencia
+        // de trabajo: se deja vacío y el motor usa 48 kHz.
+        sampleRate: activeDevice && activeDevice.defaultSampleRate >= MIN_WORK_SAMPLE_RATE ? activeDevice.defaultSampleRate : null,
         bufferSize: activeDevice?.minBufferSize ?? null,
         testChannel: selectedChannel,
       };
@@ -353,6 +358,13 @@ export default memo(function DesktopAudioSettings({ triggerHost }: Props) {
         {activeDevice && (
           <div className="text-[11px] text-neutral-400 font-mono">
             {activeDevice.channels} salidas · {activeDevice.defaultSampleRate.toLocaleString('es-ES')} Hz · búfer {activeDevice.minBufferSize ?? 480} ({Math.round(((activeDevice.minBufferSize ?? 480) / (activeDevice.defaultSampleRate || 48000)) * 1000)} ms) · {activeDevice.sampleFormat || 'f32'}
+          </div>
+        )}
+        {activeDevice && activeDevice.defaultSampleRate < MIN_WORK_SAMPLE_RATE && (
+          <div role="alert" className="text-[12px] text-amber-400">
+            Windows tiene esta salida a {activeDevice.defaultSampleRate.toLocaleString('es-ES')} Hz (formato de teléfono). La música sonaría
+            mal o en cámara lenta. En Sonido de Windows → Reproducción → Propiedades → Opciones avanzadas, elige 48 000 Hz y cierra
+            lo que use el micrófono de esos auriculares.
           </div>
         )}
 
