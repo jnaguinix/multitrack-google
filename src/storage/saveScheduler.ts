@@ -11,8 +11,10 @@ export class SaveScheduler<T extends { id: string }> {
     private readonly save: (item: T) => Promise<void>,
     private readonly onError: (error: unknown) => void,
     private readonly delayMs = 400,
-    private readonly setTimer: typeof setTimeout = setTimeout,
-    private readonly clearTimer: typeof clearTimeout = clearTimeout
+    // Envueltos en funciones: `setTimeout` suelto guardado en una propiedad y llamado como `this.setTimer(...)` hace que
+    // el navegador lance «Illegal invocation» (exige `window` como `this`).
+    private readonly setTimer: typeof setTimeout = ((handler: () => void, ms?: number) => setTimeout(handler, ms)) as typeof setTimeout,
+    private readonly clearTimer: typeof clearTimeout = ((id?: ReturnType<typeof setTimeout>) => clearTimeout(id)) as typeof clearTimeout
   ) {}
 
   /** Guarda dentro de `delayMs`; si llega otro cambio de la misma canción antes, solo se guarda el último. */
