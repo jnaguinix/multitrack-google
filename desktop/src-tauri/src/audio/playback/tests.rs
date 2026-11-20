@@ -1090,6 +1090,145 @@
         assert!(buf.iter().any(|v| v.abs() > 1e-3), "el bloque contado sí llevaba audio");
     }
 
+    /// Deja asentarse el suavizado de volumen: renderiza `n` bloques y vacía los medidores.
+    fn asentar(engine: &PlaybackEngine, buf: &mut [f32], n: usize) {
+        for _ in 0..n {
+            engine.simulate_callback_block(buf, 2);
+        }
+        let _ = engine.get_playback_state();
+    }
+
+    /// Renderiza `bloques` bloques de 480 fotogramas tras aplicar `cambio` y devuelve la salida intercalada junto con
+    /// el último valor del bloque anterior (para medir también el salto en la frontera entre bloques).
+    fn salida_tras_cambio(
+        engine: &PlaybackEngine,
+        bloques: usize,
+        cambio: impl FnOnce(&PlaybackEngine),
+    ) -> (Vec<f32>, [f32; 2]) {
+        let mut buf = vec![0.0f32; 480 * 2];
+        engine.simulate_callback_block(&mut buf, 2);
+        let previo = [buf[buf.len() - 2], buf[buf.len() - 1]];
+        cambio(engine);
+        let mut salida = Vec::new();
+        for _ in 0..bloques {
+            engine.simulate_callback_block(&mut buf, 2);
+            salida.extend_from_slice(&buf);
+        }
+        (salida, previo)
+    }
+
+    /// Mayor diferencia entre dos fotogramas consecutivos, por canal, empezando en el último fotograma previo.
+    fn mayor_salto(salida: &[f32], previo: [f32; 2]) -> f32 {
+        let mut ultimo = previo;
+        let mut mayor = 0.0f32;
+        for frame in salida.chunks_exact(2) {
+            mayor = mayor.max((frame[0] - ultimo[0]).abs()).max((frame[1] - ultimo[1]).abs());
+            ultimo = [frame[0], frame[1]];
+        }
+        mayor
+    }
+
+    fn motor_estable() -> PlaybackEngine {
+        let engine = engine_con_pistas(&[("a", 0.5)], 48_000);
+        // Sin micro-fundido de entrada: interesa el nivel estable.
+        *engine.fade.lock().unwrap() = FadeEnvelope::new(FADE_MS, 48000);
+        let mut buf = vec![0.0f32; 480 * 2];
+        asentar(&engine, &mut buf, 3);
+        engine
+    }
+
+    /// Un salto de 20 dB en el fader de una pista no puede aparecer como escalón en el audio: se reparte en una
+    /// rampa. Sin suavizado el salto entre dos fotogramas era de ~0,32 (un clic); con la rampa, de milésimas.
+    #[test]
+    fn test_un_cambio_de_volumen_de_pista_no_da_un_escalon() {
+        let k = std::f32::consts::FRAC_1_SQRT_2;
+        let engine = motor_estable();
+        let (salida, previo) = salida_tras_cambio(&engine, 24, |e| {
+            e.tracks.try_lock().unwrap()[0].gain.store(0.1f32.to_bits(), Ordering::SeqCst);
+        });
+        let salto = mayor_salto(&salida, previo);
+        assert!(salto < 0.01, "el volumen no debe saltar entre fotogramas (salto {salto})");
+        let primero = salida[0];
+        assert!(primero > 0.5 * k * 0.5, "la rampa empieza cerca del volumen anterior, no en el nuevo ({primero})");
+        let ultimo = salida[salida.len() - 2];
+        assert!((ultimo - 0.5 * k * 0.1).abs() < 1e-5, "al asentarse, el volumen es exactamente el pedido ({ultimo})");
+    }
+
+    #[test]
+    fn test_un_cambio_de_paneo_no_da_un_escalon() {
+        let engine = motor_estable();
+        let (salida, previo) = salida_tras_cambio(&engine, 24, |e| {
+            e.tracks.try_lock().unwrap()[0].pan.store(100, Ordering::SeqCst);
+        });
+        let salto = mayor_salto(&salida, previo);
+        assert!(salto < 0.01, "el paneo no debe saltar entre fotogramas (salto {salto})");
+        let ultimo = &salida[salida.len() - 2..];
+        assert!(ultimo[0].abs() < 1e-5, "a la derecha del todo el canal izquierdo queda en silencio ({})", ultimo[0]);
+    }
+
+    #[test]
+    fn test_un_cambio_del_volumen_master_no_da_un_escalon() {
+        let k = std::f32::consts::FRAC_1_SQRT_2;
+        let engine = motor_estable();
+        let (salida, previo) = salida_tras_cambio(&engine, 24, |e| {
+            e.master_gain.store(0.1f32.to_bits(), Ordering::SeqCst);
+        });
+        let salto = mayor_salto(&salida, previo);
+        assert!(salto < 0.01, "el master no debe saltar entre fotogramas (salto {salto})");
+        let ultimo = salida[salida.len() - 2];
+        assert!((ultimo - 0.5 * k * 0.1).abs() < 1e-5, "al asentarse, el master es exactamente el pedido ({ultimo})");
+    }
+
+    /// Sin cambios, el suavizado no toca el audio: la ganancia es exactamente la pedida (regla de «ganancia 1,0 exacta»).
+    #[test]
+    fn test_sin_cambios_el_suavizado_deja_la_ganancia_exacta() {
+        let k = std::f32::consts::FRAC_1_SQRT_2;
+        let engine = motor_estable();
+        let mut buf = vec![0.0f32; 480 * 2];
+        for _ in 0..10 {
+            engine.simulate_callback_block(&mut buf, 2);
+            for v in &buf {
+                assert!((v - 0.5 * k).abs() < 1e-6, "ganancia estable alterada: {v}");
+            }
+        }
+    }
+
+    /// Mover el fader en cada bloque (el peor caso: arrastre continuo) tampoco asigna memoria en el callback.
+    #[test]
+    fn test_el_suavizado_de_volumen_no_asigna_memoria() {
+        let engine = engine_con_pistas(&[("a", 0.5), ("b", 0.25)], 16_384);
+        let mut buf = vec![0.0f32; 480 * 2];
+        engine.simulate_callback_block(&mut buf, 2);
+        let asignaciones = crate::alloc_probe::count_allocs(|| {
+            for i in 0..20 {
+                let g = if i % 2 == 0 { 0.2f32 } else { 1.0f32 };
+                engine.tracks.try_lock().unwrap()[0].gain.store(g.to_bits(), Ordering::SeqCst);
+                engine.master_gain.store(g.to_bits(), Ordering::SeqCst);
+                engine.simulate_callback_block(&mut buf, 2);
+            }
+        });
+        assert_eq!(asignaciones, 0, "el callback no debe asignar memoria al suavizar el volumen");
+    }
+
+    #[test]
+    fn test_funciones_del_suavizado() {
+        use super::block::{smooth_toward, smoothing_alpha};
+        // Sin inicializar (NaN) salta directo al objetivo.
+        assert_eq!(smooth_toward(f32::NAN, 0.7, 0.3), 0.7);
+        // Se acerca sin pasarse y acaba exactamente en el objetivo.
+        let mut v = 1.0f32;
+        let mut anterior = v;
+        for _ in 0..200 {
+            v = smooth_toward(v, 0.2, 0.3);
+            assert!(v <= anterior && v >= 0.2, "baja sin pasarse: {v}");
+            anterior = v;
+        }
+        assert_eq!(v, 0.2, "se pega al objetivo");
+        // Mismo tiempo de asentamiento sea cual sea el tamaño del bloque: dos medios bloques = un bloque.
+        let (media, entera) = (smoothing_alpha(240, 48_000), smoothing_alpha(480, 48_000));
+        assert!(((1.0 - media) * (1.0 - media) - (1.0 - entera)).abs() < 1e-5);
+    }
+
     fn nivel(state: &PlaybackStateSnapshot, id: &str) -> (f32, f32) {
         state
             .meters
@@ -1103,7 +1242,7 @@
     #[test]
     fn test_medidores_por_pista_post_fader_y_mute_solo() {
         let k = std::f32::consts::FRAC_1_SQRT_2; // pan centro: cos(π/4) = sin(π/4)
-        let engine = engine_con_pistas(&[("a", 0.5), ("b", 0.25)], 4096);
+        let engine = engine_con_pistas(&[("a", 0.5), ("b", 0.25)], 16_384);
         let mut buf = vec![0.0f32; 512 * 2];
 
         engine.simulate_callback_block(&mut buf, 2);
@@ -1134,6 +1273,7 @@
 
         // Ganancia 0,5 en b: el pico baja a la mitad (post-fader).
         engine.tracks.try_lock().unwrap()[1].gain.store(0.5f32.to_bits(), Ordering::SeqCst);
+        asentar(&engine, &mut buf, 12); // el volumen llega al nuevo valor con una rampa, no de golpe
         engine.simulate_callback_block(&mut buf, 2);
         let s = engine.get_playback_state();
         assert!((nivel(&s, "b").0 - 0.125 * k).abs() < 1e-4, "post-fader: {}", nivel(&s, "b").0);
@@ -1142,7 +1282,7 @@
     #[test]
     fn test_medidor_main_sigue_la_suma_y_el_master() {
         let k = std::f32::consts::FRAC_1_SQRT_2;
-        let engine = engine_con_pistas(&[("a", 0.5), ("b", 0.25)], 8192);
+        let engine = engine_con_pistas(&[("a", 0.5), ("b", 0.25)], 32_768);
         // Sin micro-fundido: interesa el nivel estable del bus.
         *engine.fade.lock().unwrap() = FadeEnvelope::new(FADE_MS, 48000);
         let mut buf = vec![0.0f32; 1024 * 2];
@@ -1155,6 +1295,7 @@
         assert!(!s.meters.clipped, "sin recorte");
 
         engine.master_gain.store(0.5f32.to_bits(), Ordering::SeqCst);
+        asentar(&engine, &mut buf, 8);
         engine.simulate_callback_block(&mut buf, 2);
         let s = engine.get_playback_state();
         assert!((s.meters.main.l - esperado * 0.5).abs() < 1e-3, "master a 0,5: {}", s.meters.main.l);
@@ -1162,6 +1303,7 @@
         // Ganancia alta en a: la salida supera 1,0 antes del recorte.
         engine.master_gain.store(1.0f32.to_bits(), Ordering::SeqCst);
         engine.tracks.try_lock().unwrap()[0].gain.store(4.0f32.to_bits(), Ordering::SeqCst);
+        asentar(&engine, &mut buf, 8);
         engine.simulate_callback_block(&mut buf, 2);
         let s = engine.get_playback_state();
         assert!(s.meters.clipped, "salida por encima de 1,0 -> recorte");
@@ -1725,6 +1867,13 @@
         picos
     }
 
+    /// Deja asentarse el suavizado de volumen y paneo tras un cambio (el valor llega con una rampa de unos 30 ms) y
+    /// vacía los medidores, para medir ya el nivel final.
+    fn asentar_picos(engine: &PlaybackEngine, canales: usize) {
+        picos_por_canal(engine, canales, 30);
+        let _ = engine.take_meters();
+    }
+
     #[tokio::test]
     async fn test_ruteo_4_salidas_separa_musica_click_y_guia_sin_filtraciones() {
         let engine = motor_con_buses("ruteo4", &proponer_ruteo(4)).await;
@@ -1785,6 +1934,7 @@
 
         // Fader de la música muy arriba: la salida pasa del umbral y el contador lo registra.
         engine.set_track_controls("musica", Some(20.0), None, None, None, None).await;
+        asentar_picos(&engine, 2);
         let p = picos_por_canal(&engine, 2, 40);
         assert!(p[1] <= 1.0, "el limitador evita el recorte duro: {p:?}");
         assert!(engine.stats.limited_samples.load(Ordering::Relaxed) > 0, "el contador registra cuando el limitador actúa");
@@ -1797,12 +1947,14 @@
         engine.set_track_controls("musica", None, Some(-100), None, None, None).await;
         engine.set_track_controls("click", None, None, Some(true), None, None).await;
         engine.set_track_controls("guia", None, None, Some(true), None, None).await;
+        asentar_picos(&engine, 3);
         let izq = picos_por_canal(&engine, 3, 80);
         assert!(izq[0] > 1e-3, "{izq:?}");
         assert!(izq[1] < 1e-5, "con 3 salidas la música izquierda y derecha son salidas distintas, sin downmix: {izq:?}");
         assert_eq!(izq[2], 0.0);
 
         engine.set_track_controls("musica", None, Some(100), None, None, None).await;
+        asentar_picos(&engine, 3);
         let der = picos_por_canal(&engine, 3, 40);
         assert!(der[1] > 1e-3 && der[0] < 1e-5, "{der:?}");
     }
@@ -2010,6 +2162,7 @@
             salida[0]
         );
         engine.set_monitor_gain(0.0);
+        asentar_picos(&engine, 2);
         picos_por_canal(&engine, 2, 40);
         assert_eq!(engine.take_meters().monitor.l, 0.0, "con el fader a 0 el medidor queda en cero");
     }
@@ -2037,13 +2190,16 @@
         engine.set_track_controls("musica", None, None, Some(false), None, None).await;
         // Volumen general del monitor a cero: silencio en auriculares; la música sigue.
         engine.set_monitor_gain(0.0);
+        asentar_picos(&engine, 2);
         let g = picos_por_canal(&engine, 2, 40);
         assert_eq!(g[0], 0.0, "con el volumen del monitor a 0 no sale nada: {g:?}");
         assert!(g[1] > 1e-3, "la música no cambia: {g:?}");
         // Mitad de volumen: el envío baja a la mitad.
         engine.set_monitor_gain(1.0);
+        asentar_picos(&engine, 2);
         let pleno = picos_por_canal(&engine, 2, 80)[0];
         engine.set_monitor_gain(0.5);
+        asentar_picos(&engine, 2);
         let medio = picos_por_canal(&engine, 2, 80)[0];
         assert!(medio < pleno * 0.75, "el volumen general del monitor escala el envío ({medio} vs {pleno})");
     }
