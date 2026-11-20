@@ -1453,9 +1453,13 @@
   padding: 8px clamp(14px, 2vw, 26px) 12px;
 }
 .lt-plan-header { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px 18px; }
-.lt-plan-name { display: grid; gap: 4px; min-width: 0; flex: 1 1 320px; }
+.lt-plan-name { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 18px; min-width: 0; flex: 1 1 320px; }
+/* El nombre ocupa lo que mide su texto y la fecha, el total y el estado van a su lado (una sola fila: ahorra altura). */
 .lt-plan-name > input {
-  width: 100%;
+  width: auto;
+  max-width: 100%;
+  min-width: 9ch;
+  field-sizing: content;
   background: transparent;
   border: 0;
   border-bottom: 1px dashed transparent;
@@ -1466,6 +1470,7 @@
   letter-spacing: -.02em;
   padding: 2px 0;
 }
+@supports not (field-sizing: content) { .lt-plan-name > input { width: 14rem; } }
 .lt-plan-name > input::placeholder { color: var(--lt-mut); font-weight: 500; }
 .lt-plan-name > input:hover, .lt-plan-name > input:focus { border-bottom-color: var(--lt-line); }
 .lt-plan-summary { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 14px; color: var(--lt-mut); font-size: 13px; }
