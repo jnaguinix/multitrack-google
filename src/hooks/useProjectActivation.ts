@@ -1,9 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { audioEngine } from '../audio/audioEngine';
 import { logAsyncError } from '../utils/asyncErrors';
+import { debugMode } from '../utils/debugMode';
 import { normalizeProjectSectionsToTime, saveProjectToDb } from '../storage/projectDb';
 import { resolveTransition } from '../utils/setlistTransition';
 import type { SetlistTransitionMode, SongProject } from '../types/project';
+
+/** `mounted`: la canción quedó montada; `superseded`: se eligió otra después (no es un fallo); `failed`: no se pudo montar. */
+export type ActivationResult = 'mounted' | 'superseded' | 'failed';
 
 interface Deps {
   currentProjectRef: React.MutableRefObject<SongProject | null>;
@@ -30,6 +34,8 @@ export function useProjectActivation({
 }: Deps) {
   // Counts in-flight activateProject() calls so next-song preload waits for the active song to finish decoding
   const activationCountRef = useRef(0);
+  /** Número de la última activación pedida: solo esa puede publicar su resultado (la última orden manda). */
+  const activationSeqRef = useRef(0);
   const [isActivatingProject, setIsActivatingProject] = useState(false);
 
   // Activate a project using cached AudioBuffers if available and log console.info metrics
@@ -38,8 +44,10 @@ export function useProjectActivation({
       projectToLoad: SongProject,
       predecodedBuffers?: Map<string, AudioBuffer>,
       explicitPlayIfAlreadyInRam = false
-    ) => {
+    ): Promise<ActivationResult> => {
       const t0 = performance.now();
+      const seq = ++activationSeqRef.current;
+      const superseded = () => seq !== activationSeqRef.current;
       activationCountRef.current++;
       setIsActivatingProject(true);
       try {
@@ -57,10 +65,14 @@ export function useProjectActivation({
 
         const { peaksMap, wasCancelled } = await audioEngine.loadProject(normalizedProj, cachedBuffers);
 
-        // If user switched to another song while this one was still decoding, abort
-        if (wasCancelled) return;
+        // Si el usuario eligió otra canción mientras esta se montaba, esta ya no publica nada ni reproduce.
+        if (wasCancelled || superseded()) {
+          debugMode.trace('carga', () => `activación de ${normalizedProj.id} descartada (superada por otra más reciente)`);
+          return 'superseded';
+        }
 
-        if (normalizedProj.tracks.length > 0 && !audioEngine.hasPlayableAudio()) {
+        const playable = normalizedProj.tracks.length === 0 || audioEngine.hasPlayableAudio();
+        if (!playable) {
           showToast(
             `No se pudo cargar el audio de "${normalizedProj.title}". Revisa que los archivos originales existan y estén permitidos (Biblioteca → Reubicar archivos).`
           );
@@ -97,10 +109,13 @@ export function useProjectActivation({
         // Never start spontaneous playback after a slow disk load;
         // only play if explicitly requested AND the song was already 100% ready in RAM / staged streaming
         if (explicitPlayIfAlreadyInRam && (cameFromCache || isDesktopApp) && audioEngine.hasPlayableAudio()) {
-          audioEngine.play();
+          void audioEngine.play();
         }
+        return playable ? 'mounted' : 'failed';
       } catch (err) {
         console.error('Error loading project into engine:', err);
+        debugMode.error(`montar «${projectToLoad.title}»`, err);
+        return 'failed';
       } finally {
         activationCountRef.current = Math.max(0, activationCountRef.current - 1);
         if (activationCountRef.current === 0) setIsActivatingProject(false);
@@ -126,10 +141,24 @@ export function useProjectActivation({
         return;
       }
 
-      const isReadyInRam = audioEngine.getSongRamCacheInfo(nextSong).isReady;
-      await activateProject(nextSong, undefined, autoPlay && isReadyInRam);
+      // «Lista» lo dice el motor (caché en disco al día), no el campo `pcm` de las pistas en React, que puede estar
+      // sin rellenar aunque la caché exista y dejaba la siguiente montada y en pausa en pleno servicio.
+      let cacheReady = false;
+      if (autoPlay) {
+        try {
+          cacheReady = (await audioEngine.checkProjectCacheStatus(nextSong)).isReady;
+        } catch (err) {
+          debugMode.error('comprobar la caché de la siguiente canción', err);
+        }
+      }
+      const result = await activateProject(nextSong, undefined, autoPlay && cacheReady);
+      if (result === 'superseded') return;
+      if (result === 'failed') {
+        showToast(`No se pudo montar la siguiente canción: ${nextSong.title}. Revisa sus archivos o pulsa «Generar caché nativa».`);
+        return;
+      }
       showToast(
-        autoPlay && isReadyInRam
+        autoPlay && cacheReady
           ? `Reproduciendo siguiente en Setlist: ${nextSong.title}`
           : `Siguiente canción lista en 00:00: ${nextSong.title}`
       );
@@ -142,8 +171,13 @@ export function useProjectActivation({
     const idx = setlistQueue.findIndex((s) => s.id === activeId);
     if (idx > 0) {
       const prevSong = setlistQueue[idx - 1];
-      await activateProject(prevSong, undefined, false);
-      showToast(`Canción anterior cargada en 00:00: ${prevSong.title}`);
+      const result = await activateProject(prevSong, undefined, false);
+      if (result === 'superseded') return;
+      showToast(
+        result === 'mounted'
+          ? `Canción anterior cargada en 00:00: ${prevSong.title}`
+          : `No se pudo montar la canción anterior: ${prevSong.title}.`
+      );
     }
   }, [activateProject, setlistQueue, showToast]);
 

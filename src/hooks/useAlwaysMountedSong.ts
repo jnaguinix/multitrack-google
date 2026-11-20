@@ -8,7 +8,7 @@ interface Deps {
   setlistQueue: SongProject[];
   /** Hay una canción montándose o una importación en curso: no se monta otra encima. */
   busy: boolean;
-  activateProject: (project: SongProject, predecoded?: undefined, play?: boolean) => Promise<void>;
+  activateProject: (project: SongProject, predecoded?: undefined, play?: boolean) => Promise<unknown>;
 }
 
 /**

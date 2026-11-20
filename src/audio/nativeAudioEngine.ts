@@ -58,6 +58,9 @@ export interface NativePlaybackSnapshot {
 }
 
 /** Reloj para la caída de los medidores (performance.now si existe). */
+/** Máximo que Play espera a que el motor confirme la mezcla pendiente. */
+const CONTROLS_WAIT_MAX_MS = 1500;
+
 const meterNow = (): number =>
   typeof performance !== 'undefined' && typeof performance.now === 'function' ? performance.now() : Date.now();
 
@@ -304,10 +307,7 @@ export class NativeAudioEngine {
     }
 
     const projId = this.currentProject.id;
-    debugMode.trace('transporte', () => `play pedido: canción ${projId}, cargada en el motor: ${this.loadedProjectId ?? 'ninguna'}, cola de controles ${this.controlSync.queue.isIdle() ? 'en reposo' : 'CON ÓRDENES PENDIENTES'}`);
-    if (!this.controlSync.queue.isIdle()) {
-      debugMode.alarm('play-antes-de-controles', `Play sale con la cola de controles sin vaciar (canción ${projId}): el motor puede arrancar con una mezcla anterior`);
-    }
+    debugMode.trace('transporte', () => `play pedido: canción ${projId}, cargada en el motor: ${this.loadedProjectId ?? 'ninguna'}, cola de controles ${this.controlSync.queue.isIdle() ? 'en reposo' : 'con órdenes pendientes (se espera)'}`);
     const progress = this.cache.getImportProgress(projId);
     if (progress && !progress.completed) {
       this.playPendingProjectId = projId;
@@ -329,12 +329,35 @@ export class NativeAudioEngine {
       }
     }
 
+    // La mezcla (buses, mutes, ganancias) viaja por la cola de controles y Play por otro camino: sin esta espera el
+    // motor podía arrancar con los valores iniciales (Click o Guía por Main, una pista en mute sonando).
+    await this.waitForControlsApplied(projId);
+    if (this.currentProject?.id !== projId) {
+      debugMode.trace('transporte', () => `play cancelado: mientras se aplicaba la mezcla se eligió otra canción (${this.currentProject?.id})`);
+      return;
+    }
     try {
       await invoke('audio_play');
       this.refreshStateNow();
     } catch (err: any) {
       console.warn('[NativeAudioEngine] Error al reproducir:', err);
       this.onNoticeCallback?.(`Error al reproducir: ${err}`);
+    }
+  }
+
+  /** Espera a que el motor confirme las órdenes de mezcla pendientes. Con un tope: un comando colgado no debe impedir tocar. */
+  private async waitForControlsApplied(projId: string): Promise<void> {
+    if (this.controlSync.queue.isIdle()) return;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timedOut = await Promise.race([
+      this.controlSync.queue.idle().then(() => false),
+      new Promise<boolean>((resolve) => {
+        timer = setTimeout(() => resolve(true), CONTROLS_WAIT_MAX_MS);
+      }),
+    ]);
+    if (timer !== undefined) clearTimeout(timer);
+    if (timedOut) {
+      debugMode.alarm('play-antes-de-controles', `Play sale tras ${CONTROLS_WAIT_MAX_MS} ms sin que el motor confirme la mezcla (canción ${projId})`);
     }
   }
 
@@ -526,6 +549,12 @@ export class NativeAudioEngine {
         }
       }
 
+      // Mientras esperaba la caché el usuario pudo elegir otra canción: montar esta ahora detendría el audio y
+      // pisaría la elegida (la última orden es la que manda).
+      if (this.currentProject?.id !== project.id) {
+        debugMode.trace('carga', () => `loadProject ${project.id} descartado antes de montar: la canción elegida ahora es ${this.currentProject?.id}`);
+        return { peaksMap, wasCancelled: true };
+      }
       onProgress?.(70, 'Cargando pistas en motor nativo...');
       const nativeSections = (project.sections || []).map((s) => ({
         id: s.id,
@@ -544,9 +573,13 @@ export class NativeAudioEngine {
           quantizeMode: project.quantizeMode || 'section-end',
         });
 
+        // El motor tiene ahora esta canción (aunque ya no sea la elegida): `loadedProjectId` dice la verdad y Play
+        // vuelve a montar la elegida si no coincide.
         this.loadedProjectId = project.id;
         if (this.currentProject && this.currentProject.id !== project.id) {
           debugMode.alarm('carga-vieja-pisa-a-la-nueva', `terminó la carga de ${project.id} pero la canción actual ya es ${this.currentProject.id}`);
+          this.poller?.invalidate();
+          return { peaksMap, wasCancelled: true };
         }
         debugMode.trace('carga', () => `loadProject ${project.id} terminado en el motor`);
         this.poller?.invalidate();
