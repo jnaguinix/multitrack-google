@@ -42,7 +42,7 @@ El archivo monolítico original fue dividido en el módulo modular `playback/`, 
 desktop/src-tauri/src/audio/playback/
 ├── mod.rs          # PlaybackEngine: estructura central, ciclo de vida, apertura del stream CPAL (ensure_stream) y simulate_callback_block (pruebas)
 ├── callback.rs     # BlockMixer: el bloque del callback de audio (pistas, metrónomo, ruteo, limitador, medidores, reloj). Lo ejecutan el stream CPAL y simulate_callback_block, así que las pruebas ejercitan el mismo código que suena
-├── block.rs        # Piezas por bloque que usa `BlockMixer`: buffering_ready (salida de buffering), consume_track_block (lectura de un anillo con resincronía tras underrun)
+├── block.rs        # Piezas por bloque que usa `BlockMixer`: buffering_ready (salida de buffering), consume_track_block (lectura de un anillo con resincronía tras underrun), smoothing_alpha / smooth_toward (rampa de volumen y paneo: el callback no aplica cambios de fader de golpe, ver «Decisiones cerradas» de `CLAUDE.md`)
 ├── bus.rs          # TrackBus: tipos y conversión de buses de salida (main, cue, both)
 ├── clock.rs        # ClockJumps y advance_clock: saltos de sección y vueltas de vamp aplicados al reloj current_frame desde el callback
 ├── fade.rs         # FadeEnvelope, FadeType y constantes (FADE_MS = 8.0): micro-fundidos
