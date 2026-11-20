@@ -204,7 +204,12 @@ impl PlaybackEngine {
         }
         let queued_section_id = queued_guard.as_ref().map(|q| q.target_section_id.clone());
 
-        let met = self.metronome.lock().unwrap();
+        // El callback toma este mismo mutex con `try_lock` y, si está ocupado, ese bloque sale sin click. Por eso solo
+        // se copian los tres valores y se suelta enseguida; nunca se retiene mientras se arma el resto de la respuesta.
+        let (click_enabled, click_gain, click_subdivision) = {
+            let met = self.metronome.lock().unwrap();
+            (met.config.enabled, met.config.gain, met.config.subdivision)
+        };
         let meters = self.take_meters();
 
         // `tracks` solo lo tocan las órdenes de control y la carga: el callback usa `stream_tracks`, así que esta
@@ -253,9 +258,9 @@ impl PlaybackEngine {
             queued_section_id,
             is_vamping: self.is_vamping.load(Ordering::SeqCst),
             pitch_semitones: self.pitch_semitones.load(Ordering::SeqCst),
-            click_enabled: met.config.enabled,
-            click_gain: met.config.gain,
-            click_subdivision: met.config.subdivision,
+            click_enabled,
+            click_gain,
+            click_subdivision,
             quantize_mode: self.quantize_mode.lock().unwrap().clone(),
             master_gain: f32::from_bits(self.master_gain.load(Ordering::Relaxed)),
             cue_master_gain: f32::from_bits(self.cue_master_gain.load(Ordering::Relaxed)),
