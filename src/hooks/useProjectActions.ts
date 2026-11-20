@@ -2,6 +2,7 @@ import { logAsyncError } from '../utils/asyncErrors';
 import { SongProject } from '../types/project';
 import { WorkspaceView } from '../components/TopBar';
 import { audioEngine } from '../audio/audioEngine';
+import type { ActivationResult } from './useProjectActivation';
 import { saveProjectToDb } from '../storage/projectDb';
 
 interface UseProjectActionsDeps {
@@ -17,7 +18,7 @@ interface UseProjectActionsDeps {
     projectToLoad: SongProject,
     predecodedBuffers?: Map<string, AudioBuffer>,
     explicitPlayIfAlreadyInRam?: boolean
-  ) => Promise<void>;
+  ) => Promise<ActivationResult>;
   activeView: WorkspaceView;
   handleSelectView: (view: WorkspaceView) => void;
   setSongToDeleteFromLibrary: React.Dispatch<React.SetStateAction<SongProject | null>>;
@@ -42,11 +43,12 @@ export function useProjectActions({
       projectsRef.current.find((p) => p.id === projectId) ||
       projects.find((p) => p.id === projectId);
     if (!found) return;
-    await activateProject(found, undefined, autoPlay);
+    const result = await activateProject(found, undefined, autoPlay);
+    if (result === 'superseded') return; // se eligió otra después: la última orden manda
     if (activeView === 'library') {
       handleSelectView('setlist');
     }
-    showToast(`Canción montada en consola: ${found.title}`);
+    showToast(result === 'mounted' ? `Canción montada en consola: ${found.title}` : `No se pudo montar: ${found.title}.`);
   };
 
   const handleUpdateSongMetadata = (updated: SongProject) => {
