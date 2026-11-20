@@ -14,6 +14,8 @@ export interface StatePollerOptions<T> {
   request: () => Promise<T | null | undefined>;
   onSnapshot: (snapshot: T) => void;
   onError: (error: unknown) => void;
+  /** Avisa de una respuesta descartada por obsoleta (solo para diagnóstico). */
+  onDiscard?: () => void;
   /** Espera antes de la siguiente consulta, según el último estado recibido. */
   delayMs: (last: T | null) => number;
 }
@@ -80,6 +82,8 @@ export class StatePoller<T> {
       if (generation === this.generation && snapshot != null) {
         this.last = snapshot;
         this.options.onSnapshot(snapshot);
+      } else if (generation !== this.generation) {
+        this.options.onDiscard?.();
       }
     } catch (error) {
       if (generation === this.generation) this.options.onError(error);

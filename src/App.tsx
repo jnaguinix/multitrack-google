@@ -45,6 +45,7 @@ import {
   type WizardResult,
 } from './components/modals/ImportWizardModal';
 import { DeviceDisconnectedBanner, MissingCacheBanner } from './components/app/StatusBanners';
+import { DebugBadge } from './components/app/DebugBadge';
 import { ArrangerEmpty, DropOverlay, MixerEmpty } from './components/app/WorkspacePlaceholders';
 import { DockedMixerDialog, type MixerHandlers } from './components/app/DockedMixerDialog';
 import { EditTracksWizard, TrackInstrumentPicker } from './components/app/TrackEditDialogs';
@@ -779,6 +780,7 @@ export default function App() {
 
       {/* Non-intrusive Action Feedback Toast */}
       {toastMessage && <ActionToast message={toastMessage} />}
+      <DebugBadge />
     </div>
   );
 }

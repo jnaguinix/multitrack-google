@@ -9,6 +9,7 @@
 import { logAsyncError } from '../utils/asyncErrors';
 import { ControlSync, type ControlOp, type EngineTrackControl } from './controlSync';
 import { flightRecorder } from '../utils/flightRecorder';
+import { debugMode } from '../utils/debugMode';
 import { AudioEngineMode, SongProject, TrackChannel, TransportState, MetersSnapshot } from '../types/project';
 import { MeterBallistics, NativeMetersSnapshot } from './meterBallistics';
 import { StatePoller } from './statePoller';
@@ -225,6 +226,7 @@ export class NativeAudioEngine {
       },
       onSnapshot: (pb) => this.applySnapshot(pb),
       onError: (err) => this.reportPollError(err),
+      onDiscard: () => debugMode.trace('transporte', 'respuesta de estado obsoleta descartada (cambió de canción o se invalidó)'),
       // Reproduciendo, ~30 fps; en pausa basta una consulta cada 200 ms.
       delayMs: (last) => (last?.isPlaying ? 33 : 200),
     });
@@ -302,6 +304,10 @@ export class NativeAudioEngine {
     }
 
     const projId = this.currentProject.id;
+    debugMode.trace('transporte', () => `play pedido: canción ${projId}, cargada en el motor: ${this.loadedProjectId ?? 'ninguna'}, cola de controles ${this.controlSync.queue.isIdle() ? 'en reposo' : 'CON ÓRDENES PENDIENTES'}`);
+    if (!this.controlSync.queue.isIdle()) {
+      debugMode.alarm('play-antes-de-controles', `Play sale con la cola de controles sin vaciar (canción ${projId}): el motor puede arrancar con una mezcla anterior`);
+    }
     const progress = this.cache.getImportProgress(projId);
     if (progress && !progress.completed) {
       this.playPendingProjectId = projId;
@@ -372,6 +378,7 @@ export class NativeAudioEngine {
     const invoke = getInvoke();
     if (!invoke) return;
     try {
+      debugMode.trace('transporte', () => `seek a ${sec.toFixed(2)} s`);
       await invoke('audio_seek', { positionSec: Math.max(0, sec) });
       this.refreshStateNow();
     } catch (err: any) {
@@ -441,6 +448,7 @@ export class NativeAudioEngine {
     const prevId = this.currentProject?.id;
     this.currentProject = project;
     if (prevId && prevId !== project.id) {
+      debugMode.trace('carga', () => `cambio de canción ${prevId} → ${project.id}: se detiene el audio y se descarta lo cargado`);
       this.loadedProjectId = null;
       this.poller?.invalidate();
       void this.stop();
@@ -488,6 +496,7 @@ export class NativeAudioEngine {
         : undefined;
 
     this.currentProject = project;
+    debugMode.trace('carga', () => `loadProject ${project.id} («${project.title}», ${project.tracks.length} pistas)`);
 
     // Si el proyecto se está importando actualmente en segundo plano, no iniciar una segunda importación:
     if (this.isProjectImporting(project.id)) {
@@ -536,6 +545,10 @@ export class NativeAudioEngine {
         });
 
         this.loadedProjectId = project.id;
+        if (this.currentProject && this.currentProject.id !== project.id) {
+          debugMode.alarm('carga-vieja-pisa-a-la-nueva', `terminó la carga de ${project.id} pero la canción actual ya es ${this.currentProject.id}`);
+        }
+        debugMode.trace('carga', () => `loadProject ${project.id} terminado en el motor`);
         this.poller?.invalidate();
         this.lastDurationSec = loadRes?.durationSec || project.durationSec || 0;
 

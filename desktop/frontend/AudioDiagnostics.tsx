@@ -1,7 +1,9 @@
 import React, { useState } from 'react';
 import { Activity, AlertTriangle, ChevronDown, RotateCcw } from 'lucide-react';
 import { logAsyncError } from '../../src/utils/asyncErrors';
-import { flightRecorder } from '../../src/utils/flightRecorder';
+import { useDebugMode } from '../../src/hooks/useDebugMode';
+import { diagnosticFileName, downloadTextFile, fullDiagnosticReport } from '../../src/utils/debugExport';
+import type { DebugCategory } from '../../src/utils/debugMode';
 
 type Invoke = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
 
@@ -62,18 +64,44 @@ export const AudioDiagnostics: React.FC<Props> = ({ invoke, stats, playbackState
     projectCount: 0,
     projectIds: [],
   });
+  const debug = useDebugMode();
+  const [onlyAlarms, setOnlyAlarms] = useState(false);
   const [isCleaningCache, setIsCleaningCache] = useState(false);
   const [cleanCacheNotice, setCleanCacheNotice] = useState('');
 
-  // Caja negra: los últimos eventos de control y las discrepancias corregidas, listos para pegar en un mensaje.
-  const copyDiagnostic = async () => {
-    const text = flightRecorder.report({
+  const diagnosticText = () =>
+    fullDiagnosticReport({
       navegador: navigator.userAgent,
       dispositivo: device?.name,
       salidas: device?.channels,
       reproduciendo: playbackState.isPlaying,
       posicionSeg: Math.round(playbackState.positionSec * 10) / 10,
+      callbacks: stats.callbacks,
+      underruns: stats.underruns,
+      callbackMaxUs: stats.maxCallbackDurationUs,
+      feederMaxUs: stats.maxFeederBlockDurationUs ?? playbackState.maxFeederBlockDurationUs,
+      bufferMinMs: stats.minRingBufferLevelMs,
+      limitador: limiterLabel(stats),
     });
+
+  const saveDiagnostic = () => {
+    try {
+      downloadTextFile(diagnosticFileName(), diagnosticText());
+      setDiagNotice('Archivo de diagnóstico generado (revisa la carpeta de descargas).');
+    } catch (err) {
+      logAsyncError('guardar el diagnóstico')(err);
+      setDiagNotice('No se pudo generar el archivo; usa «Copiar diagnóstico».');
+    }
+  };
+
+  const visible = (() => {
+    const all = debug.all(onlyAlarms ? new Set<DebugCategory>(['alarma', 'error']) : undefined);
+    return all.slice(-40).reverse();
+  })();
+
+  // Caja negra: los últimos eventos de control y las discrepancias corregidas, listos para pegar en un mensaje.
+  const copyDiagnostic = async () => {
+    const text = diagnosticText();
     try {
       await navigator.clipboard.writeText(text);
       setDiagNotice('Diagnóstico copiado: pégalo en un mensaje.');
@@ -154,7 +182,64 @@ export const AudioDiagnostics: React.FC<Props> = ({ invoke, stats, playbackState
             >
               Copiar diagnóstico
             </button>
+            <button
+              type="button"
+              onClick={saveDiagnostic}
+              className="px-3 py-1 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-neutral-200 text-xs font-medium cursor-pointer transition-colors shrink-0"
+            >
+              Guardar archivo
+            </button>
             {diagNotice && <span className="text-[11px] text-neutral-400 truncate">{diagNotice}</span>}
+          </div>
+
+          {/* Modo diagnóstico: registro detallado y alarmas de coherencia */}
+          <div className="p-2 rounded-lg bg-neutral-900/60 border border-neutral-800 text-xs space-y-1.5">
+            <label className="flex items-center justify-between gap-2 cursor-pointer select-none">
+              <span>
+                <span className="text-neutral-200 font-medium block">Modo diagnóstico</span>
+                <span className="text-neutral-400 text-[11px]">
+                  Anota cada comando al motor, cambios de canción, control remoto y errores. Apagado no consume nada.
+                </span>
+              </span>
+              <input
+                type="checkbox"
+                checked={debug.enabled}
+                onChange={(e) => debug.setEnabled(e.target.checked)}
+                className="h-4 w-4 shrink-0 cursor-pointer"
+                aria-label="Modo diagnóstico"
+              />
+            </label>
+            {debug.enabled && (
+              <>
+                <div className="flex items-center justify-between gap-2 text-[11px] text-neutral-400">
+                  <span>
+                    Alarmas: <span className={debug.alarms() > 0 ? 'text-rose-400 font-bold' : 'text-emerald-400'}>{debug.alarms()}</span>
+                    {' · '}Eventos: {debug.all().length}
+                  </span>
+                  <span className="flex items-center gap-3">
+                    <label className="flex items-center gap-1 cursor-pointer">
+                      <input type="checkbox" checked={onlyAlarms} onChange={(e) => setOnlyAlarms(e.target.checked)} />
+                      Solo alarmas y errores
+                    </label>
+                    <button type="button" onClick={() => debug.clear()} className="hover:text-white cursor-pointer">
+                      Vaciar
+                    </button>
+                  </span>
+                </div>
+                <ol className="max-h-48 overflow-y-auto font-mono text-[11px] leading-snug space-y-0.5" aria-label="Últimos eventos">
+                  {visible.length === 0 && <li className="text-neutral-500">Sin eventos todavía.</li>}
+                  {visible.map((e, i) => (
+                    <li
+                      key={`${e.t}-${i}`}
+                      className={e.category === 'alarma' || e.category === 'error' ? 'text-rose-300' : 'text-neutral-300'}
+                    >
+                      <span className="text-neutral-500">+{(e.t / 1000).toFixed(2)} </span>
+                      <span className="text-neutral-400">{e.category}</span> {e.detail}
+                    </li>
+                  ))}
+                </ol>
+              </>
+            )}
           </div>
           {/* Alerta si el hardware de audio fue desconectado */}
           {playbackState.deviceDisconnected && (
