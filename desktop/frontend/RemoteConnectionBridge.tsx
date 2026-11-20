@@ -6,6 +6,7 @@ import type { SongProject } from '../../src/types/project';
 import { audioEngine } from '../../src/audio/audioEngine';
 import { applyMix, matches, snapshot, targets, trackIdentity } from './remoteState';
 import type { Clock, Dispatch, Receipt, Source } from './remoteState';
+import { Dialog, DialogBody, DialogHeader } from '../../src/components/ui/Dialog';
 import DesktopUpdates from './DesktopUpdates';
 import { previewInvoke } from './previewInvoke';
 import './connection.css';
@@ -53,7 +54,7 @@ function sameDevices(left: Device[], right: Device[]) {
 }
 
 export default memo(function RemoteConnectionBridge({ project, setlist, activationCount, updateProject, triggerHost }: Props) {
-  const dialog = useRef<HTMLDialogElement>(null);
+  const [open, setOpen] = useState(false);
   const source = useRef({ project, setlist });
   const epoch = useRef<string | null>(null);
   const revision = useRef({ value: 0, identity: '' });
@@ -255,10 +256,9 @@ export default memo(function RemoteConnectionBridge({ project, setlist, activati
           data-active={Boolean(connection)}
           aria-label={connection ? 'Conexión remota activa' : 'Conexión remota'}
           aria-haspopup="dialog"
-          aria-controls="desktop-remote-dialog"
           title={connection ? 'Conexión remota · Activa' : 'Conexión remota'}
           onClick={() => {
-            dialog.current?.showModal();
+            setOpen(true);
             if (!busy) void refresh();
           }}
         >
@@ -267,12 +267,12 @@ export default memo(function RemoteConnectionBridge({ project, setlist, activati
         </button>,
         triggerHost,
       )}
-      <dialog ref={dialog} id="desktop-remote-dialog" className="lt-remote-dialog" aria-labelledby="desktop-remote-title"
-        onKeyDown={(event) => event.stopPropagation()}>
-        <header>
-          <h2 id="desktop-remote-title">Conexión remota</h2>
-          <button type="button" className="lt-control" onClick={() => dialog.current?.close()}>Cerrar</button>
-        </header>
+      {open && (
+        <Dialog label="Conexión remota" size="lg" dismissOnBackdrop onClose={() => setOpen(false)}>
+          {/* Los atajos de la app (Espacio, números…) no deben dispararse mientras se escribe o se navega aquí. */}
+          <div className="lt-remote-content" onKeyDown={(event) => event.stopPropagation()}>
+            <DialogHeader title="Conexión remota" onClose={() => setOpen(false)} />
+            <DialogBody className="lt-remote-body">
         <p>Conecta el portátil y los teléfonos a la misma red local de confianza.</p>
         <div className="lt-remote-options">
           {!connection && (
@@ -354,7 +354,10 @@ export default memo(function RemoteConnectionBridge({ project, setlist, activati
             return !busy && !epoch.current && activationCount.current === 0 && !transport.isPlaying && !transport.isMountingSong;
           }} />
         )}
-      </dialog>
+            </DialogBody>
+          </div>
+        </Dialog>
+      )}
     </>
   );
 });

@@ -21,24 +21,11 @@
   .lt-control.lt-remote-trigger { width: 36px; padding-inline: 0; }
   .lt-remote-trigger > span { display: none; }
 }
-.lt-remote-dialog {
-  position: fixed;
-  inset: 0;
-  width: min(600px, calc(100% - 24px));
-  max-height: calc(100dvh - 24px);
-  margin: auto;
-  padding: 20px;
-  color: var(--lt-text);
-  background: var(--lt-panel);
-  border: 1px solid var(--lt-line);
-  border-radius: 12px;
-  overflow: auto;
-}
-.lt-remote-dialog::backdrop { background: #000a; }
-.lt-remote-dialog h2 { font-size: 20px; font-weight: 600; }
-.lt-remote-dialog h3 { font-size: 15px; font-weight: 600; }
-.lt-remote-dialog p { color: var(--lt-mut); font-size: 14px; margin-block: 8px; }
-.lt-remote-dialog header, .lt-remote-dialog li {
+/* El marco, el fondo y el cierre los pone el componente común `Dialog`; aquí solo el contenido. */
+.lt-remote-content { display: contents; }
+.lt-remote-body h3 { font-size: 15px; font-weight: 600; }
+.lt-remote-body p { color: var(--lt-mut); font-size: 14px; margin-block: 8px; }
+.lt-remote-body li {
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -46,23 +33,23 @@
 }
 .lt-remote-options { display: flex; align-items: end; flex-wrap: wrap; gap: 10px; margin-block: 16px; }
 .lt-remote-options label { flex: 1 1 220px; }
-.lt-remote-dialog .lt-remote-status { display: flex; align-items: center; gap: 8px; margin-block: 0 12px; color: var(--lt-text); }
+.lt-remote-body .lt-remote-status { display: flex; align-items: center; gap: 8px; margin-block: 0 12px; color: var(--lt-text); }
 .lt-remote-dot { display: inline-block; width: 8px; height: 8px; margin-inline-end: 6px; border-radius: 50%; background: #4cc38a; box-shadow: 0 0 6px #4cc38a99; }
 .lt-remote-status .lt-remote-dot { margin: 0; }
-.lt-remote-dialog .lt-remote-warning {
+.lt-remote-body .lt-remote-warning {
   margin-block: 0 12px;
   padding: 8px 10px;
   border-inline-start: 2px solid #e5bc75;
   color: var(--lt-text);
   line-height: 1.45;
 }
-.lt-remote-dialog .lt-remote-hint { margin-block: 0; font-size: 13px; }
+.lt-remote-body .lt-remote-hint { margin-block: 0; font-size: 13px; }
 .lt-remote-help { margin-block: 4px 16px; font-size: 13px; color: var(--lt-mut); }
 .lt-remote-help summary { cursor: pointer; color: var(--lt-text); }
 .lt-remote-help ul { margin: 8px 0 0; padding-inline-start: 18px; list-style: disc; }
-.lt-remote-dialog .lt-remote-help li { display: list-item; border: 0; padding-block: 3px; font-size: 13px; }
+.lt-remote-body .lt-remote-help li { display: list-item; border: 0; padding-block: 3px; font-size: 13px; }
 .lt-remote-help strong { color: var(--lt-text); }
 .lt-remote-pairings { display: grid; grid-template-columns: 1fr; gap: 14px; margin-bottom: 16px; }
 .lt-remote-pairings section { display: grid; justify-items: start; gap: 8px; padding: 14px; border: 1px solid var(--lt-line); border-radius: 12px; background: var(--lt-strip); }
 .lt-remote-pairings input { width: 100%; min-width: 0; border: 1px solid var(--lt-line); border-radius: 8px; padding: 9px 10px; background: var(--lt-bg); color: var(--lt-text); font-size: 13px; }
-.lt-remote-dialog li { padding-block: 8px; border-bottom: 1px solid var(--lt-line); font-size: 13px; }
+.lt-remote-body li { padding-block: 8px; border-bottom: 1px solid var(--lt-line); font-size: 13px; }
