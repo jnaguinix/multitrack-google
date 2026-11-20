@@ -135,6 +135,34 @@ pub fn pan_law(pan: f32, gain: f32) -> PanLaw {
     }
 }
 
+/// Constante de tiempo del suavizado de volumen y paneo (segundos). Un salto de fader tarda unos 3 × esto en
+/// asentarse (≈ 30 ms): suficiente para que no suene a clic y corto para que no se sienta lento.
+pub const SMOOTH_TAU_S: f32 = 0.010;
+/// Por debajo de esta diferencia el valor suavizado se pega al objetivo: en reposo la ganancia es EXACTAMENTE la
+/// pedida (nada de 0,99999 eterno) y el bloque no paga rampa.
+const SMOOTH_SNAP: f32 = 1e-4;
+
+/// Fracción del camino hacia el objetivo que se recorre en un bloque de `frames` fotogramas (filtro de un polo).
+/// Depende de la duración del bloque, no de su tamaño: con bloques pequeños o grandes se asienta en el mismo tiempo.
+#[inline]
+pub fn smoothing_alpha(frames: usize, sample_rate: u32) -> f32 {
+    1.0 - (-(frames as f32) / (SMOOTH_TAU_S * sample_rate.max(1) as f32)).exp()
+}
+
+/// Valor suavizado del siguiente bloque. `current` no finito (estado sin inicializar) salta directo al objetivo.
+#[inline]
+pub fn smooth_toward(current: f32, target: f32, alpha: f32) -> f32 {
+    if !current.is_finite() {
+        return target;
+    }
+    let next = current + (target - current) * alpha;
+    if (target - next).abs() < SMOOTH_SNAP {
+        target
+    } else {
+        next
+    }
+}
+
 /// Aplica el paneo a una muestra estéreo. Una fuente mono (`l == r`) suena igual que con el paneo clásico
 /// (`l * pan_l`, `r * pan_r`); una estéreo se pliega hacia el lado elegido.
 #[inline(always)]

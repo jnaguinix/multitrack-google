@@ -12,7 +12,10 @@ use crate::audio::metronome::MetronomeEngine;
 use crate::audio::output::AudioStreamStats;
 use crate::audio::routing::{music_mono, soft_limit, RoutingSlot, LIMITER_KNEE};
 
-use super::block::{apply_pan, buffering_ready, consume_track_block, end_of_song_gain, pan_law, END_FADE_GUARD_FRAMES};
+use super::block::{
+    apply_pan, buffering_ready, consume_track_block, end_of_song_gain, pan_law, smooth_toward, smoothing_alpha, PanLaw,
+    END_FADE_GUARD_FRAMES,
+};
 use super::clock::{advance_clock, ClockJumps};
 use super::fade::FadeEnvelope;
 use super::bus::TrackBus;
@@ -21,6 +24,19 @@ use super::types::{BusMeters, StreamTrackHandle};
 /// Fotogramas máximos por bloque del callback. Los búferes de mezcla se reservan con este tamaño al crear el
 /// mezclador; WASAPI en modo compartido entrega bloques de unos pocos miles como mucho.
 pub const MAX_CALLBACK_FRAMES: usize = 32_768;
+
+/// Pistas con volumen y paneo suavizados (estado preasignado; una pista más allá de este número se aplica sin rampa).
+const MAX_SMOOTH_TRACKS: usize = 64;
+
+/// Volumen y paneo que la pista tenía al final del bloque anterior. `key` identifica a la pista (la dirección de su
+/// `Arc` de ganancia): si en esa posición hay otra pista (se cargó otra canción) el estado se descarta y se parte del
+/// valor pedido, en vez de hacer una rampa desde el volumen de otra pista.
+#[derive(Clone, Copy)]
+struct TrackSmooth {
+    key: usize,
+    gain: f32,
+    pan: f32,
+}
 
 /// Estado del motor que lee el callback. Son los mismos `Arc` de `PlaybackEngine`, clonados una vez al abrir la
 /// salida: el motor cambia su contenido, nunca el `Arc`.
@@ -62,6 +78,12 @@ pub struct BlockMixer {
     /// Fotograma de la canción donde debería empezar el siguiente bloque si el reloj fuera continuo. Si no
     /// coincide (seek, salto de sección, vuelta de vamp) el metrónomo se recoloca.
     expected_start_frame: u64,
+    /// Suavizado de volumen y paneo por pista (sin asignar en el callback: se crea lleno al abrir la salida).
+    track_smooth: Vec<TrackSmooth>,
+    /// Volúmenes maestros del bloque anterior (NaN = sin inicializar).
+    smooth_master: f32,
+    smooth_cue: f32,
+    smooth_monitor: f32,
 }
 
 /// Guarda `value` en `slot` si es menor (mínimo atómico sin bloqueos).
@@ -104,6 +126,10 @@ impl BlockMixer {
             mon_r: buf(),
             click_buf: buf(),
             expected_start_frame: u64::MAX,
+            track_smooth: vec![TrackSmooth { key: 0, gain: 1.0, pan: 0.0 }; MAX_SMOOTH_TRACKS],
+            smooth_master: f32::NAN,
+            smooth_cue: f32::NAN,
+            smooth_monitor: f32::NAN,
         }
     }
 
@@ -124,6 +150,10 @@ impl BlockMixer {
             mon_r,
             click_buf,
             expected_start_frame,
+            track_smooth,
+            smooth_master,
+            smooth_cue,
+            smooth_monitor,
         } = self;
 
         let t0 = Instant::now();
@@ -190,8 +220,11 @@ impl BlockMixer {
 
         let any_solo = tracks_guard.iter().any(|t| t.soloed.load(Ordering::Relaxed));
         let mut callback_min_track_frames = u64::MAX;
+        // Fracción que recorre hacia su objetivo el volumen suavizado en este bloque.
+        let alpha = smoothing_alpha(frames, sample_rate);
+        let inv_frames = 1.0 / frames.max(1) as f32;
 
-        for trk in tracks_guard.iter() {
+        for (index, trk) in tracks_guard.iter().enumerate() {
             let is_muted = trk.muted.load(Ordering::Relaxed);
             let is_solo = trk.soloed.load(Ordering::Relaxed);
             let track_bus = TrackBus::from_u8(trk.bus.load(Ordering::Relaxed));
@@ -215,8 +248,30 @@ impl BlockMixer {
                 continue;
             }
 
-            let g = f32::from_bits(trk.gain.load(Ordering::Relaxed));
-            let law = pan_law(trk.pan.load(Ordering::Relaxed) as f32 / 100.0, g);
+            // Volumen y paneo no saltan de un bloque al siguiente: se pasa del valor anterior al nuevo con una rampa
+            // lineal dentro del bloque (si no, un cambio de fader suena a clic o a «zumbido» al arrastrar).
+            let g_target = f32::from_bits(trk.gain.load(Ordering::Relaxed));
+            let pan_target = trk.pan.load(Ordering::Relaxed) as f32 / 100.0;
+            let (g0, p0, g1, p1) = match track_smooth.get_mut(index) {
+                Some(st) => {
+                    let key = Arc::as_ptr(&trk.gain) as usize;
+                    if st.key != key {
+                        *st = TrackSmooth { key, gain: g_target, pan: pan_target };
+                    }
+                    let (g0, p0) = (st.gain, st.pan);
+                    st.gain = smooth_toward(g0, g_target, alpha);
+                    st.pan = smooth_toward(p0, pan_target, alpha);
+                    (g0, p0, st.gain, st.pan)
+                }
+                None => (g_target, pan_target, g_target, pan_target),
+            };
+            let law0 = pan_law(p0, g0);
+            let law1 = pan_law(p1, g1);
+            let (d_l, d_r, d_c) = (
+                (law1.pan_l - law0.pan_l) * inv_frames,
+                (law1.pan_r - law0.pan_r) * inv_frames,
+                (law1.cross - law0.cross) * inv_frames,
+            );
 
             if let Ok(mut c) = trk.consumer.try_lock() {
                 callback_min_track_frames = callback_min_track_frames.min((c.slots() / 2) as u64);
@@ -225,6 +280,8 @@ impl BlockMixer {
                 let mut pk_l = 0.0f32;
                 let mut pk_r = 0.0f32;
                 let had_underrun = consume_track_block(&mut c, &trk.skip_frames, track_eof, frames, |f, l, r| {
+                    let t = (f + 1) as f32;
+                    let law = PanLaw { pan_l: law0.pan_l + d_l * t, pan_r: law0.pan_r + d_r * t, cross: law0.cross + d_c * t };
                     if split_on {
                         // Canal izquierdo (click y guía) → auriculares; canal derecho (instrumentos) → música.
                         if cue_on {
@@ -312,9 +369,23 @@ impl BlockMixer {
         }
         *expected_start_frame = if metronome_pending_reposition { u64::MAX } else { end_song_f };
 
-        let master_g = f32::from_bits(s.master_gain.load(Ordering::Relaxed));
-        let cue_g = f32::from_bits(s.cue_master_gain.load(Ordering::Relaxed));
-        let monitor_g = f32::from_bits(s.monitor_gain.load(Ordering::Relaxed));
+        // Los volúmenes maestros también se acercan a su objetivo con una rampa por bloque.
+        let master_t = f32::from_bits(s.master_gain.load(Ordering::Relaxed));
+        let cue_t = f32::from_bits(s.cue_master_gain.load(Ordering::Relaxed));
+        let monitor_t = f32::from_bits(s.monitor_gain.load(Ordering::Relaxed));
+        let (master0, cue0, monitor0) = (
+            if smooth_master.is_finite() { *smooth_master } else { master_t },
+            if smooth_cue.is_finite() { *smooth_cue } else { cue_t },
+            if smooth_monitor.is_finite() { *smooth_monitor } else { monitor_t },
+        );
+        *smooth_master = smooth_toward(master0, master_t, alpha);
+        *smooth_cue = smooth_toward(cue0, cue_t, alpha);
+        *smooth_monitor = smooth_toward(monitor0, monitor_t, alpha);
+        let (d_master, d_cue, d_monitor) = (
+            (*smooth_master - master0) * inv_frames,
+            (*smooth_cue - cue0) * inv_frames,
+            (*smooth_monitor - monitor0) * inv_frames,
+        );
         // Matriz de ruteo del dispositivo: se copia a la pila una vez por bloque (sin bloqueos ni asignaciones).
         let route = s.routing.load();
 
@@ -333,6 +404,8 @@ impl BlockMixer {
                 1.0
             };
             let env_gain = fade.next_gain() * end_g;
+            let t = (f + 1) as f32;
+            let (master_g, cue_g, monitor_g) = (master0 + d_master * t, cue0 + d_cue * t, monitor0 + d_monitor * t);
             clk_pk = clk_pk.max((click_buf[f] * cue_g * env_gain).abs());
 
             let m_l = (main_l[f] + both_l[f]) * master_g;
