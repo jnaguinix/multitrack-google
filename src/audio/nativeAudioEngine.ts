@@ -55,6 +55,8 @@ export interface NativePlaybackSnapshot {
   trackControls?: EngineTrackControl[];
   /** Milisegundos que lleva el motor en buffering (0 si no está en buffering). */
   bufferingMs?: number;
+  /** El dispositivo de salida realmente abierto (null si aún no hay salida abierta). */
+  openDevice?: { name: string; sampleRate: number; channels: number } | null;
   /** Picos reales medidos por el motor desde la consulta anterior. */
   meters?: NativeMetersSnapshot;
 }

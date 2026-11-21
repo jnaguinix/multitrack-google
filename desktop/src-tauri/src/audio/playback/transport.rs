@@ -17,11 +17,24 @@ impl PlaybackEngine {
         {
             let mut stream_guard = self.stream.lock().await;
             *stream_guard = None;
+            self.stream_rate.store(0, Ordering::SeqCst);
+            *self.open_device.lock().unwrap() = None;
         }
         self.device_disconnected.store(false, Ordering::SeqCst);
         self.ensure_stream(engine_state).await?;
         tracing::info!("[NativeEngine] Audio stream reopened successfully");
         Ok(())
+    }
+
+    /// Antes de guardar unos ajustes nuevos: `Ok(true)` si cambian el dispositivo respecto al abierto (hay que reabrir
+    /// la salida), `Ok(false)` si no, y error si el cambio llega con el motor sonando (no se cambia de salida a mitad
+    /// de la canción: el click y la guía saltarían a otra salida; se rechaza sin guardar nada).
+    pub fn check_device_change(&self, requested_name: Option<&str>) -> Result<bool, String> {
+        let pending = crate::audio::output::device_change_needs_reopen(self.open_device.lock().unwrap().as_ref(), requested_name);
+        if pending && self.is_playing.load(Ordering::SeqCst) {
+            return Err("Detén la reproducción para cambiar de dispositivo de audio.".to_string());
+        }
+        Ok(pending)
     }
 
     /// Reposiciona el metrónomo en `song_frame` y descarta los clics en curso.
@@ -314,6 +327,7 @@ impl PlaybackEngine {
             monitor_gain: f32::from_bits(self.monitor_gain.load(Ordering::Relaxed)),
             meters,
             track_controls,
+            open_device: self.open_device.lock().unwrap().clone(),
             buffering_ms: if self.is_buffering.load(Ordering::SeqCst) {
                 self.buffering_start_time.lock().unwrap().map_or(0, |t| t.elapsed().as_millis() as u64)
             } else {

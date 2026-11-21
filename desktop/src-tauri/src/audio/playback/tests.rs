@@ -3144,3 +3144,34 @@
         assert!(malos <= 4, "tras salir del vamp junto al límite el reloj no coincide con el audio ({malos} bloques)");
         assert!(reloj > 144_000, "al salir del vamp la canción sigue hacia la sección siguiente (reloj {reloj})");
     }
+
+    // ----- H11: cambiar el dispositivo de audio -----
+
+    fn dispositivo_abierto(pedido: Option<&str>) -> OpenDeviceInfo {
+        OpenDeviceInfo { name: "Realtek".to_string(), sample_rate: 48_000, channels: 2, requested_name: pedido.map(str::to_string) }
+    }
+
+    #[test]
+    fn test_h11_el_cambio_de_dispositivo_se_detecta_contra_el_abierto() {
+        use crate::audio::output::device_change_needs_reopen as cambia;
+        let a = dispositivo_abierto(Some("Realtek"));
+        assert!(!cambia(Some(&a), Some("Realtek")), "el mismo dispositivo no se reabre");
+        assert!(cambia(Some(&a), Some("Jabra")), "otro dispositivo sí");
+        assert!(cambia(Some(&a), None), "pasar a «predeterminado» también es un cambio");
+        let por_defecto = dispositivo_abierto(None);
+        assert!(!cambia(Some(&por_defecto), None));
+        assert!(cambia(Some(&por_defecto), Some("Jabra")));
+        assert!(!cambia(None, Some("Jabra")), "sin salida abierta no hay nada que reabrir");
+    }
+
+    #[test]
+    fn test_h11_no_se_cambia_de_dispositivo_con_el_motor_sonando() {
+        let engine = motor_de_prueba();
+        *engine.open_device.lock().unwrap() = Some(dispositivo_abierto(Some("Realtek")));
+        assert_eq!(engine.check_device_change(Some("Realtek")), Ok(false));
+        assert_eq!(engine.check_device_change(Some("Jabra")), Ok(true), "en pausa el cambio se acepta");
+        engine.is_playing.store(true, Ordering::SeqCst);
+        let err = engine.check_device_change(Some("Jabra")).expect_err("sonando no se puede");
+        assert!(err.contains("Detén la reproducción"), "{err}");
+        assert_eq!(engine.check_device_change(Some("Realtek")), Ok(false), "los mismos ajustes sí, aunque suene");
+    }
