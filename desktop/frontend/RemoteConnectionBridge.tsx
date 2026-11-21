@@ -41,6 +41,7 @@ function urlHost(url: string): string | null {
   try {
     return new URL(url).hostname;
   } catch {
+    // catch-ok: una URL que no se puede leer no tiene nombre de equipo; se muestra sin él
     return null;
   }
 }

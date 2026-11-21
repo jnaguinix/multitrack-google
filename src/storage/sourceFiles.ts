@@ -13,6 +13,7 @@
  */
 
 import { SongProject } from '../types/project';
+import { logAsyncError } from '../utils/asyncErrors';
 import {
   extractSidecarFromFileList,
   isAudioFileCandidate,
@@ -193,7 +194,10 @@ export async function extractAudioFilesWithHandlesFromDataTransfer(
     const item = items[i];
     if (item.kind !== 'file') continue;
     handlePromises.push(
-      (item as any).getAsFileSystemHandle().catch(() => null) as Promise<any>
+      (item as any).getAsFileSystemHandle().catch((err: unknown) => {
+        logAsyncError('arrastre: leer el manejador de un elemento soltado')(err);
+        return null;
+      }) as Promise<any>
     );
   }
 

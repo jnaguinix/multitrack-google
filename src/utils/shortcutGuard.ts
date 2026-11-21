@@ -32,6 +32,7 @@ function hasKeyboardFocus(t: ShortcutTarget): boolean {
   try {
     return t.matches?.(':focus-visible') ?? false;
   } catch {
+    // catch-ok: un navegador sin :focus-visible (selector no soportado) simplemente no lo cumple
     return false;
   }
 }

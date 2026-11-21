@@ -463,6 +463,7 @@
         }
       };
     } catch {
+      // catch-ok: retry() muestra «Sin conexión. Intentando reconectar…» y vuelve a intentarlo
       retry();
     }
   }
