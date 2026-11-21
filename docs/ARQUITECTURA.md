@@ -50,6 +50,7 @@ desktop/src-tauri/src/audio/playback/
 ├── jumps.rs        # queue_section_jump, cancel_queued_jump, toggle_vamp (impl PlaybackEngine)
 ├── transport.rs    # play, pause, stop, seek (con rewind_tracks: handshake con los feeders), get_playback_state, reopen_stream (impl PlaybackEngine)
 ├── types.rs        # NativeSongSection, QueuedJumpInfo, ActiveTrack, PlaybackStateSnapshot, PeakMeter/BusMeters (medidores), etc.
+├── ensayo.rs       # Ensayo del motor sin hardware: una sesión completa (carga, Play, mezcla, seek, salto, vamp, tono, pausa, cambio de canción, final) con audio sintético y el BlockMixer real; ver `CLAUDE.md`
 └── tests.rs        # Suite completa de pruebas unitarias y benchmarks de audio (incluye pruebas con el motor real sobre una caché PCM sintética de rampas)
 ```
 
