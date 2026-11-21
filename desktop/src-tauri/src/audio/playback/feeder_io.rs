@@ -87,6 +87,45 @@ pub fn read_into_staging<R: Read>(
     err
 }
 
+/// Micro-fundido de salida de los últimos `fade_frames` fotogramas del ARCHIVO de una pista. Una pista que acaba
+/// antes que la canción (un loop, una guía corta) y cuyo audio termina con la señal lejos de cero se cortaría en
+/// seco al llegar el silencio de relleno: un clic. `first_frame` es el fotograma del archivo del primer fotograma
+/// que se añadió a `staging` desde `start_idx`. Solo toca los fotogramas del tramo final; el resto no cambia.
+pub fn apply_tail_fade(staging: &mut [Vec<f32>], start_idx: usize, first_frame: u64, total_frames: u64, fade_frames: usize) {
+    if fade_frames == 0 || total_frames == 0 {
+        return;
+    }
+    let fade_start = total_frames.saturating_sub(fade_frames as u64);
+    for ch in staging.iter_mut() {
+        let n = ch.len().saturating_sub(start_idx);
+        for i in 0..n {
+            let frame = first_frame + i as u64;
+            if frame >= fade_start && frame < total_frames {
+                // De ~1 a ~0 a lo largo del tramo; el fotograma siguiente (relleno) es 0.
+                let gain = (total_frames - frame) as f32 - 0.5;
+                ch[start_idx + i] *= gain / fade_frames as f32;
+            }
+        }
+    }
+}
+
+/// `read_into_staging` + micro-fundido de final de archivo (ver `apply_tail_fade`). `first_frame` es el fotograma
+/// del archivo en el que empieza esta lectura.
+pub fn read_into_staging_faded<R: Read>(
+    reader: &mut R,
+    is_mono: bool,
+    frames: usize,
+    staging: &mut [Vec<f32>],
+    first_frame: u64,
+    total_frames: u64,
+    fade_frames: usize,
+) -> Option<std::io::Error> {
+    let start_idx = staging.first().map_or(0, |c| c.len());
+    let err = read_into_staging(reader, is_mono, frames, staging);
+    apply_tail_fade(staging, start_idx, first_frame, total_frames, fade_frames);
+    err
+}
+
 /// Registra el primer fallo de lectura del archivo de una pista. Los siguientes se omiten para no inundar el
 /// registro (el hilo de lectura lee cada ~20 ms); lo que no se pudo leer ya sonó como silencio.
 pub fn report_read_error(already_reported: &mut bool, path: &std::path::Path, err: Option<std::io::Error>) {
