@@ -41,6 +41,12 @@ struct TrackSmooth {
     cue: f32,
 }
 
+/// `value` si es finito y si no `fallback` (sin ramas costosas: se usa por pista y por bloque).
+#[inline]
+fn finite_or(value: f32, fallback: f32) -> f32 {
+    if value.is_finite() { value } else { fallback }
+}
+
 /// Estado del motor que lee el callback. Son los mismos `Arc` de `PlaybackEngine`, clonados una vez al abrir la
 /// salida: el motor cambia su contenido, nunca el `Arc`.
 pub struct CallbackShared {
@@ -241,13 +247,14 @@ impl BlockMixer {
             // izquierdo tienen su propio mute y volumen (fader Click). Una pista normal nunca tiene `cue_on`.
             let music_on = !is_muted && !solo_silent;
             let cue_on = split_on && !trk.cue_muted.load(Ordering::Relaxed) && !solo_silent;
-            let cue_g_trk = f32::from_bits(trk.cue_gain.load(Ordering::Relaxed));
+            let cue_g_trk = finite_or(f32::from_bits(trk.cue_gain.load(Ordering::Relaxed)), 0.0);
 
             // Volumen, paneo, mute y solo no saltan de un bloque al siguiente: se pasa del valor anterior al nuevo con
             // una rampa lineal dentro del bloque (si no, un cambio de fader, un mute o un solo suenan a clic, o a
             // «zumbido» al arrastrar). El mute y el solo son ganancia 0: entran en el mismo suavizado, que además se
             // actualiza con la pista silenciada (al quitar el mute no hay un barrido desde un volumen viejo).
-            let g_target = if music_on { f32::from_bits(trk.gain.load(Ordering::Relaxed)) } else { 0.0 };
+            // Un valor corrupto (NaN, infinito) en el atómico no llega al audio: la pista queda en silencio.
+            let g_target = if music_on { finite_or(f32::from_bits(trk.gain.load(Ordering::Relaxed)), 0.0) } else { 0.0 };
             let cue_target = if cue_on { cue_g_trk } else { 0.0 };
             let pan_target = trk.pan.load(Ordering::Relaxed) as f32 / 100.0;
             let (g0, p0, g1, p1, c0, c1) = match track_smooth.get_mut(index) {
@@ -385,9 +392,10 @@ impl BlockMixer {
         *expected_start_frame = if metronome_pending_reposition { u64::MAX } else { end_song_f };
 
         // Los volúmenes maestros también se acercan a su objetivo con una rampa por bloque.
-        let master_t = f32::from_bits(s.master_gain.load(Ordering::Relaxed));
-        let cue_t = f32::from_bits(s.cue_master_gain.load(Ordering::Relaxed));
-        let monitor_t = f32::from_bits(s.monitor_gain.load(Ordering::Relaxed));
+        // Un valor corrupto en el atómico (no finito) se descarta: se mantiene el valor suavizado actual (o 1).
+        let master_t = finite_or(f32::from_bits(s.master_gain.load(Ordering::Relaxed)), if smooth_master.is_finite() { *smooth_master } else { 1.0 });
+        let cue_t = finite_or(f32::from_bits(s.cue_master_gain.load(Ordering::Relaxed)), if smooth_cue.is_finite() { *smooth_cue } else { 1.0 });
+        let monitor_t = finite_or(f32::from_bits(s.monitor_gain.load(Ordering::Relaxed)), if smooth_monitor.is_finite() { *smooth_monitor } else { 1.0 });
         let (master0, cue0, monitor0) = (
             if smooth_master.is_finite() { *smooth_master } else { master_t },
             if smooth_cue.is_finite() { *smooth_cue } else { cue_t },
@@ -439,6 +447,8 @@ impl BlockMixer {
             mon_pk = mon_pk.max(monitor_src.abs() * env_gain);
             for (ch, v) in frame.iter_mut().enumerate() {
                 let o = *v * env_gain;
+                // Última red: una muestra no finita (de donde sea) sale como silencio, nunca como NaN al controlador.
+                let o = if o.is_finite() { o } else { 0.0 };
                 if ch == 0 {
                     ok_l = ok_l.max(o.abs());
                 } else {

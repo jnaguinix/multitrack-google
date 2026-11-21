@@ -151,6 +151,17 @@ pub fn smoothing_alpha(frames: usize, sample_rate: u32) -> f32 {
     1.0 - (-(frames as f32) / (SMOOTH_TAU_S * sample_rate.max(1) as f32)).exp()
 }
 
+/// Ganancia lineal máxima aceptada de cualquier fader (+12 dB).
+pub const MAX_GAIN: f32 = 4.0;
+
+/// Una ganancia pedida desde fuera (interfaz, control remoto): `None` si no es un número finito (NaN, infinito) y,
+/// si lo es, limitada a `0..=MAX_GAIN`. Una ganancia no finita no se aplica: un NaN dejaría la salida en NaN para
+/// siempre (el suavizado no se recupera) y un infinito saturaría la salida.
+#[inline]
+pub fn sanitize_gain(value: f32) -> Option<f32> {
+    value.is_finite().then(|| value.clamp(0.0, MAX_GAIN))
+}
+
 /// Valor suavizado del siguiente bloque. `current` no finito (estado sin inicializar) salta directo al objetivo.
 #[inline]
 pub fn smooth_toward(current: f32, target: f32, alpha: f32) -> f32 {
