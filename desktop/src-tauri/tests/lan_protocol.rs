@@ -398,3 +398,56 @@ async fn dispatches_only_current_tracks_and_revokes_a_device() {
     assert!(server.hub.exchange(snapshot(2), vec![]).is_empty());
     server.stop().await;
 }
+
+#[tokio::test]
+async fn kicking_a_device_rotates_the_pairing_link_of_its_role() {
+    let server = start().await;
+    server.hub.exchange(snapshot(1), vec![]);
+    let (addr, old_cookie) = session(&server, Role::Mixer).await;
+    let (_, old_token) = pairing(&server, Role::Mixer);
+    let (_, monitor_token) = pairing(&server, Role::Monitor);
+    let device = server.hub.devices();
+    assert!(device.is_empty(), "sin socket abierto no hay dispositivo conectado");
+    let origin = format!("http://{addr}");
+    let _mixer = websocket(addr, Role::Mixer, &old_cookie, &origin).await.unwrap();
+    let device = loop {
+        if let Some(device) = server.hub.devices().pop() {
+            break device;
+        }
+        time::sleep(Duration::from_millis(10)).await;
+    };
+    assert!(server.hub.kick(device.id));
+
+    // El enlace que se había compartido ya no empareja: quien fue expulsado no puede volver con él.
+    assert!(post_pair(addr, Role::Mixer, &old_token)
+        .await
+        .starts_with("HTTP/1.1 403"));
+    let (_, new_token) = pairing(&server, Role::Mixer);
+    assert_ne!(new_token, old_token, "el enlace del rol expulsado cambia");
+    assert!(post_pair(addr, Role::Mixer, &new_token)
+        .await
+        .starts_with("HTTP/1.1 204"));
+    // El otro rol no se toca.
+    let (_, same_monitor) = pairing(&server, Role::Monitor);
+    assert_eq!(same_monitor, monitor_token);
+    server.stop().await;
+}
+
+#[tokio::test]
+async fn pairing_failures_from_one_origin_are_limited() {
+    let server = start().await;
+    let (addr, token) = pairing(&server, Role::Monitor);
+    for _ in 0..5 {
+        assert!(post_pair(addr, Role::Monitor, "no-es-el-codigo")
+            .await
+            .starts_with("HTTP/1.1 403"));
+    }
+    // Tras 5 fallos seguidos este origen queda bloqueado un rato, incluso con el código bueno.
+    assert!(post_pair(addr, Role::Monitor, "no-es-el-codigo")
+        .await
+        .starts_with("HTTP/1.1 429"));
+    assert!(post_pair(addr, Role::Monitor, &token)
+        .await
+        .starts_with("HTTP/1.1 429"));
+    server.stop().await;
+}
