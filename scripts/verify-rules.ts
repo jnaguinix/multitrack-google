@@ -257,9 +257,18 @@ const ALLOW_BOM: Record<string, string> = {};
 const ROOT = path.resolve(process.cwd());
 const rel = (p: string) => path.relative(ROOT, p).replace(/\\/g, '/');
 
+/**
+ * Archivos del repositorio: los agregados a git Y los nuevos sin agregar (respetando .gitignore). Antes solo se
+ * leían los agregados, así que un archivo nuevo se saltaba las reglas hasta commitearlo y el incumplimiento
+ * aparecía ya fusionado (pasó con `bridgeLoop.ts`). `.claude/` es configuración local del asistente, no del producto.
+ */
 function trackedFiles(): string[] {
-  const out = execFileSync('git', ['ls-files', '-z'], { cwd: ROOT, maxBuffer: 64 * 1024 * 1024 }).toString('utf-8');
-  return out.split('\0').filter(Boolean).filter((f) => !f.startsWith('dist/') && fs.existsSync(path.join(ROOT, f)));
+  const args = ['ls-files', '-z', '--cached', '--others', '--exclude-standard'];
+  const out = execFileSync('git', args, { cwd: ROOT, maxBuffer: 64 * 1024 * 1024 }).toString('utf-8');
+  return out
+    .split('\0')
+    .filter(Boolean)
+    .filter((f) => !f.startsWith('dist/') && !f.startsWith('.claude/') && fs.existsSync(path.join(ROOT, f)));
 }
 
 const TEXT_EXT = /\.(ts|tsx|js|mjs|rs|ps1|json|md|css|html|toml|yml|yaml|txt)$/;

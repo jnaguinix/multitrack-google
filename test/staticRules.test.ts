@@ -1,6 +1,7 @@
 // Cada regla de scripts/verify-rules.ts detecta lo que debe y deja pasar lo legítimo.
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import path from 'node:path';
 import {
   findSilentCatches,
   findOwnModals,
@@ -81,6 +82,21 @@ assert.equal(code.length, sample.length);
 assert.equal(bare.length, sample.length);
 assert.equal(code.split('\n').length, sample.split('\n').length);
 assert.ok(!bare.includes('{}'), 'el contenido de las cadenas se blanquea en bare');
+
+// --- Un archivo NUEVO sin agregar a git también se revisa (antes solo se leían los agregados) ------------------
+{
+  const nuevo = path.join('src', '__regla_archivo_nuevo.ts');
+  fs.writeFileSync(nuevo, ['export async function f() {', '  try { await g(); } catch (e) { }', '}', ''].join('\n'));
+  try {
+    const { findings: halladas } = runAll();
+    assert.ok(
+      halladas.some((h) => h.file === 'src/__regla_archivo_nuevo.ts'),
+      'un archivo nuevo sin agregar a git con un catch vacío debe incumplir la regla',
+    );
+  } finally {
+    fs.rmSync(nuevo, { force: true });
+  }
+}
 
 // --- El repositorio entero cumple, y las excepciones siguen haciendo falta ------------------------
 const { findings, unusedAllowances } = runAll();
