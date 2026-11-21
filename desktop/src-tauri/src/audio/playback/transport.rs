@@ -160,7 +160,7 @@ impl PlaybackEngine {
                 None => true,
             };
             if outside {
-                self.toggle_vamp(Some(false)).await;
+                self.set_vamp_state(Some(false)).await;
             }
         }
 

@@ -3090,3 +3090,57 @@
             "el audio se cortó en seco (última muestra {ultima_muestra}): el motor dio por hecho el fundido antes de que el callback lo consumiera"
         );
     }
+
+    // ----- H06: el vamp solo existe con un rango válido y entra/sale sin desalinear el reloj del audio -----
+
+    #[tokio::test]
+    async fn test_h06_no_se_activa_el_vamp_en_un_hueco_entre_secciones() {
+        // A [0, 2) y B [3, 5): el segundo 2,5 no pertenece a ninguna sección.
+        let engine = motor_real("h06_hueco", &[("pista", 288_000)], vec![seccion("a", 0.0, 2.0), seccion("b", 3.0, 5.0)]).await;
+        engine.seek(2.5).await;
+        reproducir(&engine).await;
+        let activo = engine.toggle_vamp(Some(true)).await;
+        assert!(!activo, "sin sección activa no hay rango que repetir: el vamp no puede quedar activo");
+        assert!(!engine.is_vamping.load(Ordering::SeqCst), "el motor no debe creerse en vamp");
+        assert!(engine.clock_jumps.loop_range().is_none(), "no hay bucle en el reloj");
+    }
+
+    /// Cuenta los bloques cuyo audio no coincide con el reloj durante `n` bloques del callback simulado.
+    fn desajustes_en(engine: &PlaybackEngine, n: u32) -> (u32, u64) {
+        let (mut malos, mut ultimo_reloj) = (0u32, 0u64);
+        for _ in 0..n {
+            let (pos, reloj) = bloque(engine);
+            if desajustado(pos, reloj) {
+                malos += 1;
+            }
+            ultimo_reloj = reloj;
+        }
+        (malos, ultimo_reloj)
+    }
+
+    #[tokio::test]
+    async fn test_h06_activar_el_vamp_justo_antes_del_limite_no_desalinea_el_reloj() {
+        let engine = motor_real("h06_entrada", &[("pista", 288_000)], vec![seccion("a", 0.0, 3.0), seccion("b", 3.0, 6.0)]).await;
+        engine.seek(2.85).await;
+        reproducir(&engine).await;
+        let _ = desajustes_en(&engine, 3);
+        // A ~0,14 s del final de A el feeder ya leyó más allá de ese límite: el audio en el anillo sigue por B.
+        assert!(engine.toggle_vamp(Some(true)).await);
+        let (malos, _) = desajustes_en(&engine, 120);
+        assert!(malos <= 4, "tras activar el vamp junto al límite el reloj no coincide con el audio ({malos} bloques)");
+    }
+
+    #[tokio::test]
+    async fn test_h06_salir_del_vamp_justo_antes_del_limite_no_desalinea_el_reloj() {
+        let engine = motor_real("h06_salida", &[("pista", 288_000)], vec![seccion("a", 0.0, 3.0), seccion("b", 3.0, 6.0)]).await;
+        engine.seek(2.0).await;
+        reproducir(&engine).await;
+        assert!(engine.toggle_vamp(Some(true)).await);
+        // Dentro del bucle, a ~0,25 s del final: el feeder ya empalmó la vuelta en el anillo.
+        engine.seek(2.75).await;
+        let _ = desajustes_en(&engine, 6);
+        assert!(!engine.toggle_vamp(Some(false)).await);
+        let (malos, reloj) = desajustes_en(&engine, 120);
+        assert!(malos <= 4, "tras salir del vamp junto al límite el reloj no coincide con el audio ({malos} bloques)");
+        assert!(reloj > 144_000, "al salir del vamp la canción sigue hacia la sección siguiente (reloj {reloj})");
+    }
