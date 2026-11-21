@@ -29,6 +29,8 @@ export interface EngineTrackControl {
   splitSequence?: boolean;
   cueGain?: number;
   cueMuted?: boolean;
+  /** `false` si el hilo de lectura de la pista murió: no suena y hay que avisarlo. */
+  feederAlive?: boolean;
 }
 
 export interface EngineGlobals {

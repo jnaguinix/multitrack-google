@@ -53,6 +53,8 @@ export interface NativePlaybackSnapshot {
   monitorGain?: number;
   /** Lo que el motor tiene realmente en cada pista: la interfaz lo compara con lo que muestra y corrige diferencias. */
   trackControls?: EngineTrackControl[];
+  /** Milisegundos que lleva el motor en buffering (0 si no está en buffering). */
+  bufferingMs?: number;
   /** Picos reales medidos por el motor desde la consulta anterior. */
   meters?: NativeMetersSnapshot;
 }
@@ -60,6 +62,8 @@ export interface NativePlaybackSnapshot {
 /** Reloj para la caída de los medidores (performance.now si existe). */
 /** Máximo que Play espera a que el motor confirme la mezcla pendiente. */
 const CONTROLS_WAIT_MAX_MS = 1500;
+/** Si el motor lleva más que esto en buffering, algo no llega (una pista que no se lee, un disco lento): se avisa. */
+const BUFFERING_STALL_MS = 5000;
 
 const meterNow = (): number =>
   typeof performance !== 'undefined' && typeof performance.now === 'function' ? performance.now() : Date.now();
@@ -87,6 +91,8 @@ export class NativeAudioEngine {
   private meterBallistics = new MeterBallistics();
   private wasPlayingBeforeEnd: boolean = false;
   private deviceDisconnectedAlerted: boolean = false;
+  private readonly reportedDeadTracks = new Set<string>();
+  private bufferingStallReported = false;
 
   private currentTransport: TransportState = { ...INITIAL_NATIVE_TRANSPORT };
 
@@ -254,6 +260,26 @@ export class NativeAudioEngine {
     this.poller?.pollNow();
   }
 
+  /** Pistas cuyo hilo de lectura murió y buffering que no termina: se avisa una vez y queda en la caja negra. */
+  private checkEngineHealth(pb: NativePlaybackSnapshot): void {
+    for (const t of pb.trackControls ?? []) {
+      if (t.feederAlive === false && !this.reportedDeadTracks.has(t.trackId)) {
+        this.reportedDeadTracks.add(t.trackId);
+        debugMode.alarm('pista-sin-lectura', `el hilo de lectura de la pista ${t.trackId} murió: no sonará`);
+        const name = this.currentProject?.tracks.find((tr) => tr.id === t.trackId)?.name ?? t.trackId;
+        this.onNoticeCallback?.(`La pista «${name}» no se pudo leer y no sonará. Regenera la caché nativa de la canción.`);
+      }
+    }
+    const stalled = (pb.bufferingMs ?? 0) > BUFFERING_STALL_MS;
+    if (stalled && !this.bufferingStallReported) {
+      this.bufferingStallReported = true;
+      debugMode.alarm('buffering-atascado', `el motor lleva ${Math.round((pb.bufferingMs ?? 0) / 1000)} s en buffering`);
+      this.onNoticeCallback?.('La canción tarda demasiado en prepararse. Si no arranca, vuelve a montarla.');
+    } else if (!stalled) {
+      this.bufferingStallReported = false;
+    }
+  }
+
   private applySnapshot(pb: NativePlaybackSnapshot): void {
     this.lastPlaybackState = pb;
     this.meterBallistics.update(pb.meters, meterNow());
@@ -264,6 +290,8 @@ export class NativeAudioEngine {
     }
     this.lastPositionSec = pb.positionSec;
     this.lastDurationSec = pb.durationSec;
+
+    this.checkEngineHealth(pb);
 
     // Detección de desconexión de hardware en caliente
     if (pb.deviceDisconnected) {
@@ -578,6 +606,7 @@ export class NativeAudioEngine {
         // El motor tiene ahora esta canción (aunque ya no sea la elegida): `loadedProjectId` dice la verdad y Play
         // vuelve a montar la elegida si no coincide.
         this.loadedProjectId = project.id;
+        this.reportedDeadTracks.clear();
         if (this.currentProject && this.currentProject.id !== project.id) {
           debugMode.alarm('carga-vieja-pisa-a-la-nueva', `terminó la carga de ${project.id} pero la canción actual ya es ${this.currentProject.id}`);
           this.poller?.invalidate();

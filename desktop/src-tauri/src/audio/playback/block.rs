@@ -15,6 +15,7 @@ pub const BUFFERING_EXIT_MS: u64 = 150;
 /// - Una pista sin hilo de lectura (`eof`: el transporte la marca si su feeder no confirmó el seek) no impide
 ///   salir: no va a recibir más audio y exigirle 150 ms dejaría toda la canción en buffering. Una pista más corta
 ///   que la canción no es `eof`: su feeder sigue empujando silencio pasado el final de su archivo.
+/// - Tampoco la espera una pista cuyo feeder murió (`feeder_alive == false`): no va a recibir nada.
 /// - Las demás deben tener al menos [`BUFFERING_EXIT_MS`] disponibles.
 ///
 /// Solo usa atómicos y `try_lock`: es seguro llamarla desde el callback de audio.
@@ -24,7 +25,8 @@ pub fn buffering_ready(tracks: &[StreamTrackHandle], generation: u64, sample_rat
         if trk.flush_done.load(Ordering::SeqCst) < generation {
             return false;
         }
-        if trk.eof.load(Ordering::SeqCst) {
+        // Sin audio que esperar: el transporte la dio por terminada (`eof`) o su hilo feeder murió.
+        if trk.eof.load(Ordering::SeqCst) || !trk.feeder_alive.load(Ordering::SeqCst) {
             continue;
         }
         match trk.consumer.try_lock() {

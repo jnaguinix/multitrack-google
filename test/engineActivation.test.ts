@@ -128,6 +128,32 @@ async function main() {
     console.log('OK H04: la mezcla viaja con la carga');
   }
 
+  // H07: una pista cuyo hilo de lectura murió, o un buffering que no termina, se avisan una sola vez.
+  {
+    const engine = new NativeAudioEngine();
+    await tick();
+    ready.clear();
+    ready.set('G', true);
+    await engine.loadProject(song('G'));
+    const notices: string[] = [];
+    engine.setOnNotice((m) => notices.push(m));
+    const snap = (alive: boolean, bufferingMs: number): any => ({
+      isPlaying: false, positionSec: 0, durationSec: 10, currentFrame: 0, totalFrames: 480000, underruns: 0, callbacks: 0,
+      maxCallbackDurationUs: 0, bufferingMs,
+      trackControls: [{ trackId: 'G-t1', gain: 1, pan: 0, muted: false, soloed: false, bus: 'main', feederAlive: alive }],
+    });
+    (engine as any).applySnapshot(snap(false, 0));
+    (engine as any).applySnapshot(snap(false, 0));
+    assert.equal(notices.filter((m) => m.includes('no se pudo leer')).length, 1, 'la pista muerta se avisa una sola vez');
+    (engine as any).applySnapshot(snap(true, 6000));
+    (engine as any).applySnapshot(snap(true, 7000));
+    assert.equal(notices.filter((m) => m.includes('tarda demasiado')).length, 1, 'el buffering atascado se avisa una sola vez');
+    (engine as any).applySnapshot(snap(true, 0));
+    (engine as any).applySnapshot(snap(true, 6000));
+    assert.equal(notices.filter((m) => m.includes('tarda demasiado')).length, 2, 'tras recuperarse, un atasco nuevo vuelve a avisar');
+    console.log('OK H07: pista sin lectura y buffering atascado se avisan');
+  }
+
   // H04b: si la cola nunca termina, Play sale igual (tope) y no queda colgado.
   // (La espera máxima es 1,5 s; aquí solo se comprueba que el camino de tope existe sin esperar tanto en la suite.)
 

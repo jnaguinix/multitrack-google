@@ -238,6 +238,8 @@ impl PlaybackEngine {
             ));
         }
 
+        // Cada PCM se abre y se mide ANTES de montar nada: una pista ilegible o truncada da un error con su
+        // nombre, en lugar de un feeder muerto que deja a Play en buffering eterno.
         for meta in &track_metas {
             let pcm_path = proj_dir.join(format!("{}.pcm", meta.track_id));
             if !pcm_path.exists() {
@@ -245,6 +247,20 @@ impl PlaybackEngine {
                     "Falta el archivo PCM para la pista '{}' (ruta buscada: '{}')",
                     meta.track_id,
                     pcm_path.display()
+                ));
+            }
+            let file = File::open(&pcm_path)
+                .map_err(|e| format!("No se pudo abrir el PCM de la pista '{}' ('{}'): {e}", meta.track_id, pcm_path.display()))?;
+            let len = file
+                .metadata()
+                .map_err(|e| format!("No se pudo leer el tamaño del PCM de la pista '{}': {e}", meta.track_id))?
+                .len();
+            let bytes_per_frame = if meta.channels == 1 { 2u64 } else { 4u64 };
+            let expected = meta.frame_count * bytes_per_frame;
+            if len < expected {
+                return Err(format!(
+                    "El PCM de la pista '{}' está incompleto: tiene {len} bytes y debería tener {expected}. Regenera la caché nativa.",
+                    meta.track_id
                 ));
             }
         }
@@ -329,12 +345,19 @@ impl PlaybackEngine {
                     let channels_count = if is_mono { 1 } else { 2 };
                     let mut current_frame = 0u64;
 
-                    let mut resampler = TrackResampler::new(
+                    let mut resampler = match TrackResampler::new(
                         device_sample_rate,
                         device_sample_rate,
                         chunk_frames,
                         channels_count,
-                    ).expect("Failed to initialize track resampler");
+                    ) {
+                        Ok(r) => r,
+                        Err(e) => {
+                            // El hilo termina y `FeederAliveGuard` marca la pista como muerta (la interfaz lo avisa).
+                            eprintln!("[Feeder] No se pudo iniciar el remuestreador de {}: {e}", thread_pcm_path.display());
+                            return;
+                        }
+                    };
                     // Cambio de tono real (la duración no cambia). Solo existe mientras el tono no es 0 y se
                     // (re)crea en cada seek: `set_pitch` del transporte hace un seek al cambiar el tono.
                     let mut shifter: Option<PitchShifter> = new_pitch_shifter(
@@ -615,6 +638,7 @@ impl PlaybackEngine {
                 eof: Arc::clone(&t.eof),
                 flush_done: Arc::clone(&t.flush_done),
                 skip_frames: Arc::clone(&t.skip_frames),
+                feeder_alive: Arc::clone(&t.feeder_alive),
             })
             .collect();
 

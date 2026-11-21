@@ -1062,6 +1062,8 @@
                 eof: Arc::clone(&t.eof),
                 flush_done: Arc::clone(&t.flush_done),
                 skip_frames: Arc::clone(&t.skip_frames),
+                // Estas pruebas no tienen hilo feeder pero simulan uno vivo (el buffering espera su audio).
+                feeder_alive: Arc::new(AtomicBool::new(true)),
             });
             active.push(t);
         }
@@ -2742,6 +2744,8 @@
                 eof: Arc::clone(&t.eof),
                 flush_done: Arc::clone(&t.flush_done),
                 skip_frames: Arc::clone(&t.skip_frames),
+                // Estas pruebas no tienen hilo feeder pero simulan uno vivo (el buffering espera su audio).
+                feeder_alive: Arc::new(AtomicBool::new(true)),
             });
             activas.push(t);
         }
@@ -2937,4 +2941,54 @@
         let g = f32::from_bits(t[0].gain.load(Ordering::Relaxed));
         assert!(g.is_finite() && g == 1.0, "NaN no puede quedar de ganancia: {g}");
         assert_eq!(t[0].pan.load(Ordering::Relaxed), 100, "el paneo se limita a -100..100");
+    }
+
+    // ----- H07: un feeder que no puede leer su PCM no puede dejar a Play esperando para siempre -----
+
+    #[tokio::test]
+    async fn test_h07_un_pcm_truncado_hace_fallar_la_carga_con_el_nombre_de_la_pista() {
+        use crate::audio::cache::get_project_cache_dir;
+        let dir = escribir_cache_lr("h07_truncado", &[("stem-01", 48_000, 8_000, 8_000), ("stem-02", 48_000, 8_000, 8_000)]);
+        // El PCM de la segunda pista se queda a la mitad (disco lleno, copia interrumpida).
+        let pcm = get_project_cache_dir(&dir, "h07_truncado", SR_PRUEBA).join("stem-02.pcm");
+        let f = std::fs::OpenOptions::new().write(true).open(&pcm).unwrap();
+        f.set_len(48_000 * 4 / 2).unwrap();
+        drop(f);
+
+        let engine = motor_de_prueba();
+        let err = engine
+            .load_project(&dir, "h07_truncado", SR_PRUEBA, Some(120.0), Some(4), None, None)
+            .await
+            .expect_err("un PCM incompleto no se monta");
+        assert!(err.contains("stem-02") && err.contains("incompleto"), "el error nombra la pista y dice qué pasa: {err}");
+        assert!(engine.tracks.lock().await.is_empty(), "no queda nada a medio montar");
+    }
+
+    fn handle_sin_feeder(vivo: bool) -> StreamTrackHandle {
+        let (_productor, consumidor) = rtrb::RingBuffer::<f32>::new(4096);
+        StreamTrackHandle {
+            consumer: Arc::new(std::sync::Mutex::new(consumidor)),
+            gain: Arc::new(AtomicU32::new(1.0f32.to_bits())),
+            pan: Arc::new(AtomicI32::new(0)),
+            muted: Arc::new(AtomicBool::new(false)),
+            soloed: Arc::new(AtomicBool::new(false)),
+            monitor: Arc::new(AtomicBool::new(false)),
+            split: Arc::new(AtomicBool::new(false)),
+            cue_gain: Arc::new(AtomicU32::new(1.0f32.to_bits())),
+            cue_muted: Arc::new(AtomicBool::new(false)),
+            bus: Arc::new(AtomicU8::new(TrackBus::Main as u8)),
+            meter: Arc::new(PeakMeter::default()),
+            eof: Arc::new(AtomicBool::new(false)),
+            flush_done: Arc::new(AtomicU64::new(0)),
+            skip_frames: Arc::new(AtomicU64::new(0)),
+            feeder_alive: Arc::new(AtomicBool::new(vivo)),
+        }
+    }
+
+    #[test]
+    fn test_h07_el_buffering_no_espera_a_una_pista_cuyo_feeder_murio() {
+        // Con el anillo vacío, una pista viva sí se espera (llegará audio)…
+        assert!(!buffering_ready(&[handle_sin_feeder(true)], 0, 48_000), "una pista viva con el anillo vacío se espera");
+        // …pero una pista muerta no: sin ella no llegará nada y Play se quedaría en buffering eterno.
+        assert!(buffering_ready(&[handle_sin_feeder(false)], 0, 48_000), "una pista muerta no bloquea la salida de buffering");
     }
