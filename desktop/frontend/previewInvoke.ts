@@ -33,7 +33,11 @@ export const previewInvoke: Invoke = async <T,>(command: string): Promise<T> => 
     case 'remote_stop':
       running = false;
       return undefined as T;
-    case 'remote_exchange':
+    case 'remote_exchange': {
+      // Solo para ver el estado degradado en el navegador: `window.__remoteFail = 'pasajero' | 'terminal'`.
+      const fail = (window as Window & { __remoteFail?: string }).__remoteFail;
+      if (fail === 'pasajero') throw new Error('Tiempo de espera agotado (simulado)');
+      if (fail === 'terminal') throw new Error('LAN_APAGADO: El servidor LAN está apagado o la sesión terminó.');
       return {
         commands: [],
         devices: [
@@ -41,6 +45,7 @@ export const previewInvoke: Invoke = async <T,>(command: string): Promise<T> => 
           { id: 2, role: 'mixer', address: '192.168.0.31' },
         ],
       } as T;
+    }
     case 'remote_kick':
       return undefined as T;
     default:
