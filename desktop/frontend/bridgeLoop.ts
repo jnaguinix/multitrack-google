@@ -70,6 +70,7 @@ export function createBridgeLoop(options: BridgeLoopOptions): BridgeLoop {
     try {
       await options.step();
     } catch (error) {
+      // catch-ok: el error no se pierde, se entrega a onTerminal u onDegraded, que lo registran y lo muestran
       if (!live()) return;
       if (isTerminalError(error)) {
         stopped = true;
