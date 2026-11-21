@@ -451,3 +451,42 @@ async fn pairing_failures_from_one_origin_are_limited() {
         .starts_with("HTTP/1.1 429"));
     server.stop().await;
 }
+
+#[tokio::test]
+async fn non_ascii_text_goes_through_snapshots_and_bad_commands_do_not_break_the_socket() {
+    let server = start().await;
+    let mut initial = snapshot(1);
+    let titulo = "Canción — Él, ñandú, 日本語 🎵";
+    initial.current_song.as_mut().unwrap().title = titulo.into();
+    initial.tracks[0].name = "Guía de Señor".into();
+    server.hub.exchange(initial.clone(), vec![]);
+    let (addr, cookie) = session(&server, Role::Mixer).await;
+    let origin = format!("http://{addr}");
+    let mut mixer = websocket(addr, Role::Mixer, &cookie, &origin).await.unwrap();
+    let full = state(&mut mixer).await;
+    assert_eq!(full["state"]["currentSong"]["title"], titulo);
+    assert_eq!(full["state"]["tracks"][0]["name"], "Guía de Señor");
+
+    // Un comando con texto no ASCII (tipo desconocido, valores raros) se rechaza sin tumbar el servidor ni el socket.
+    send(&mut mixer, json!({ "type": "cambiarCanción", "título": "Él 🎵", "revision": 1 })).await;
+    send(
+        &mut mixer,
+        json!({ "type": "setTrackMute", "revision": 1, "trackIndex": 0, "muted": true }),
+    )
+    .await;
+    let mut seen = Vec::new();
+    time::timeout(Duration::from_secs(2), async {
+        loop {
+            let commands = server.hub.exchange(initial.clone(), vec![]);
+            seen.extend(commands);
+            if !seen.is_empty() {
+                break;
+            }
+            time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(seen.len(), 1, "el comando válido llega aunque antes hubo uno inválido con texto no ASCII");
+    server.stop().await;
+}
