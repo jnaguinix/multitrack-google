@@ -148,6 +148,25 @@ impl PlaybackEngine {
         sections: Option<Vec<NativeSongSection>>,
         quantize_mode: Option<String>,
     ) -> Result<ProjectLoadInfo, String> {
+        self.load_project_with_controls(base_dir, project_id, device_sample_rate, bpm, beats_per_bar, sections, quantize_mode, None)
+            .await
+    }
+
+    /// Como `load_project`, pero cada pista nace ya con la mezcla de `track_controls` (ganancia, paneo, mute, solo,
+    /// bus, «Aur.», secuencia dividida, ganancia de cue). Sin esto, las pistas empiezan a ganancia 1 y con el bus
+    /// deducido del ID hasta que llegan sus controles, y el primer Play puede sonar con la mezcla equivocada.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn load_project_with_controls(
+        &self,
+        base_dir: &Path,
+        project_id: &str,
+        device_sample_rate: u32,
+        bpm: Option<f32>,
+        beats_per_bar: Option<u32>,
+        sections: Option<Vec<NativeSongSection>>,
+        quantize_mode: Option<String>,
+        track_controls: Option<Vec<InitialTrackControl>>,
+    ) -> Result<ProjectLoadInfo, String> {
         self.stop().await;
         self.is_buffering.store(true, Ordering::SeqCst);
         *self.buffering_start_time.lock().unwrap() = Some(Instant::now());
@@ -256,7 +275,11 @@ impl PlaybackEngine {
             // El bus inicial se deduce del ID; la interfaz lo fija después con `set_track_controls`. El feeder lo
             // lee para saber si esta pista se transpone (el click y la guía no).
             let lower_id = meta.track_id.to_ascii_lowercase();
-            let initial_bus = if lower_id.contains("click") || lower_id.contains("metronom") || lower_id.contains("guia") || lower_id.contains("guide") || lower_id.contains("cue") {
+            let initial_ctl = track_controls.as_ref().and_then(|v| v.iter().find(|c| c.track_id == meta.track_id));
+            let initial_bus = if let Some(b) = initial_ctl.and_then(|c| c.bus.as_deref()) {
+                // La interfaz manda el bus explícito: manda sobre lo que sugiera el ID.
+                TrackBus::from_str(b) as u8
+            } else if lower_id.contains("click") || lower_id.contains("metronom") || lower_id.contains("guia") || lower_id.contains("guide") || lower_id.contains("cue") {
                 TrackBus::CueClick as u8
             } else {
                 TrackBus::Main as u8
@@ -533,14 +556,14 @@ impl PlaybackEngine {
                 file_path: pcm_path,
                 original_channels: meta.channels,
                 total_frames: meta.frame_count,
-                gain: Arc::new(AtomicU32::new(1.0f32.to_bits())),
-                pan: Arc::new(AtomicI32::new(0)),
-                muted: Arc::new(AtomicBool::new(false)),
-                soloed: Arc::new(AtomicBool::new(false)),
-                monitor: Arc::new(AtomicBool::new(false)),
-                split: Arc::new(AtomicBool::new(false)),
-                cue_gain: Arc::new(AtomicU32::new(1.0f32.to_bits())),
-                cue_muted: Arc::new(AtomicBool::new(false)),
+                gain: Arc::new(AtomicU32::new(initial_ctl.and_then(|c| c.gain).map_or(1.0f32, sane_gain).to_bits())),
+                pan: Arc::new(AtomicI32::new(initial_ctl.and_then(|c| c.pan).unwrap_or(0).clamp(-100, 100))),
+                muted: Arc::new(AtomicBool::new(initial_ctl.and_then(|c| c.muted).unwrap_or(false))),
+                soloed: Arc::new(AtomicBool::new(initial_ctl.and_then(|c| c.soloed).unwrap_or(false))),
+                monitor: Arc::new(AtomicBool::new(initial_ctl.and_then(|c| c.monitor).unwrap_or(false))),
+                split: Arc::new(AtomicBool::new(initial_ctl.and_then(|c| c.split_sequence).unwrap_or(false))),
+                cue_gain: Arc::new(AtomicU32::new(initial_ctl.and_then(|c| c.cue_gain).map_or(1.0f32, sane_gain).to_bits())),
+                cue_muted: Arc::new(AtomicBool::new(initial_ctl.and_then(|c| c.cue_muted).unwrap_or(false))),
                 bus: bus_track,
                 consumer: Arc::new(std::sync::Mutex::new(consumer)),
                 stop_signal,
@@ -968,6 +991,11 @@ impl PlaybackEngine {
         let mixer = slot.get_or_insert_with(|| BlockMixer::new(self.callback_shared()));
         mixer.process(data, channels, sample_rate);
     }
+}
+
+/// Una ganancia que no es un número finito (NaN, infinito) se descarta: dejaría la pista en silencio o saturada.
+fn sane_gain(g: f32) -> f32 {
+    if g.is_finite() { g.max(0.0) } else { 1.0 }
 }
 
 #[cfg(test)]

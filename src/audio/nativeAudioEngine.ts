@@ -7,7 +7,7 @@
 // =============================================================================
 
 import { logAsyncError } from '../utils/asyncErrors';
-import { ControlSync, type ControlOp, type EngineTrackControl } from './controlSync';
+import { ControlSync, initialTrackControl, type ControlOp, type EngineTrackControl } from './controlSync';
 import { flightRecorder } from '../utils/flightRecorder';
 import { debugMode } from '../utils/debugMode';
 import { AudioEngineMode, SongProject, TrackChannel, TransportState, MetersSnapshot } from '../types/project';
@@ -571,6 +571,8 @@ export class NativeAudioEngine {
           beatsPerBar: project.beatsPerBar || 4,
           sections: nativeSections,
           quantizeMode: project.quantizeMode || 'section-end',
+          // La mezcla de cada pista viaja con la carga: ninguna nace a ganancia 1 ni con el bus deducido del ID.
+          trackControls: project.tracks.map(initialTrackControl),
         });
 
         // El motor tiene ahora esta canción (aunque ya no sea la elegida): `loadedProjectId` dice la verdad y Play

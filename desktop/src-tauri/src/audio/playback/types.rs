@@ -14,6 +14,23 @@ pub struct NativeSongSection {
     pub end_sec: f64,
 }
 
+/// La mezcla de una pista tal como la quiere la interfaz, enviada junto con la carga de la canción para que ninguna
+/// pista nazca con ganancia 1, sin mute o con un bus deducido del ID (p. ej. un Click en `stem-04`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InitialTrackControl {
+    pub track_id: String,
+    pub gain: Option<f32>,
+    pub pan: Option<i32>,
+    pub muted: Option<bool>,
+    pub soloed: Option<bool>,
+    pub bus: Option<String>,
+    pub monitor: Option<bool>,
+    pub split_sequence: Option<bool>,
+    pub cue_gain: Option<f32>,
+    pub cue_muted: Option<bool>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct QueuedJumpInfo {

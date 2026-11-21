@@ -2860,3 +2860,81 @@
         assert!(!fuera_de_sitio(pos, reloj), "la pista que se atrasó no volvió a su sitio: audio {pos:?}, reloj {reloj}");
     }
 
+    fn control_inicial(id: &str, gain: f32, pan: i32, muted: bool, bus: &str) -> InitialTrackControl {
+        InitialTrackControl {
+            track_id: id.to_string(),
+            gain: Some(gain),
+            pan: Some(pan),
+            muted: Some(muted),
+            soloed: Some(false),
+            bus: Some(bus.to_string()),
+            monitor: Some(false),
+            split_sequence: Some(false),
+            cue_gain: Some(0.5),
+            cue_muted: Some(false),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_h04_al_montar_cada_pista_nace_con_la_mezcla_pedida_y_no_a_ganancia_1() {
+        // Un Click que está en `stem-04` (el ID no lo delata) y una pista en mute con el fader a media altura.
+        let dir = escribir_cache_lr("h04_montaje", &[("stem-01", 48_000, 8_000, 8_000), ("stem-04", 48_000, 8_000, 8_000)]);
+
+        // Antes: sin controles, todo nace a ganancia 1, sin mute y con el bus deducido del ID (Main para ambas).
+        let sin = motor_de_prueba();
+        sin.load_project(&dir, "h04_montaje", SR_PRUEBA, Some(120.0), Some(4), Some(vec![seccion("a", 0.0, 1.0)]), Some("1-bar".to_string()))
+            .await
+            .expect("load_project");
+        {
+            let t = sin.tracks.lock().await;
+            let t4 = t.iter().find(|t| t.track_id == "stem-04").unwrap();
+            assert_eq!(TrackBus::from_u8(t4.bus.load(Ordering::Relaxed)), TrackBus::Main, "sin controles el bus se deduce del ID");
+        }
+
+        // Ahora: la mezcla viaja con la carga y el primer bloque ya sale como se pidió.
+        let engine = motor_de_prueba();
+        engine
+            .load_project_with_controls(
+                &dir,
+                "h04_montaje",
+                SR_PRUEBA,
+                Some(120.0),
+                Some(4),
+                Some(vec![seccion("a", 0.0, 1.0)]),
+                Some("1-bar".to_string()),
+                Some(vec![control_inicial("stem-01", 0.4, 30, true, "main"), control_inicial("stem-04", 0.8, -20, false, "click")]),
+            )
+            .await
+            .expect("load_project_with_controls");
+        let t = engine.tracks.lock().await;
+        let t1 = t.iter().find(|t| t.track_id == "stem-01").unwrap();
+        let t4 = t.iter().find(|t| t.track_id == "stem-04").unwrap();
+        assert!((f32::from_bits(t1.gain.load(Ordering::Relaxed)) - 0.4).abs() < 1e-6, "la ganancia pedida, no 1");
+        assert!(t1.muted.load(Ordering::Relaxed), "la pista en mute nace en mute");
+        assert_eq!(t1.pan.load(Ordering::Relaxed), 30);
+        assert_eq!(TrackBus::from_u8(t4.bus.load(Ordering::Relaxed)), TrackBus::CueClick, "el Click de stem-04 nace en su bus");
+        assert!((f32::from_bits(t4.cue_gain.load(Ordering::Relaxed)) - 0.5).abs() < 1e-6);
+    }
+
+    #[tokio::test]
+    async fn test_h04_una_ganancia_no_finita_en_la_carga_se_descarta() {
+        let dir = escribir_cache_lr("h04_nan", &[("stem-01", 48_000, 8_000, 8_000)]);
+        let engine = motor_de_prueba();
+        engine
+            .load_project_with_controls(
+                &dir,
+                "h04_nan",
+                SR_PRUEBA,
+                Some(120.0),
+                Some(4),
+                Some(vec![seccion("a", 0.0, 1.0)]),
+                Some("1-bar".to_string()),
+                Some(vec![control_inicial("stem-01", f32::NAN, 500, false, "main")]),
+            )
+            .await
+            .expect("load_project_with_controls");
+        let t = engine.tracks.lock().await;
+        let g = f32::from_bits(t[0].gain.load(Ordering::Relaxed));
+        assert!(g.is_finite() && g == 1.0, "NaN no puede quedar de ganancia: {g}");
+        assert_eq!(t[0].pan.load(Ordering::Relaxed), 100, "el paneo se limita a -100..100");
+    }

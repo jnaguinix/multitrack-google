@@ -71,6 +71,23 @@ export function desiredTrack(t: TrackChannel): TrackDesired {
   };
 }
 
+/** La mezcla de una pista como la espera `audio_load_project` (`trackControls`): todos los campos, con el bus explícito. */
+export function initialTrackControl(t: TrackChannel) {
+  const d = desiredTrack(t);
+  return {
+    trackId: d.id,
+    gain: d.gain,
+    pan: d.pan,
+    muted: d.muted,
+    soloed: d.soloed,
+    monitor: d.monitor,
+    splitSequence: d.splitSequence,
+    cueGain: d.cueGain,
+    cueMuted: d.cueMuted,
+    bus: d.bus,
+  };
+}
+
 type TrackField = 'gain' | 'pan' | 'muted' | 'soloed' | 'monitor' | 'splitSequence' | 'cueGain' | 'cueMuted' | 'bus';
 const TRACK_FIELDS: readonly TrackField[] = ['gain', 'pan', 'muted', 'soloed', 'monitor', 'splitSequence', 'cueGain', 'cueMuted', 'bus'];
 
