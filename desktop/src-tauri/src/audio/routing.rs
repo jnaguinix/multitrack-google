@@ -206,7 +206,7 @@ impl RoutingIssue {
                 s.label()
             ),
             RoutingIssue::CueMixedWithMusic { output, music, cue } => format!(
-                "La salida {} mezcla {} con {}: {} llegaría al público. Sepáralos en otra salida o confirma la mezcla en Ajustes de audio.",
+                "La salida {} mezcla {} con {}: {} llegaría al público. Sepáralos en otra salida o, si solo tienes una (auriculares mono), abre Ajustes de audio, marca «Permitir mezclar música con click o guía en una misma salida» y pulsa «Guardar ruteo».",
                 output + 1,
                 music.with_article(),
                 cue.with_article(),
