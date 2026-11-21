@@ -3297,3 +3297,58 @@
         let s2 = salto_tras(&engine, 24, previo);
         assert!(s2 < 0.02, "el mute del Click no debe cortar el click en seco (salto {s2})");
     }
+
+    // ----- AG H07: una pista que termina antes que la canción no puede cortarse en seco -----
+
+    #[tokio::test]
+    async fn test_h07ag_una_pista_corta_acaba_con_un_micro_fundido_y_no_con_un_escalon() {
+        // «larga» es silencio de 2 s; «corta» dura 0,5 s y acaba con la señal a media amplitud (como un loop cortado).
+        let dir = escribir_cache_lr("h07ag_fin", &[("larga", 96_000, 0, 0), ("corta", 24_000, 12_000, 12_000)]);
+        let engine = motor_de_prueba();
+        engine
+            .load_project(&dir, "h07ag_fin", SR_PRUEBA, Some(120.0), Some(4), Some(vec![seccion("a", 0.0, 2.0)]), Some("1-bar".to_string()))
+            .await
+            .expect("load_project");
+        engine.set_track_controls("larga", None, None, None, None, Some("main")).await;
+        engine.set_track_controls("corta", None, None, None, None, Some("main")).await;
+        engine.seek(0.45).await;
+        reproducir(&engine).await;
+
+        // Salida del callback simulado desde un poco después de empezar a sonar hasta pasado el final de «corta».
+        let mut salida: Vec<f32> = Vec::new();
+        let mut sono = 0;
+        let limite = Instant::now() + std::time::Duration::from_secs(5);
+        while Instant::now() < limite && engine.current_frame.load(Ordering::SeqCst) < 30_000 {
+            let mut buf = vec![0.0f32; 480 * 2];
+            engine.simulate_callback_block(&mut buf, 2);
+            std::thread::sleep(std::time::Duration::from_millis(3));
+            if buf.iter().any(|v| v.abs() > 1e-6) {
+                sono += 1;
+            }
+            if sono > 3 {
+                salida.extend_from_slice(&buf); // ya pasó el fundido de entrada
+            }
+        }
+        assert!(engine.current_frame.load(Ordering::SeqCst) >= 24_100, "el reloj pasó el final de la pista corta");
+        assert!(salida.chunks_exact(2).any(|f| f[0].abs() > 0.1), "antes de su final la pista corta sonaba");
+        let salto = mayor_salto(&salida, [salida[0], salida[1]]);
+        assert!(salto < 0.02, "la pista corta se corta en seco al acabar su archivo (salto {salto})");
+    }
+
+    #[test]
+    fn test_apply_tail_fade_solo_toca_los_ultimos_fotogramas_del_archivo() {
+        // Archivo de 100 fotogramas de 1,0; fundido de 8. Se leen los fotogramas 90..110 (los últimos 10 y 10 de relleno).
+        let mut staging = vec![vec![1.0f32; 20], vec![1.0f32; 20]];
+        apply_tail_fade(&mut staging, 0, 90, 100, 8);
+        for ch in &staging {
+            assert!(ch[..2].iter().all(|v| *v == 1.0), "antes del tramo final no cambia nada");
+            assert!(ch[2..10].windows(2).all(|w| w[1] < w[0]), "el tramo final baja de forma monótona");
+            assert!((ch[2] - 7.5 / 8.0).abs() < 1e-6 && (ch[9] - 0.5 / 8.0).abs() < 1e-6, "{:?}", &ch[2..10]);
+            assert!(ch[10..].iter().all(|v| *v == 1.0), "el relleno posterior lo pone la lectura (aquí valía 1 y no se toca)");
+        }
+        // Una lectura que empieza antes de `start_idx` no toca lo anterior.
+        let mut s2 = vec![vec![1.0f32; 6]];
+        apply_tail_fade(&mut s2, 4, 98, 100, 8);
+        assert!(s2[0][..4].iter().all(|v| *v == 1.0));
+        assert!(s2[0][4] < 1.0 && s2[0][5] < s2[0][4]);
+    }

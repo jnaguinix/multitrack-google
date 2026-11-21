@@ -334,6 +334,7 @@ impl PlaybackEngine {
             let thread_seek_ack = Arc::clone(&seek_ack_track);
             let thread_flush_done = Arc::clone(&flush_done_track);
             let thread_alive = Arc::clone(&feeder_alive_track);
+            let thread_total_frames = meta.frame_count;
             let thread_stats = Arc::clone(&self.stats);
             let is_mono = meta.channels == 1;
             let crossfade_frames = ((FADE_MS / 1000.0) * device_sample_rate as f32).round().max(1.0) as usize;
@@ -448,7 +449,7 @@ impl PlaybackEngine {
                                 if current_frame < jump.transition_frame {
                                     let pre_frames = (jump.transition_frame - current_frame) as usize;
                                     if pre_frames > 0 {
-                                        let err = read_into_staging(&mut file, is_mono, pre_frames, &mut input_staging);
+                                        let err = read_into_staging_faded(&mut file, is_mono, pre_frames, &mut input_staging, current_frame, thread_total_frames, crossfade_frames);
                                         report_read_error(&mut read_error_reported, &thread_pcm_path, err);
                                     }
                                 }
@@ -500,7 +501,7 @@ impl PlaybackEngine {
                                     if current_frame < loop_end {
                                         let pre_frames = (loop_end - current_frame) as usize;
                                         if pre_frames > 0 {
-                                            let err = read_into_staging(&mut file, is_mono, pre_frames, &mut input_staging);
+                                            let err = read_into_staging_faded(&mut file, is_mono, pre_frames, &mut input_staging, current_frame, thread_total_frames, crossfade_frames);
                                             report_read_error(&mut read_error_reported, &thread_pcm_path, err);
                                         }
                                     }
@@ -544,7 +545,7 @@ impl PlaybackEngine {
                         // Pasado el final del archivo, cada bloque es silencio: la pista sigue el reloj de la canción.
                         if total_buffered < min_target && output_staging.len() < staging_limit {
                             let t_feeder_start = Instant::now();
-                            let err = read_into_staging(&mut file, is_mono, chunk_frames, &mut input_staging);
+                            let err = read_into_staging_faded(&mut file, is_mono, chunk_frames, &mut input_staging, current_frame, thread_total_frames, crossfade_frames);
                             report_read_error(&mut read_error_reported, &thread_pcm_path, err);
                             current_frame += chunk_frames as u64;
                             drain_staging_through_resampler(
