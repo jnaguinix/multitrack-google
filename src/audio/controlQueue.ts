@@ -26,6 +26,8 @@ export class ControlQueue {
   private idleWaiters: Array<() => void> = [];
   /** Marca de tiempo (ms) del último envío al motor. */
   lastSendAt = 0;
+  /** Órdenes que el motor rechazó desde que existe la cola (solo crece). */
+  errorCount = 0;
 
   constructor(
     private readonly getInvoke: () => InvokeFn | undefined,
@@ -74,6 +76,7 @@ export class ControlQueue {
         try {
           await invoke(op.cmd, op.args);
         } catch (error) {
+          this.errorCount += 1;
           this.onError(op, error);
         }
       }

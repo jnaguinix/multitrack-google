@@ -120,6 +120,28 @@ export function targets(command: Dispatch, project: SongProject | null, revision
     && project?.tracks[command.command.trackIndex]?.id === command.trackId;
 }
 
+/**
+ * Qué acuse corresponde a un comando remoto pendiente (`null` = todavía no se puede decir, se espera).
+ * `applied` exige las dos cosas: que el estado de la interfaz ya refleje el cambio Y que el motor haya confirmado
+ * todas las órdenes enviadas sin rechazar ninguna desde el envío del comando (plan 3.3, H19). Antes bastaba lo
+ * primero, y el teléfono veía «aplicado» con la orden aún en la cola o rechazada por el motor.
+ */
+export function receiptFor(
+  _command: Dispatch,
+  ctx: {
+    targets: boolean;
+    matches: boolean;
+    engine: { idle: boolean; errors: number };
+    errorsAtDispatch: number;
+    pastDeadline: boolean;
+  },
+): Receipt['outcome'] | null {
+  if (!ctx.targets) return 'stale';
+  if (ctx.engine.errors > ctx.errorsAtDispatch) return 'unconfirmed';
+  if (ctx.matches && ctx.engine.idle) return 'applied';
+  return ctx.pastDeadline ? 'unconfirmed' : null;
+}
+
 export function matches(command: Dispatch, project: SongProject): boolean {
   const track = project.tracks[command.command.trackIndex];
   const [field, value] = mixChange(command.command);
