@@ -23,6 +23,25 @@ export interface CacheStatus {
   totalCount: number;
 }
 
+/**
+ * ¿La generación de caché dejó TODAS las pistas del proyecto? Devuelve `null` si sí y, si no, el motivo en lenguaje
+ * claro (errores del motor y pistas que faltan). Una caché parcial no es una caché «lista»: montarla daría una
+ * canción con pistas ausentes o un error de carga después.
+ */
+export function importIncompleteReason(
+  res: { tracks?: Array<{ trackId?: string }>; errors?: string[] } | null | undefined,
+  expectedTrackIds: readonly string[]
+): string | null {
+  const imported = new Set((res?.tracks ?? []).map((t) => t.trackId).filter((id): id is string => Boolean(id)));
+  const missing = expectedTrackIds.filter((id) => !imported.has(id));
+  const errors = (res?.errors ?? []).filter(Boolean);
+  if (missing.length === 0 && errors.length === 0) return null;
+  const parts: string[] = [];
+  if (missing.length > 0) parts.push(`no se generó la caché de ${missing.length === 1 ? 'la pista' : 'las pistas'} ${missing.join(', ')}`);
+  if (errors.length > 0) parts.push(errors.join('; '));
+  return parts.join(' — ');
+}
+
 interface Deps {
   getInvoke: () => Invoke | null;
   /** Aviso visible para el usuario (toast). */
@@ -312,11 +331,18 @@ export class NativeCacheManager {
             targetSampleRate: null,
           });
 
-          if (res?.tracks && res.tracks.length > 0) {
+          const problem = importIncompleteReason(res, project.tracks.map((t) => t.id));
+          if (!problem && res?.tracks && res.tracks.length > 0) {
             onProgress?.(100, `¡Caché nativa generada para ${res.tracks.length} pistas!`);
             this.notify();
             await this.checkProjectCacheStatus(project);
             return true;
+          }
+          if (problem && res?.tracks && res.tracks.length > 0) {
+            // Caché parcial: se refresca el estado (no queda «lista») y se avisa con el motivo.
+            this.notify();
+            await this.checkProjectCacheStatus(project);
+            throw new Error(`Caché incompleta: ${problem}`);
           }
         }
       }
@@ -327,6 +353,7 @@ export class NativeCacheManager {
       if (stems && stems.length > 0) {
         const total = stems.length;
         let completed = 0;
+        const importedIds = new Set<string>();
 
         for (let i = 0; i < total; i++) {
           const stem = stems[i];
@@ -346,12 +373,15 @@ export class NativeCacheManager {
             new Uint8Array(arrayBuf)
           );
           completed++;
+          importedIds.add(stem.trackId);
         }
 
         if (completed > 0) {
-          onProgress?.(100, `¡Caché nativa generada para ${completed} pistas!`);
           this.notify();
           await this.checkProjectCacheStatus(project);
+          const problem = importIncompleteReason({ tracks: [...importedIds].map((trackId) => ({ trackId })) }, project.tracks.map((t) => t.id));
+          if (problem) throw new Error(`Caché incompleta: ${problem}`);
+          onProgress?.(100, `¡Caché nativa generada para ${completed} pistas!`);
           return true;
         }
       }
@@ -389,9 +419,11 @@ export class NativeCacheManager {
       });
 
       if (res?.tracks && res.tracks.length > 0) {
-        onProgress?.(100, `¡Caché nativa generada para ${res.tracks.length} pistas!`);
         this.notify();
         await this.checkProjectCacheStatus(project);
+        const problem = importIncompleteReason(res, project.tracks.map((t) => t.id));
+        if (problem) throw new Error(`Caché incompleta: ${problem}`);
+        onProgress?.(100, `¡Caché nativa generada para ${res.tracks.length} pistas!`);
         return true;
       }
 

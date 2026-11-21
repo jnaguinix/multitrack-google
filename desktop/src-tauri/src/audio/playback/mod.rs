@@ -242,6 +242,24 @@ impl PlaybackEngine {
             }
         }
 
+        // Manifiesto: si la interfaz declara las pistas del proyecto (`trackControls`), la caché debe tenerlas todas y
+        // solo se cargan esas. Una pista que ya no es del proyecto pero sigue en disco (se borró, se reimportó con
+        // otro ID) sonaría como un fantasma sin fader; una que falta dejaría la canción montada a medias.
+        if let Some(controls) = track_controls.as_ref().filter(|c| !c.is_empty()) {
+            let missing: Vec<&str> = controls
+                .iter()
+                .map(|c| c.track_id.as_str())
+                .filter(|id| !track_metas.iter().any(|m| m.track_id == *id))
+                .collect();
+            if !missing.is_empty() {
+                return Err(format!(
+                    "Faltan en la caché las pistas del proyecto: {}. Genera la caché nativa de la canción.",
+                    missing.join(", ")
+                ));
+            }
+            track_metas.retain(|m| controls.iter().any(|c| c.track_id == m.track_id));
+        }
+
         if track_metas.is_empty() {
             return Err(format!(
                 "No se encontraron metadatos (.json) en la caché de '{}'",

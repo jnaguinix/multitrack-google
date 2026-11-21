@@ -164,6 +164,23 @@ pub fn should_reconvert_track(
         || target_sample_rate != meta.target_sample_rate
 }
 
+/// Las pistas de `track_ids` cuya caché está COMPLETA: metadatos legibles y un PCM al menos tan grande como dicen
+/// (`frame_count` × bytes por fotograma). Un PCM truncado (copia interrumpida, disco lleno) no cuenta como caché:
+/// dar la caché por lista con un archivo a medias haría sonar la pista cortada o montar la canción con error.
+pub fn collect_cached_tracks(base_dir: &Path, project_id: &str, sample_rate: u32, track_ids: &[String]) -> Vec<TrackPcmMetadata> {
+    let mut out = Vec::new();
+    for track_id in track_ids {
+        let Ok(meta) = read_track_metadata(base_dir, project_id, sample_rate, track_id) else { continue };
+        let pcm_path = get_track_pcm_path(base_dir, project_id, sample_rate, track_id);
+        let Ok(len) = fs::metadata(&pcm_path).map(|m| m.len()) else { continue };
+        let bytes_per_frame: u64 = if meta.channels == 1 { 2 } else { 4 };
+        if len >= meta.frame_count * bytes_per_frame {
+            out.push(meta);
+        }
+    }
+    out
+}
+
 /// Deletes both `.pcm` and `.json` cache files for a given track if they exist.
 pub fn delete_track_cache(
     base_dir: &Path,

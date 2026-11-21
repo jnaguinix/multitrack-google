@@ -3461,3 +3461,48 @@
         engine.stats.reset();
         assert_eq!(leer(&engine), [0, 0, 0, 0], "reset_stats los pone a cero");
     }
+
+    // ----- H02: la caché que se carga es la del proyecto, ni más pistas ni menos -----
+
+    /// Carga `nombre` declarando como pistas del proyecto solo las de `ids` (el manifiesto del proyecto).
+    async fn cargar_con_manifiesto(dir: &std::path::Path, nombre: &str, ids: &[&str]) -> (PlaybackEngine, Result<ProjectLoadInfo, String>) {
+        let controles: Vec<InitialTrackControl> = ids.iter().map(|id| control_inicial(id, 1.0, 0, false, "main")).collect();
+        let engine = motor_de_prueba();
+        let res = engine
+            .load_project_with_controls(dir, nombre, SR_PRUEBA, Some(120.0), Some(4), Some(vec![seccion("a", 0.0, 1.0)]), Some("1-bar".to_string()), Some(controles))
+            .await;
+        (engine, res)
+    }
+
+    #[tokio::test]
+    async fn test_h02_solo_se_cargan_las_pistas_del_proyecto_y_una_que_falta_da_error() {
+        // La caché conserva `borrada` de una versión anterior del proyecto (ya no es una de sus pistas).
+        let dir = escribir_cache_lr(
+            "h02_manifiesto",
+            &[("stem-01", 48_000, 8_000, 8_000), ("stem-02", 48_000, 8_000, 8_000), ("borrada", 48_000, 8_000, 8_000)],
+        );
+        let (engine, res) = cargar_con_manifiesto(&dir, "h02_manifiesto", &["stem-01", "stem-02"]).await;
+        res.expect("el proyecto tiene stem-01 y stem-02");
+        let mut ids: Vec<String> = engine.tracks.lock().await.iter().map(|t| t.track_id.clone()).collect();
+        ids.sort();
+        assert_eq!(ids, vec!["stem-01", "stem-02"], "la pista borrada que sigue en la caché no se carga");
+
+        let (_engine, res) = cargar_con_manifiesto(&dir, "h02_manifiesto", &["stem-01", "stem-02", "nueva"]).await;
+        let err = res.expect_err("una pista del proyecto sin caché no se puede montar a medias");
+        assert!(err.contains("nueva"), "el error nombra la pista que falta: {err}");
+    }
+
+    #[test]
+    fn test_h02_una_cache_con_el_pcm_truncado_no_cuenta_como_lista() {
+        use crate::audio::cache::{collect_cached_tracks, get_track_pcm_path};
+        let dir = escribir_cache_lr("h02_estado", &[("uno", 48_000, 8_000, 8_000), ("dos", 48_000, 8_000, 8_000)]);
+        let ids = vec!["uno".to_string(), "dos".to_string(), "tres".to_string()];
+        let ok = collect_cached_tracks(&dir, "h02_estado", SR_PRUEBA, &ids);
+        assert_eq!(ok.iter().map(|m| m.track_id.as_str()).collect::<Vec<_>>(), vec!["uno", "dos"], "«tres» no tiene caché");
+        // Se trunca el PCM de «dos»: ya no vale.
+        let f = std::fs::OpenOptions::new().write(true).open(get_track_pcm_path(&dir, "h02_estado", SR_PRUEBA, "dos")).unwrap();
+        f.set_len(1_000).unwrap();
+        drop(f);
+        let ok = collect_cached_tracks(&dir, "h02_estado", SR_PRUEBA, &ids);
+        assert_eq!(ok.iter().map(|m| m.track_id.as_str()).collect::<Vec<_>>(), vec!["uno"], "un PCM truncado no está en la caché");
+    }

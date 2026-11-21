@@ -10,7 +10,7 @@ pub mod resampler;
 pub mod routing;
 pub mod track_ids;
 
-use cache::{read_track_metadata, ImportProgressEvent, ProjectCacheStatus};
+use cache::{ImportProgressEvent, ProjectCacheStatus};
 use import::{ImportResult, ImportTrackFile};
 use track_ids::assign_track_ids;
 use output::{
@@ -317,16 +317,8 @@ pub async fn audio_get_project_cache_status(
     };
 
     let total_tracks_count = track_ids.len();
-    let mut cached_tracks = Vec::new();
-
-    for track_id in &track_ids {
-        if let Ok(meta) = read_track_metadata(&local_data, &project_id, rate, track_id) {
-            let pcm_path = cache::get_track_pcm_path(&local_data, &project_id, rate, track_id);
-            if pcm_path.exists() {
-                cached_tracks.push(meta);
-            }
-        }
-    }
+    // Solo cuentan las pistas con la caché completa (el PCM no puede estar truncado).
+    let cached_tracks = cache::collect_cached_tracks(&local_data, &project_id, rate, &track_ids);
 
     let cached_tracks_count = cached_tracks.len();
     let is_ready = total_tracks_count > 0 && cached_tracks_count == total_tracks_count;
