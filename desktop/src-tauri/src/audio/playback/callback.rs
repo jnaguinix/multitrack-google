@@ -179,6 +179,7 @@ impl BlockMixer {
         let tracks_guard = match s.stream_tracks.try_lock() {
             Ok(g) => g,
             Err(_) => {
+                s.stats.lock_miss_tracks.fetch_add(1, Ordering::Relaxed);
                 data.fill(0.0);
                 return;
             }
@@ -208,6 +209,7 @@ impl BlockMixer {
         let mut fade = match s.fade.try_lock() {
             Ok(f) => f,
             Err(_) => {
+                s.stats.lock_miss_fade.fetch_add(1, Ordering::Relaxed);
                 data.fill(0.0);
                 return;
             }
@@ -281,6 +283,7 @@ impl BlockMixer {
                     callback_min_track_frames = callback_min_track_frames.min((c.slots() / 2) as u64);
                     consume_track_block(&mut c, &trk.skip_frames, trk.eof.load(Ordering::Relaxed), frames, |_, _, _| {});
                 } else {
+                    s.stats.lock_miss_consumer.fetch_add(1, Ordering::Relaxed);
                     trk.skip_frames.fetch_add(frames as u64, Ordering::Relaxed);
                 }
                 continue;
@@ -357,6 +360,7 @@ impl BlockMixer {
             } else {
                 // El transporte tiene el anillo: este bloque no se leyó, la pista queda un bloque atrás respecto
                 // al reloj y se recupera descartando esa cantidad después.
+                s.stats.lock_miss_consumer.fetch_add(1, Ordering::Relaxed);
                 trk.skip_frames.fetch_add(frames as u64, Ordering::Relaxed);
             }
         }
@@ -386,8 +390,11 @@ impl BlockMixer {
                 met.seek_to_frame(start_song_f, sample_rate);
             }
             met.render_block(start_song_f, end_song_f, frames, sample_rate, &mut click_buf[..frames]);
-        } else if start_song_f != *expected_start_frame {
-            metronome_pending_reposition = true;
+        } else {
+            s.stats.lock_miss_metronome.fetch_add(1, Ordering::Relaxed);
+            if start_song_f != *expected_start_frame {
+                metronome_pending_reposition = true;
+            }
         }
         *expected_start_frame = if metronome_pending_reposition { u64::MAX } else { end_song_f };
 

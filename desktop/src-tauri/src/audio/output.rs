@@ -142,6 +142,16 @@ pub struct AudioStreamStats {
     pub limited_samples: AtomicU64,
     /// Muestras de salida escritas en total (para dar el porcentaje del limitador).
     pub output_samples: AtomicU64,
+    /// Veces que el callback no pudo tomar un recurso (`try_lock`) y omitió trabajo, por causa. Debe quedar en 0:
+    /// si sube, algún hilo del motor retiene un bloqueo que el callback necesita.
+    /// Lista de pistas ocupada: el bloque entero salió en silencio.
+    pub lock_miss_tracks: AtomicU64,
+    /// Envolvente de fundidos ocupada: el bloque entero salió en silencio.
+    pub lock_miss_fade: AtomicU64,
+    /// Anillo de una pista ocupado: esa pista se saltó un bloque (se resincroniza después).
+    pub lock_miss_consumer: AtomicU64,
+    /// Metrónomo ocupado: ese bloque salió sin click.
+    pub lock_miss_metronome: AtomicU64,
 }
 
 impl Default for AudioStreamStats {
@@ -154,6 +164,10 @@ impl Default for AudioStreamStats {
             max_feeder_block_duration_us: AtomicU64::new(0),
             limited_samples: AtomicU64::new(0),
             output_samples: AtomicU64::new(0),
+            lock_miss_tracks: AtomicU64::new(0),
+            lock_miss_fade: AtomicU64::new(0),
+            lock_miss_consumer: AtomicU64::new(0),
+            lock_miss_metronome: AtomicU64::new(0),
         }
     }
 }
@@ -167,6 +181,10 @@ impl AudioStreamStats {
         self.max_feeder_block_duration_us.store(0, Ordering::Relaxed);
         self.limited_samples.store(0, Ordering::Relaxed);
         self.output_samples.store(0, Ordering::Relaxed);
+        self.lock_miss_tracks.store(0, Ordering::Relaxed);
+        self.lock_miss_fade.store(0, Ordering::Relaxed);
+        self.lock_miss_consumer.store(0, Ordering::Relaxed);
+        self.lock_miss_metronome.store(0, Ordering::Relaxed);
     }
 }
 
@@ -180,6 +198,18 @@ pub struct AudioStreamStatsSnapshot {
     pub max_feeder_block_duration_us: u64,
     pub limited_samples: u64,
     pub output_samples: u64,
+    /// Bloques omitidos por causa: lista de pistas ocupada (el bloque sale en silencio).
+    #[serde(default)]
+    pub lock_miss_tracks: u64,
+    /// Bloques omitidos por causa: envolvente de fundidos ocupada (silencio).
+    #[serde(default)]
+    pub lock_miss_fade: u64,
+    /// Pistas que se saltaron un bloque por tener su anillo ocupado.
+    #[serde(default)]
+    pub lock_miss_consumer: u64,
+    /// Bloques sin click por tener el metrónomo ocupado.
+    #[serde(default)]
+    pub lock_miss_metronome: u64,
 }
 
 pub struct AudioEngineState {
@@ -249,6 +279,10 @@ impl AudioEngineState {
             max_feeder_block_duration_us: self.stats.max_feeder_block_duration_us.load(Ordering::Relaxed),
             limited_samples: self.stats.limited_samples.load(Ordering::Relaxed),
             output_samples: self.stats.output_samples.load(Ordering::Relaxed),
+            lock_miss_tracks: self.stats.lock_miss_tracks.load(Ordering::Relaxed),
+            lock_miss_fade: self.stats.lock_miss_fade.load(Ordering::Relaxed),
+            lock_miss_consumer: self.stats.lock_miss_consumer.load(Ordering::Relaxed),
+            lock_miss_metronome: self.stats.lock_miss_metronome.load(Ordering::Relaxed),
         }
     }
 
