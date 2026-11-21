@@ -38,7 +38,7 @@ pub mod types;
 pub use types::*;
 
 pub mod block;
-pub use block::{apply_pan, buffering_ready, consume_track_block, end_of_song_gain, pan_law, END_FADE_GUARD_FRAMES};
+pub use block::{apply_pan, buffering_ready, consume_track_block, end_of_song_gain, pan_law, sanitize_gain, END_FADE_GUARD_FRAMES, MAX_GAIN};
 
 pub mod clock;
 pub use clock::{advance_clock, ClockJumps};
@@ -730,6 +730,12 @@ impl PlaybackEngine {
 
     pub fn set_metronome(&self, config: MetronomeConfig) {
         let mut met = self.metronome.lock().unwrap();
+        let mut config = config;
+        // Un volumen o un tempo no finitos no se aplican: se conserva lo que había.
+        config.gain = if config.gain.is_finite() { config.gain.clamp(0.0, 2.0) } else { met.config.gain };
+        if !config.bpm.is_finite() || config.bpm <= 0.0 {
+            config.bpm = met.config.bpm;
+        }
         met.config = config;
     }
 
@@ -768,8 +774,8 @@ impl PlaybackEngine {
     pub async fn set_track_cue(&self, track_id: &str, gain: Option<f32>, muted: Option<bool>) {
         let tracks = self.tracks.lock().await;
         if let Some(trk) = tracks.iter().find(|t| t.track_id == track_id) {
-            if let Some(g) = gain {
-                trk.cue_gain.store(g.clamp(0.0, 4.0).to_bits(), Ordering::Relaxed);
+            if let Some(g) = gain.and_then(sanitize_gain) {
+                trk.cue_gain.store(g.to_bits(), Ordering::Relaxed);
             }
             if let Some(m) = muted {
                 trk.cue_muted.store(m, Ordering::Relaxed);
@@ -778,15 +784,17 @@ impl PlaybackEngine {
     }
 
     pub fn set_monitor_gain(&self, gain: f32) {
-        self.monitor_gain.store(gain.clamp(0.0, 4.0).to_bits(), Ordering::SeqCst);
+        if let Some(g) = sanitize_gain(gain) {
+            self.monitor_gain.store(g.to_bits(), Ordering::SeqCst);
+        }
     }
 
     pub fn set_master_gains(&self, master_gain: Option<f32>, cue_master_gain: Option<f32>) {
-        if let Some(mg) = master_gain {
-            self.master_gain.store(mg.clamp(0.0, 4.0).to_bits(), Ordering::SeqCst);
+        if let Some(mg) = master_gain.and_then(sanitize_gain) {
+            self.master_gain.store(mg.to_bits(), Ordering::SeqCst);
         }
-        if let Some(cg) = cue_master_gain {
-            self.cue_master_gain.store(cg.clamp(0.0, 4.0).to_bits(), Ordering::SeqCst);
+        if let Some(cg) = cue_master_gain.and_then(sanitize_gain) {
+            self.cue_master_gain.store(cg.to_bits(), Ordering::SeqCst);
         }
     }
 
@@ -850,7 +858,7 @@ impl PlaybackEngine {
         let mut needs_reseek = false;
         let tracks = self.tracks.lock().await;
         if let Some(trk) = tracks.iter().find(|t| t.track_id == track_id) {
-            if let Some(g) = gain {
+            if let Some(g) = gain.and_then(sanitize_gain) {
                 trk.gain.store(g.to_bits(), Ordering::Relaxed);
             }
             if let Some(p) = pan {
@@ -1035,7 +1043,7 @@ impl PlaybackEngine {
 
 /// Una ganancia que no es un número finito (NaN, infinito) se descarta: dejaría la pista en silencio o saturada.
 fn sane_gain(g: f32) -> f32 {
-    if g.is_finite() { g.max(0.0) } else { 1.0 }
+    sanitize_gain(g).unwrap_or(1.0)
 }
 
 #[cfg(test)]

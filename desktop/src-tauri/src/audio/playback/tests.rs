@@ -1942,7 +1942,8 @@
         assert_eq!(engine.stats.limited_samples.load(Ordering::Relaxed), 0, "a nivel normal el limitador no actúa");
 
         // Fader de la música muy arriba: la salida pasa del umbral y el contador lo registra.
-        engine.set_track_controls("musica", Some(20.0), None, None, None, None).await;
+        engine.set_track_controls("musica", Some(MAX_GAIN), None, None, None, None).await; // el máximo que acepta el motor (+12 dB)
+        engine.set_master_gains(Some(MAX_GAIN), None); // y el master al máximo: juntos pasan el umbral del limitador
         asentar_picos(&engine, 2);
         let p = picos_por_canal(&engine, 2, 40);
         assert!(p[1] <= 1.0, "el limitador evita el recorte duro: {p:?}");
@@ -3351,4 +3352,64 @@
         apply_tail_fade(&mut s2, 4, 98, 100, 8);
         assert!(s2[0][..4].iter().all(|v| *v == 1.0));
         assert!(s2[0][4] < 1.0 && s2[0][5] < s2[0][4]);
+    }
+
+    // ----- AG H04: una ganancia NaN o infinita no puede llegar al audio -----
+
+    fn tiene_no_finitos(salida: &[f32]) -> bool {
+        salida.iter().any(|v| !v.is_finite())
+    }
+
+    #[tokio::test]
+    async fn test_h04ag_las_ganancias_no_finitas_se_ignoran_y_las_enormes_se_limitan() {
+        let engine = engine_con_pistas(&[("a", 0.5)], 48_000);
+        let gain = |e: &PlaybackEngine| f32::from_bits(e.tracks.try_lock().unwrap()[0].gain.load(Ordering::SeqCst));
+        let cue = |e: &PlaybackEngine| f32::from_bits(e.tracks.try_lock().unwrap()[0].cue_gain.load(Ordering::SeqCst));
+        engine.set_track_controls("a", Some(0.7), None, None, None, None).await;
+        for malo in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            engine.set_track_controls("a", Some(malo), None, None, None, None).await;
+            assert_eq!(gain(&engine), 0.7, "una ganancia {malo} no debe cambiar la de la pista");
+        }
+        engine.set_track_controls("a", Some(1.0e9), None, None, None, None).await;
+        assert_eq!(gain(&engine), 4.0, "una ganancia enorme se limita");
+        engine.set_track_controls("a", Some(-3.0), None, None, None, None).await;
+        assert_eq!(gain(&engine), 0.0, "una ganancia negativa (fase invertida) no existe: 0");
+
+        engine.set_track_cue("a", Some(0.5), None).await;
+        engine.set_track_cue("a", Some(f32::NAN), None).await;
+        assert_eq!(cue(&engine), 0.5, "el click de la secuencia ignora NaN");
+
+        let leer = |a: &Arc<AtomicU32>| f32::from_bits(a.load(Ordering::SeqCst));
+        engine.set_master_gains(Some(0.9), Some(0.6));
+        engine.set_monitor_gain(0.4);
+        engine.set_master_gains(Some(f32::NAN), Some(f32::INFINITY));
+        engine.set_monitor_gain(f32::NAN);
+        assert_eq!((leer(&engine.master_gain), leer(&engine.cue_master_gain), leer(&engine.monitor_gain)), (0.9, 0.6, 0.4));
+    }
+
+    #[test]
+    fn test_h04ag_el_callback_no_saca_nan_aunque_un_atomico_tenga_una_ganancia_corrupta() {
+        let engine = engine_con_pistas(&[("a", 0.5), ("b", 0.5)], 48_000);
+        *engine.fade.lock().unwrap() = FadeEnvelope::new(FADE_MS, 48000);
+        let mut buf = vec![0.0f32; 480 * 2];
+        asentar(&engine, &mut buf, 3);
+        // Se escribe directamente en los atómicos (lo que haría un fallo o un valor corrupto): NaN e infinito.
+        engine.tracks.try_lock().unwrap()[0].gain.store(f32::NAN.to_bits(), Ordering::SeqCst);
+        engine.tracks.try_lock().unwrap()[1].pan.store(100, Ordering::SeqCst);
+        engine.master_gain.store(f32::INFINITY.to_bits(), Ordering::SeqCst);
+        engine.cue_master_gain.store(f32::NAN.to_bits(), Ordering::SeqCst);
+        engine.monitor_gain.store(f32::NAN.to_bits(), Ordering::SeqCst);
+        for _ in 0..30 {
+            engine.simulate_callback_block(&mut buf, 2);
+            assert!(!tiene_no_finitos(&buf), "el callback sacó NaN o infinito");
+        }
+        // Y se recupera: al corregir los valores, vuelve a sonar normal (un NaN no contamina el suavizado).
+        engine.tracks.try_lock().unwrap()[0].gain.store(1.0f32.to_bits(), Ordering::SeqCst);
+        engine.master_gain.store(1.0f32.to_bits(), Ordering::SeqCst);
+        engine.cue_master_gain.store(0.7f32.to_bits(), Ordering::SeqCst);
+        engine.monitor_gain.store(1.0f32.to_bits(), Ordering::SeqCst);
+        for _ in 0..30 {
+            engine.simulate_callback_block(&mut buf, 2);
+        }
+        assert!(!tiene_no_finitos(&buf) && buf.iter().any(|v| v.abs() > 0.01), "tras corregir los valores vuelve a sonar");
     }
