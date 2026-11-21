@@ -15,12 +15,36 @@
   const remainingProgress = byId('remaining-progress');
   const totalDuration = byId('duration');
   const songLabel = (song) => song ? song.title : '—';
+
+  // <closeAction>
+  // Qué hacer cuando el portátil cierra el socket (plan 3.2, H20). Función pura: se prueba en test/remoteClose.test.ts.
+  //  - 1008: el servidor cortó por comandos rechazados seguidos. La sesión sigue vigente: se reconecta.
+  //  - 4403: sesión revocada o cerrada. Se pregunta al servidor si la cookie sigue vigente (`sessionStatus`):
+  //      401/403 = el portátil la quitó (expulsado, servidor reiniciado): fin, hay que abrir el enlace otra vez.
+  //      vigente y el socket duró menos de 3 s = otro dispositivo o pestaña con la misma sesión tomó el relevo:
+  //      no se pelea por ella (dos pestañas se echarían una a otra sin parar).
+  //      vigente y llevaba rato abierto = se reconecta.
+  //  - cualquier otro código (red, suspensión): se reconecta con espera creciente.
+  const SUPERSEDED_MS = 3000;
+  function closeAction({ code, sessionStatus, livedMs }) {
+    if (code === 1008) return { action: 'retry', message: 'Se pausó el envío por demasiados comandos seguidos. Reconectando…' };
+    if (code !== 4403) return { action: 'retry', message: 'Sin conexión. Intentando reconectar…' };
+    if (sessionStatus === 401 || sessionStatus === 403) {
+      return { action: 'ended', message: 'Sesión cerrada por el portátil. Abre el enlace otra vez para entrar.' };
+    }
+    if (sessionStatus === 204 && livedMs < SUPERSEDED_MS) {
+      return { action: 'superseded', message: 'Esta sesión se abrió en otra pestaña o dispositivo. Cierra la otra o recarga esta página para volver aquí.' };
+    }
+    return { action: 'retry', message: 'Sin conexión. Intentando reconectar…' };
+  }
+  // </closeAction>
   let state = {};
   let controls = [];
   let clock = null;
   let socket = null;
   let retryMs = 500;
   let connected = false;
+  let openedAt = 0;
 
   document.title = byId('title').textContent = canMix ? 'Mezclador' : 'Monitor';
   if (canMix) {
@@ -444,23 +468,30 @@
       socket = new WebSocket('ws://' + location.host + '/ws/' + role);
       socket.onopen = () => {
         connected = true;
+        openedAt = Date.now();
         renderLink();
         retryMs = 500;
         connection.textContent = '';
       };
       socket.onmessage = (event) => apply(JSON.parse(event.data));
-      socket.onclose = (event) => {
+      socket.onclose = async (event) => {
         if (clock) clock = { ...clock, positionSec: position(), playing: false };
         connected = false;
         renderLink();
         renderPlayState();
         renderTracks(false);
         renderMeters();
-        if (event.code === 4403 || event.code === 1008) {
-          connection.textContent = 'Sesión cerrada por el portátil. Abre el enlace otra vez para entrar.';
-        } else {
-          retry();
+        let sessionStatus = null;
+        if (event.code === 4403) {
+          try {
+            sessionStatus = (await fetch(sessionUrl, { cache: 'no-store' })).status;
+          } catch {
+            // catch-ok: sin respuesta del portátil no se sabe si la sesión sigue; closeAction reintenta
+          }
         }
+        const next = closeAction({ code: event.code, sessionStatus, livedMs: Date.now() - openedAt });
+        if (next.action === 'retry') retry(next.message);
+        else connection.textContent = next.message;
       };
     } catch {
       // catch-ok: retry() muestra «Sin conexión. Intentando reconectar…» y vuelve a intentarlo
@@ -468,8 +499,8 @@
     }
   }
 
-  function retry() {
-    connection.textContent = 'Sin conexión. Intentando reconectar…';
+  function retry(message = 'Sin conexión. Intentando reconectar…') {
+    connection.textContent = message;
     setTimeout(connect, retryMs);
     retryMs = Math.min(8000, retryMs * 2);
   }

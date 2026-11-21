@@ -31,6 +31,38 @@ const RECEIPT_TIMEOUT: Duration = Duration::from_secs(2);
 const HEARTBEAT: Duration = Duration::from_secs(15);
 const SESSION_STALE: Duration = Duration::from_secs(40);
 const AUTH_REVOKED: u16 = 4403;
+/// Rechazos seguidos (sin un comando válido de por medio) con los que se cierra el socket con 1008.
+const REJECT_LIMIT: u32 = 3;
+/// Cada tanto sin rechazos se perdona uno: un rechazo suelto de hace un rato no cuenta contra el siguiente.
+const REJECT_DECAY: Duration = Duration::from_secs(10);
+
+/// Cuenta de comandos rechazados de UN socket (plan 3.2, H20). Antes era un contador que solo subía: con tres
+/// rechazos en toda la sesión (basta con mover rápido un fader tres veces: «rate limited») se cerraba el socket con
+/// 1008. Ahora un comando válido lo reinicia y, sin actividad válida, pierde un rechazo cada `REJECT_DECAY`.
+/// Solo se cierra con `REJECT_LIMIT` rechazos seguidos y recientes (un cliente que de verdad se porta mal).
+#[derive(Default)]
+struct RejectGuard {
+    strikes: u32,
+    last: Option<Instant>,
+}
+
+impl RejectGuard {
+    /// Anota un rechazo en `now`; devuelve si hay que cerrar el socket.
+    fn rejected(&mut self, now: Instant) -> bool {
+        if let Some(last) = self.last {
+            let forgiven = now.saturating_duration_since(last).as_secs() / REJECT_DECAY.as_secs();
+            self.strikes = self.strikes.saturating_sub(forgiven.min(u64::from(u32::MAX)) as u32);
+        }
+        self.strikes += 1;
+        self.last = Some(now);
+        self.strikes >= REJECT_LIMIT
+    }
+
+    /// Un comando válido: el cliente se está portando bien, se empieza de cero.
+    fn accepted(&mut self) {
+        self.strikes = 0;
+    }
+}
 
 pub fn random_token() -> io::Result<String> {
     let mut bytes = [0u8; 32];
@@ -601,7 +633,7 @@ async fn serve_socket(
     let mut heartbeat = time::interval_at(time::Instant::now() + HEARTBEAT, HEARTBEAT);
     heartbeat.set_missed_tick_behavior(time::MissedTickBehavior::Skip);
     let mut last_seen = Instant::now();
-    let mut invalid = 0u8;
+    let mut rejects = RejectGuard::default();
 
     loop {
         // Clone just the current snapshot. Changes while writing collapse into the next latest state.
@@ -632,6 +664,7 @@ async fn serve_socket(
             }
             received = socket.recv() => {
                 last_seen = Instant::now();
+                let is_command = matches!(received, Some(Ok(Message::Text(_))));
                 let result = match received {
                     Some(Ok(Message::Text(text))) => hub.enqueue(&key, connection_id, &text),
                     Some(Ok(Message::Binary(_))) => Err("binary commands are invalid"),
@@ -651,14 +684,12 @@ async fn serve_socket(
                     if reason == "rate limited" || reason == "queue full" {
                         let notice = serde_json::json!({"type": "rejected", "reason": reason}).to_string();
                         if !send(&mut socket, Message::Text(notice.into())).await { break; }
-                        invalid = invalid.saturating_add(1);
-                        if invalid < 3 { continue; }
-                    } else {
-                        invalid = invalid.saturating_add(1);
-                        if invalid < 3 { continue; }
                     }
+                    if !rejects.rejected(Instant::now()) { continue; }
                     close(&mut socket, 1008, "Comando rechazado").await;
                     break;
+                } else if is_command {
+                    rejects.accepted();
                 }
             }
         }
@@ -695,6 +726,37 @@ mod tests {
             }],
             ..Snapshot::default()
         }
+    }
+
+    #[test]
+    fn reject_guard_closes_only_after_recent_consecutive_rejections() {
+        let t0 = Instant::now();
+        let at = |secs: u64| t0 + Duration::from_secs(secs);
+        let mut guard = RejectGuard::default();
+        assert!(!guard.rejected(at(0)));
+        assert!(!guard.rejected(at(1)));
+        assert!(guard.rejected(at(2)), "tres rechazos seguidos y recientes cierran el socket");
+
+        // Un cliente que se porta bien: rechazos sueltos separados por un buen rato no suman nunca.
+        let mut guard = RejectGuard::default();
+        for round in 0..50u64 {
+            assert!(!guard.rejected(at(round * 60)), "un rechazo cada minuto no debe cerrar jamás (ronda {round})");
+        }
+
+        // Dos rechazos y mucho después otro: los dos primeros ya se perdonaron.
+        let mut guard = RejectGuard::default();
+        assert!(!guard.rejected(at(0)));
+        assert!(!guard.rejected(at(1)));
+        assert!(!guard.rejected(at(25)), "tras 24 s sin rechazos se perdonaron los anteriores");
+
+        // Un comando válido lo reinicia: mover el fader entre rechazos no acumula.
+        let mut guard = RejectGuard::default();
+        assert!(!guard.rejected(at(0)));
+        assert!(!guard.rejected(at(0)));
+        guard.accepted();
+        assert!(!guard.rejected(at(0)));
+        assert!(!guard.rejected(at(0)));
+        assert!(guard.rejected(at(0)), "pero tres seguidos sin nada válido en medio sí cierran");
     }
 
     #[test]
