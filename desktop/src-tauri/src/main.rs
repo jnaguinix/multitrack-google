@@ -154,7 +154,9 @@ fn active_server<'a>(running: &'a Option<Server>, epoch: &str) -> Result<&'a Ser
     running
         .as_ref()
         .filter(|server| server.is_running() && server.hub.epoch == epoch)
-        .ok_or_else(|| "El servidor LAN está apagado o la sesión terminó.".into())
+        // El código `LAN_APAGADO` es el único error que la interfaz trata como terminal (`bridgeLoop.ts`): el
+        // servidor ya no existe y reintentar no sirve. Cualquier otro error de un intercambio se reintenta.
+        .ok_or_else(|| "LAN_APAGADO: El servidor LAN está apagado o la sesión terminó.".into())
 }
 
 #[derive(Serialize)]

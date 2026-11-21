@@ -10,6 +10,7 @@ import type { Clock, Dispatch, Receipt, Source } from './remoteState';
 import { Dialog, DialogBody, DialogHeader } from '../../src/components/ui/Dialog';
 import DesktopUpdates from './DesktopUpdates';
 import { previewInvoke } from './previewInvoke';
+import { ALARM_AFTER_FAILURES, createBridgeLoop, describeError } from './bridgeLoop';
 import './connection.css';
 
 type Invoke = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
@@ -47,7 +48,7 @@ function urlHost(url: string): string | null {
 }
 
 function errorMessage(error: unknown) {
-  return error instanceof Error ? error.message : String(error);
+  return describeError(error);
 }
 
 function sameDevices(left: Device[], right: Device[]) {
@@ -68,6 +69,8 @@ export default memo(function RemoteConnectionBridge({ project, setlist, activati
   const [notice, setNotice] = useState('');
   const [updatesEnabled, setUpdatesEnabled] = useState(false);
   const [copied, setCopied] = useState<Role | null>(null);
+  // Fallos seguidos del intercambio con el servidor local (0 = todo bien). El servidor sigue encendido mientras tanto.
+  const [failures, setFailures] = useState(0);
 
   useLayoutEffect(() => {
     source.current = { project, setlist };
@@ -145,7 +148,6 @@ export default memo(function RemoteConnectionBridge({ project, setlist, activati
     const call = invoke;
     const activeEpoch = connection.epoch;
     let disposed = false;
-    let timer: ReturnType<typeof setTimeout>;
     let previousClock: Clock | undefined;
     let clockRevision = -1;
     let mixerConnected = connection.devices.some((device) => device.role === 'mixer');
@@ -158,92 +160,110 @@ export default memo(function RemoteConnectionBridge({ project, setlist, activati
     const stillTargets = (command: Dispatch, current: SongProject | null) =>
       activationCount.current === 0 && targets(command, current, revision.current.value);
 
+    // Un intercambio completo. Si falla lanza: `createBridgeLoop` decide si se reintenta (error pasajero) o se corta
+    // (el servidor ya no existe). Un fallo nunca apaga el servidor por sí solo.
     async function exchange() {
       if (!active()) return;
-      try {
-        const transport = audioEngine.getTransportState();
-        const current = source.current.project;
-        const currentRevision = revision.current.value;
-        const awaiting: Dispatch[] = [];
-        for (const command of pending) {
-          if (!stillTargets(command, current)) {
-            receipts.push({ id: command.id, outcome: 'stale' });
-          } else if (current && matches(command, current)) {
-            // App's existing updater has already updated the engine when React commits this state.
-            receipts.push({ id: command.id, outcome: 'applied' });
-          } else if (performance.now() >= deadline) {
-            receipts.push({ id: command.id, outcome: 'unconfirmed' });
-          } else {
-            awaiting.push(command);
-          }
+      const transport = audioEngine.getTransportState();
+      const current = source.current.project;
+      const currentRevision = revision.current.value;
+      const awaiting: Dispatch[] = [];
+      for (const command of pending) {
+        if (!stillTargets(command, current)) {
+          receipts.push({ id: command.id, outcome: 'stale' });
+        } else if (current && matches(command, current)) {
+          // App's existing updater has already updated the engine when React commits this state.
+          receipts.push({ id: command.id, outcome: 'applied' });
+        } else if (performance.now() >= deadline) {
+          receipts.push({ id: command.id, outcome: 'unconfirmed' });
+        } else {
+          awaiting.push(command);
         }
-        pending = awaiting;
-        for (const r of receipts) {
-          if (r.outcome !== 'applied') debugMode.trace('remoto', () => `comando ${r.id}: acuse «${r.outcome}»`);
+      }
+      pending = awaiting;
+      for (const r of receipts) {
+        if (r.outcome !== 'applied') debugMode.trace('remoto', () => `comando ${r.id}: acuse «${r.outcome}»`);
+      }
+      const state = snapshot({ ...source.current, activating: activationCount.current > 0 }, transport, currentRevision,
+        clockRevision === currentRevision ? previousClock : undefined, Date.now());
+      previousClock = state.clock;
+      clockRevision = currentRevision;
+      let trackLevels: number[] = [];
+      if (mixerConnected && state.clock.playing && !meterFailed) {
+        try {
+          const { tracks } = audioEngine.getTrackMeters();
+          trackLevels = state.tracks.map(({ id }) => Math.round((tracks[id]?.rms ?? 0) * 100));
+        } catch (error) {
+          meterFailed = true;
+          console.warn('[OmniTracks LAN] Medidores remotos suspendidos', error);
         }
-        const state = snapshot({ ...source.current, activating: activationCount.current > 0 }, transport, currentRevision,
-          clockRevision === currentRevision ? previousClock : undefined, Date.now());
-        previousClock = state.clock;
-        clockRevision = currentRevision;
-        let trackLevels: number[] = [];
-        if (mixerConnected && state.clock.playing && !meterFailed) {
-          try {
-            const { tracks } = audioEngine.getTrackMeters();
-            trackLevels = state.tracks.map(({ id }) => Math.round((tracks[id]?.rms ?? 0) * 100));
-          } catch (error) {
-            meterFailed = true;
-            console.warn('[OmniTracks LAN] Medidores remotos suspendidos', error);
-          }
-        }
+      }
 
-        const reply = await call<Exchange>('remote_exchange', {
-          epoch: activeEpoch, snapshot: { ...state, levels: trackLevels }, receipts,
-        });
-        if (!active()) return;
-        receipts = [];
-        mixerConnected = reply.devices.some((device) => device.role === 'mixer');
-        setDevices((previous) => sameDevices(previous, reply.devices) ? previous : reply.devices);
-        if (reply.commands.length) {
-          debugMode.trace('remoto', () => `${reply.commands.length} comando(s) recibidos del celular`);
-          const byControl = new Map<string, Dispatch>();
-          const mounting = audioEngine.getTransportState().isMountingSong;
-          for (const command of reply.commands) {
-            if (mounting || !stillTargets(command, source.current.project)) {
-              receipts.push({ id: command.id, outcome: 'stale' });
-              continue;
-            }
-            const key = command.trackId + ':' + command.command.type;
-            const previous = byControl.get(key);
-            if (previous) receipts.push({ id: previous.id, outcome: 'superseded' });
-            byControl.set(key, command);
+      const reply = await call<Exchange>('remote_exchange', {
+        epoch: activeEpoch, snapshot: { ...state, levels: trackLevels }, receipts,
+      });
+      if (!active()) return;
+      receipts = [];
+      mixerConnected = reply.devices.some((device) => device.role === 'mixer');
+      setDevices((previous) => sameDevices(previous, reply.devices) ? previous : reply.devices);
+      if (reply.commands.length) {
+        debugMode.trace('remoto', () => `${reply.commands.length} comando(s) recibidos del celular`);
+        const byControl = new Map<string, Dispatch>();
+        const mounting = audioEngine.getTransportState().isMountingSong;
+        for (const command of reply.commands) {
+          if (mounting || !stillTargets(command, source.current.project)) {
+            receipts.push({ id: command.id, outcome: 'stale' });
+            continue;
           }
-          const batch = [...byControl.values()];
-          if (batch.length) {
-            pending = batch;
-            deadline = performance.now() + COMMIT_TIMEOUT_MS;
-            updateProject((previous) => {
-              if (!active() || activationCount.current > 0 || audioEngine.getTransportState().isMountingSong
-                || trackIdentity(previous) !== revision.current.identity) return previous;
-              const applicable = batch.filter((command) => stillTargets(command, previous) && !matches(command, previous));
-              return applicable.length ? applyMix(previous, applicable) : previous;
-            });
-          }
+          const key = command.trackId + ':' + command.command.type;
+          const previous = byControl.get(key);
+          if (previous) receipts.push({ id: previous.id, outcome: 'superseded' });
+          byControl.set(key, command);
         }
-        timer = setTimeout(exchange, EXCHANGE_MS);
-      } catch (error) {
-        if (!active()) return;
-        console.error('[OmniTracks LAN] Falló el puente', error);
-        debugMode.alarm('puente-remoto-caido', `un intercambio falló y se apaga el servidor: ${errorMessage(error)}`);
-        setRemoteConnection(null);
-        setNotice('Se interrumpió la conexión remota: ' + errorMessage(error));
-        void call('remote_stop', { epoch: activeEpoch }).catch((stopError: unknown) => console.error('[OmniTracks LAN]', stopError));
+        const batch = [...byControl.values()];
+        if (batch.length) {
+          pending = batch;
+          deadline = performance.now() + COMMIT_TIMEOUT_MS;
+          updateProject((previous) => {
+            if (!active() || activationCount.current > 0 || audioEngine.getTransportState().isMountingSong
+              || trackIdentity(previous) !== revision.current.identity) return previous;
+            const applicable = batch.filter((command) => stillTargets(command, previous) && !matches(command, previous));
+            return applicable.length ? applyMix(previous, applicable) : previous;
+          });
+        }
       }
     }
 
-    timer = setTimeout(exchange, 0);
+    const loop = createBridgeLoop({
+      step: exchange,
+      active,
+      intervalMs: EXCHANGE_MS,
+      onDegraded: (seguidos, error) => {
+        if (seguidos === 1) console.error('[OmniTracks LAN] Falló un intercambio; se reintenta', error);
+        debugMode.trace('remoto', () => `intercambio fallido (${seguidos} seguidos): ${errorMessage(error)}`);
+        if (seguidos === ALARM_AFTER_FAILURES) {
+          debugMode.alarm('puente-remoto-degradado', `${seguidos} intercambios seguidos fallaron, se sigue reintentando: ${errorMessage(error)}`);
+        }
+        setFailures(seguidos);
+      },
+      onRecovered: (seguidos) => {
+        debugMode.trace('remoto', () => `intercambio recuperado tras ${seguidos} fallo(s)`);
+        setFailures(0);
+      },
+      onTerminal: (error) => {
+        // El servidor ya no existe (apagado o sesión terminada): no hay nada que reintentar.
+        console.error('[OmniTracks LAN] El servidor local terminó', error);
+        debugMode.alarm('puente-remoto-caido', `el servidor local ya no existe: ${errorMessage(error)}`);
+        setFailures(0);
+        setRemoteConnection(null);
+        setNotice('Se interrumpió la conexión remota: ' + errorMessage(error));
+      },
+    });
+    loop.start();
     return () => {
       disposed = true;
-      clearTimeout(timer);
+      loop.stop();
+      setFailures(0);
     };
   }, [connection, activationCount, updateProject]);
 
@@ -261,9 +281,10 @@ export default memo(function RemoteConnectionBridge({ project, setlist, activati
           type="button"
           className="lt-control lt-remote-trigger"
           data-active={Boolean(connection)}
+          data-degraded={Boolean(connection) && failures > 0}
           aria-label={connection ? 'Conexión remota activa' : 'Conexión remota'}
           aria-haspopup="dialog"
-          title={connection ? 'Conexión remota · Activa' : 'Conexión remota'}
+          title={connection ? (failures > 0 ? 'Conexión remota · Sin respuesta, reintentando' : 'Conexión remota · Activa') : 'Conexión remota'}
           onClick={() => {
             setOpen(true);
             if (!busy) void refresh();
@@ -305,6 +326,12 @@ export default memo(function RemoteConnectionBridge({ project, setlist, activati
               <span className="lt-remote-dot" aria-hidden="true" />
               Servidor activo en {urlHost(connection.pairings[0]?.url ?? '') ?? 'la red local'}
             </p>
+            {failures > 0 && (
+              <p className="lt-remote-warning" role="alert">
+                El servidor local no responde (fallos seguidos: {failures}). Sigue encendido y se reintenta solo; los
+                teléfonos conectados se mantienen. Si no se recupera, apaga y enciende el servidor.
+              </p>
+            )}
             {staleAddress && (
               <p className="lt-remote-warning" role="alert">
                 La IP de este equipo cambió ({staleAddress} ya no existe). Apaga y enciende el servidor
