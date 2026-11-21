@@ -3413,3 +3413,51 @@
         }
         assert!(!tiene_no_finitos(&buf) && buf.iter().any(|v| v.abs() > 0.01), "tras corregir los valores vuelve a sonar");
     }
+
+    // ----- Contención del callback: cada bloque omitido por un `try_lock` se cuenta por causa -----
+
+    #[test]
+    fn test_los_bloques_omitidos_por_try_lock_se_cuentan_por_causa() {
+        let engine = engine_con_pistas(&[("a", 0.5)], 48_000);
+        let mut buf = vec![0.0f32; 480 * 2];
+        let leer = |e: &PlaybackEngine| {
+            let s = e.stats.clone();
+            [
+                s.lock_miss_tracks.load(Ordering::Relaxed),
+                s.lock_miss_fade.load(Ordering::Relaxed),
+                s.lock_miss_consumer.load(Ordering::Relaxed),
+                s.lock_miss_metronome.load(Ordering::Relaxed),
+            ]
+        };
+        engine.simulate_callback_block(&mut buf, 2);
+        assert_eq!(leer(&engine), [0, 0, 0, 0], "sin contención no se cuenta nada");
+
+        {
+            let _ocupada = engine.stream_tracks.lock().unwrap();
+            engine.simulate_callback_block(&mut buf, 2);
+            assert!(buf.iter().all(|v| *v == 0.0), "con la lista de pistas ocupada el bloque sale en silencio");
+        }
+        assert_eq!(leer(&engine), [1, 0, 0, 0]);
+
+        {
+            let _ocupada = engine.fade.lock().unwrap();
+            engine.simulate_callback_block(&mut buf, 2);
+        }
+        assert_eq!(leer(&engine), [1, 1, 0, 0]);
+
+        {
+            let tracks = engine.tracks.try_lock().unwrap();
+            let _ocupado = tracks[0].consumer.lock().unwrap();
+            engine.simulate_callback_block(&mut buf, 2);
+        }
+        assert_eq!(leer(&engine), [1, 1, 1, 0]);
+
+        {
+            let _ocupado = engine.metronome.lock().unwrap();
+            engine.simulate_callback_block(&mut buf, 2);
+        }
+        assert_eq!(leer(&engine), [1, 1, 1, 1]);
+
+        engine.stats.reset();
+        assert_eq!(leer(&engine), [0, 0, 0, 0], "reset_stats los pone a cero");
+    }

@@ -15,6 +15,11 @@ export interface AudioStreamStatsSnapshot {
   maxFeederBlockDurationUs?: number;
   limitedSamples?: number;
   outputSamples?: number;
+  /** Bloques omitidos por contención del callback (try_lock), por causa. Deben quedar en 0. */
+  lockMissTracks?: number;
+  lockMissFade?: number;
+  lockMissConsumer?: number;
+  lockMissMetronome?: number;
 }
 
 /** Lo que el Diagnóstico lee del estado de reproducción del motor. */
@@ -24,6 +29,15 @@ export interface DiagnosticsPlayback {
   deviceDisconnected?: boolean;
   prefillDurationMs?: number;
   maxFeederBlockDurationUs?: number;
+}
+
+/** Total de veces que el callback omitió trabajo por un recurso ocupado, y el detalle por causa. */
+function contentionTotal(s: AudioStreamStatsSnapshot): number {
+  return (s.lockMissTracks ?? 0) + (s.lockMissFade ?? 0) + (s.lockMissConsumer ?? 0) + (s.lockMissMetronome ?? 0);
+}
+
+function contentionDetail(s: AudioStreamStatsSnapshot): string {
+  return `pistas ${s.lockMissTracks ?? 0} · fundido ${s.lockMissFade ?? 0} · anillo de pista ${s.lockMissConsumer ?? 0} · metrónomo ${s.lockMissMetronome ?? 0}`;
 }
 
 /** Porcentaje de muestras de salida que pasaron por el limitador. */
@@ -82,6 +96,7 @@ export const AudioDiagnostics: React.FC<Props> = ({ invoke, stats, playbackState
       feederMaxUs: stats.maxFeederBlockDurationUs ?? playbackState.maxFeederBlockDurationUs,
       bufferMinMs: stats.minRingBufferLevelMs,
       limitador: limiterLabel(stats),
+      contencionCallback: `${contentionTotal(stats)} (${contentionDetail(stats)})`,
     });
 
   const saveDiagnostic = () => {
@@ -285,7 +300,7 @@ export const AudioDiagnostics: React.FC<Props> = ({ invoke, stats, playbackState
           {/* Fila de contadores de telemetría + botón reiniciar */}
           <div className="p-2 rounded-lg bg-studio-strip border border-studio-line text-xs space-y-1.5">
             <div className="flex items-center justify-between">
-              <div className="grid grid-cols-3 sm:grid-cols-7 gap-2 flex-1 text-[10px]">
+              <div className="grid grid-cols-3 sm:grid-cols-8 gap-2 flex-1 text-[10px]">
                 <div>
                   <span className="text-neutral-400 uppercase tracking-wider block">Callbacks</span>
                   <span className="font-mono text-neutral-200 text-xs">{stats.callbacks.toLocaleString()}</span>
@@ -319,6 +334,12 @@ export const AudioDiagnostics: React.FC<Props> = ({ invoke, stats, playbackState
                 <div title="Parte del audio de salida que pasó por el limitador (picos suavizados). Debería quedar en 0 %; si sube, baja el volumen de las pistas o el Main.">
                   <span className="text-neutral-400 uppercase tracking-wider block">Limitador</span>
                   <span className={`font-mono text-xs ${limiterTone(stats)}`}>{limiterLabel(stats)}</span>
+                </div>
+                <div title={`Veces que el callback de audio no pudo tomar un recurso y omitió trabajo (${contentionDetail(stats)}). Debería quedar en 0: si sube, un hilo del motor retiene un bloqueo que el audio necesita.`}>
+                  <span className="text-neutral-400 uppercase tracking-wider block">Contención</span>
+                  <span className={`font-mono text-xs ${contentionTotal(stats) === 0 ? 'text-emerald-400' : 'text-rose-400 font-bold'}`}>
+                    {contentionTotal(stats)}
+                  </span>
                 </div>
                 <div>
                   <span className="text-neutral-400 uppercase tracking-wider block">Prefill</span>
