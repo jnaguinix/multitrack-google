@@ -819,6 +819,15 @@ pub struct CleanMetadata {
     pub bpm: Option<f64>,
 }
 
+/// Inicio del separador (espacio, guion o guion bajo) que está justo antes de `idx`; si lo anterior es otra letra,
+/// `idx`. Siempre cae en un límite de carácter, así que es seguro para `replace_range` con cualquier texto.
+fn separator_start_before(s: &str, idx: usize) -> usize {
+    match s[..idx].chars().next_back() {
+        Some(c) if c == '-' || c == '_' || c.is_whitespace() => idx - c.len_utf8(),
+        _ => idx,
+    }
+}
+
 pub fn clean_song_title_and_metadata(raw: &str) -> CleanMetadata {
     if raw.is_empty() {
         return CleanMetadata {
@@ -837,14 +846,16 @@ pub fn clean_song_title_and_metadata(raw: &str) -> CleanMetadata {
     }
     let mut s = text.to_string();
 
-    // 1. Tuning 440hz
-    let lower_s = s.to_lowercase();
+    // 1. Tuning 440hz. Todas las búsquedas por posición usan minúsculas ASCII (`to_ascii_lowercase`): conservan la
+    // longitud en bytes, así que un índice hallado ahí vale sobre `s`. Con `to_lowercase` (Unicode) algunas letras
+    // (p. ej. «İ») cambian de tamaño y el índice caía fuera o dentro de otra letra: pánico (plan 3.5, AG H16).
+    let lower_s = s.to_ascii_lowercase();
     if let Some(idx) = lower_s.find("440hz") {
-        let start = idx.saturating_sub(1);
+        let start = separator_start_before(&s, idx);
         let end = (idx + 5).min(s.len());
         s.replace_range(start..end, " ");
     } else if let Some(idx) = lower_s.find("440 hz") {
-        let start = idx.saturating_sub(1);
+        let start = separator_start_before(&s, idx);
         let end = (idx + 6).min(s.len());
         s.replace_range(start..end, " ");
     }
@@ -893,8 +904,8 @@ pub fn clean_song_title_and_metadata(raw: &str) -> CleanMetadata {
             for root in &[
                 "Bb", "C#", "Eb", "F#", "Ab", "Db", "Gb", "C", "D", "E", "F", "G", "A", "B",
             ] {
-                if w.to_lowercase().starts_with(&root.to_lowercase()) {
-                    let remainder = &w[root.len()..];
+                if w.to_ascii_lowercase().starts_with(&root.to_ascii_lowercase()) {
+                    let Some(remainder) = w.get(root.len()..) else { continue };
                     if let Ok(b) = remainder.parse::<f64>() {
                         if (40.0..=260.0).contains(&b) {
                             if detected_bpm.is_none() {
@@ -933,24 +944,24 @@ pub fn clean_song_title_and_metadata(raw: &str) -> CleanMetadata {
         "secuencia",
         "sequence",
     ] {
-        let mut cur = s.to_lowercase();
+        let mut cur = s.to_ascii_lowercase();
         while let Some(idx) = cur.find(filler) {
             s.replace_range(idx..idx + filler.len(), " ");
-            cur = s.to_lowercase();
+            cur = s.to_ascii_lowercase();
         }
     }
 
     // Clean remaining key & bpm from s
     if let Some(ref k) = detected_key {
-        let k_low = k.to_lowercase();
-        if let Some(idx) = s.to_lowercase().find(&k_low) {
+        let k_low = k.to_ascii_lowercase();
+        if let Some(idx) = s.to_ascii_lowercase().find(&k_low) {
             s.replace_range(idx..idx + k_low.len(), " ");
         }
         for root in &[
             "bb", "c#", "eb", "f#", "ab", "c", "d", "e", "f", "g", "a", "b",
         ] {
             let maj_str = format!("{root} major");
-            if let Some(idx) = s.to_lowercase().find(&maj_str) {
+            if let Some(idx) = s.to_ascii_lowercase().find(&maj_str) {
                 s.replace_range(idx..idx + maj_str.len(), " ");
             }
         }
@@ -958,7 +969,7 @@ pub fn clean_song_title_and_metadata(raw: &str) -> CleanMetadata {
 
     if let Some(b) = detected_bpm {
         let b_str = format!("{}bpm", b as u32);
-        if let Some(idx) = s.to_lowercase().find(&b_str) {
+        if let Some(idx) = s.to_ascii_lowercase().find(&b_str) {
             s.replace_range(idx..idx + b_str.len(), " ");
         }
         let b_plain = format!("{}", b as u32);
@@ -1036,6 +1047,36 @@ pub fn clean_song_title_and_metadata(raw: &str) -> CleanMetadata {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Plan 3.5 (AG H16): nombres de archivo con letras no ASCII no deben provocar un pánico al limpiar el título.
+    /// Antes se buscaba en `to_lowercase()` y el índice se usaba sobre el texto original (la minúscula de algunas
+    /// letras mide otros bytes), y el recorte previo a «440hz» podía caer dentro de una letra con tilde.
+    #[test]
+    fn test_limpiar_titulo_con_texto_no_ascii_no_entra_en_panico() {
+        let entradas = [
+            "é440hz",
+            "Canción440hz",
+            "Señor 440 hz",
+            "ñ440 hz.wav",
+            "İİİ 100bpm",
+            "İSTANBUL - Güzel 120bpm 440hz",
+            "ÁÉÍÓÚ Bb124 - Él",
+            "_ÉL ES BENDITO_ Ñandú 98bpm",
+            "Alabaré a mi Señor multitrack 72bpm",
+            "日本語の曲 440hz 90bpm",
+            "🎵 Gloria 440hz",
+            "ẞ stems C# minor 85bpm",
+            "K 440hz",
+        ];
+        for entrada in entradas {
+            let limpio = clean_song_title_and_metadata(entrada);
+            assert!(!limpio.title.is_empty() || entrada.trim().is_empty(), "«{entrada}» dejó el título vacío");
+        }
+        // Y lo que se detecta sigue siendo lo mismo con letras no ASCII delante.
+        assert_eq!(clean_song_title_and_metadata("İİİ 100bpm").bpm, Some(100.0));
+        assert_eq!(clean_song_title_and_metadata("Canción Ñandú 98bpm").bpm, Some(98.0));
+        assert_eq!(clean_song_title_and_metadata("Canción 440hz").title, "Canción");
+    }
 
     #[test]
     fn test_library_save_and_load_roundtrip() {
