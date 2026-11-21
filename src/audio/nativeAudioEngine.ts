@@ -523,6 +523,14 @@ export class NativeAudioEngine {
     return this.controlSync.applyChange(prev, next);
   }
 
+  /**
+   * Estado de la cola de controles de la mezcla: `idle` = el motor confirmó todas las órdenes enviadas; `errors` =
+   * órdenes que rechazó desde el arranque. El puente remoto lo usa para no responder «applied» antes del acuse.
+   */
+  public getControlStatus(): { idle: boolean; errors: number } {
+    return { idle: this.controlSync.queue.isIdle(), errors: this.controlSync.queue.errorCount };
+  }
+
   public checkProjectCacheStatus(project: SongProject): Promise<CacheStatus> {
     return this.cache.checkProjectCacheStatus(project);
   }

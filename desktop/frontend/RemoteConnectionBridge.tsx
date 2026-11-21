@@ -5,7 +5,7 @@ import { Wifi } from 'lucide-react';
 import type { SongProject } from '../../src/types/project';
 import { audioEngine } from '../../src/audio/audioEngine';
 import { debugMode } from '../../src/utils/debugMode';
-import { applyMix, matches, snapshot, targets, trackIdentity } from './remoteState';
+import { applyMix, matches, receiptFor, snapshot, targets, trackIdentity } from './remoteState';
 import type { Clock, Dispatch, Receipt, Source } from './remoteState';
 import { Dialog, DialogBody, DialogHeader } from '../../src/components/ui/Dialog';
 import DesktopUpdates from './DesktopUpdates';
@@ -155,6 +155,7 @@ export default memo(function RemoteConnectionBridge({ project, setlist, activati
     let pending: Dispatch[] = [];
     let receipts: Receipt[] = [];
     let deadline = 0;
+    let errorsAtDispatch = 0;
 
     const active = () => !disposed && epoch.current === activeEpoch;
     const stillTargets = (command: Dispatch, current: SongProject | null) =>
@@ -168,17 +169,18 @@ export default memo(function RemoteConnectionBridge({ project, setlist, activati
       const current = source.current.project;
       const currentRevision = revision.current.value;
       const awaiting: Dispatch[] = [];
+      const engine = audioEngine.getControlStatus();
       for (const command of pending) {
-        if (!stillTargets(command, current)) {
-          receipts.push({ id: command.id, outcome: 'stale' });
-        } else if (current && matches(command, current)) {
-          // App's existing updater has already updated the engine when React commits this state.
-          receipts.push({ id: command.id, outcome: 'applied' });
-        } else if (performance.now() >= deadline) {
-          receipts.push({ id: command.id, outcome: 'unconfirmed' });
-        } else {
-          awaiting.push(command);
-        }
+        // «applied» exige el estado ya actualizado Y el acuse del motor (cola de controles vacía, sin rechazos).
+        const outcome = receiptFor(command, {
+          targets: stillTargets(command, current),
+          matches: Boolean(current && matches(command, current)),
+          engine,
+          errorsAtDispatch,
+          pastDeadline: performance.now() >= deadline,
+        });
+        if (outcome) receipts.push({ id: command.id, outcome });
+        else awaiting.push(command);
       }
       pending = awaiting;
       for (const r of receipts) {
@@ -224,6 +226,7 @@ export default memo(function RemoteConnectionBridge({ project, setlist, activati
         if (batch.length) {
           pending = batch;
           deadline = performance.now() + COMMIT_TIMEOUT_MS;
+          errorsAtDispatch = audioEngine.getControlStatus().errors;
           updateProject((previous) => {
             if (!active() || activationCount.current > 0 || audioEngine.getTransportState().isMountingSong
               || trackIdentity(previous) !== revision.current.identity) return previous;
