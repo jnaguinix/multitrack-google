@@ -2992,3 +2992,155 @@
         // …pero una pista muerta no: sin ella no llegará nada y Play se quedaría en buffering eterno.
         assert!(buffering_ready(&[handle_sin_feeder(false)], 0, 48_000), "una pista muerta no bloquea la salida de buffering");
     }
+
+    // ----- H03: dos seeks superpuestos no pueden pisarse -----
+
+    #[tokio::test]
+    async fn test_h03_dos_seeks_superpuestos_terminan_en_el_ultimo_y_el_audio_sale_de_ahi() {
+        let engine = motor_real(
+            "h03_seeks",
+            &[("uno", 288_000), ("dos", 288_000)],
+            vec![seccion("a", 0.0, 6.0)],
+        )
+        .await;
+        reproducir(&engine).await;
+        // Parejas de seeks lanzados a la vez (el segundo es el que manda), hacia delante y hacia atrás.
+        for (a, b) in [(4.0f64, 1.0f64), (0.5, 5.0), (3.0, 2.0), (1.0, 1.0)] {
+            tokio::join!(engine.seek(a), engine.seek(b));
+            let generation = engine.seek_generation.load(Ordering::SeqCst);
+            {
+                let handles = engine.stream_tracks.lock().unwrap();
+                for (i, h) in handles.iter().enumerate() {
+                    let fd = h.flush_done.load(Ordering::SeqCst);
+                    assert_eq!(
+                        fd, generation,
+                        "seeks {a} y {b}: la pista {i} quedó con flush_done {fd} y la generación es {generation}: \
+                         el callback no saldría de buffering"
+                    );
+                }
+            }
+            let objetivo = (b * 48_000.0) as i64;
+            let mut primer_audio: Option<(i64, u64)> = None;
+            let limite = Instant::now() + std::time::Duration::from_secs(3);
+            while Instant::now() < limite && primer_audio.is_none() {
+                let (pos, reloj) = bloque_n(&engine, 2.0);
+                if let Some(p) = pos {
+                    primer_audio = Some((p, reloj));
+                }
+            }
+            let (pos, reloj) = primer_audio.unwrap_or_else(|| panic!("seeks {a} y {b}: no sonó audio"));
+            assert!(
+                (pos - objetivo).abs() < 3_000,
+                "seeks {a} y {b}: sonó la posición {pos} en lugar de ~{objetivo} (reloj {reloj})"
+            );
+            assert!(!desajustado(Some(pos), reloj), "seeks {a} y {b}: el reloj no coincide con el audio");
+        }
+    }
+
+    // ----- H08: el fundido de salida lo confirma el callback, no un `sleep` -----
+
+    #[tokio::test]
+    async fn test_h08_la_pausa_espera_a_que_el_callback_consuma_el_fundido_de_salida() {
+        let dir = escribir_cache_lr("h08_fundido", &[("uno", 288_000, 12_000, 12_000)]);
+        let engine = Arc::new(motor_de_prueba());
+        engine
+            .load_project(&dir, "h08_fundido", SR_PRUEBA, Some(120.0), Some(4), Some(vec![seccion("a", 0.0, 6.0)]), Some("1-bar".to_string()))
+            .await
+            .expect("load_project");
+        engine.set_track_controls("uno", None, None, None, None, Some("main")).await;
+        reproducir(&engine).await;
+        // «Hay una salida abierta»: el motor espera a que su callback consuma el fundido.
+        engine.stream_rate.store(SR_PRUEBA, Ordering::SeqCst);
+
+        // Un callback lento (cada 50 ms, como con un búfer grande) en su propio hilo.
+        let bloques = Arc::new(std::sync::Mutex::new(Vec::<Vec<f32>>::new()));
+        let parar = Arc::new(AtomicBool::new(false));
+        let hilo = {
+            let (engine, bloques, parar) = (Arc::clone(&engine), Arc::clone(&bloques), Arc::clone(&parar));
+            std::thread::spawn(move || {
+                while !parar.load(Ordering::SeqCst) {
+                    let mut b = vec![0.0f32; 480 * 2];
+                    engine.simulate_callback_block(&mut b, 2);
+                    bloques.lock().unwrap().push(b);
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                }
+            })
+        };
+        // Deja sonar y pausa justo después de un bloque: el siguiente llega ~50 ms más tarde, mucho después de 12 ms.
+        while bloques.lock().unwrap().len() < 8 {
+            tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+        }
+        let n = bloques.lock().unwrap().len();
+        while bloques.lock().unwrap().len() == n {
+            tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+        }
+        engine.pause().await;
+        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+        parar.store(true, Ordering::SeqCst);
+        hilo.join().unwrap();
+
+        let bloques = bloques.lock().unwrap();
+        let ultimo = bloques.iter().rposition(|b| b.iter().any(|v| v.abs() > 1e-6)).expect("sonó audio");
+        let b = &bloques[ultimo];
+        let ultima_muestra = b[b.len() - 2].abs();
+        let primera_muestra = b[0].abs();
+        assert!(primera_muestra > 0.01, "el último bloque sonoro debe empezar con audio: {primera_muestra}");
+        assert!(
+            ultima_muestra < 1e-3,
+            "el audio se cortó en seco (última muestra {ultima_muestra}): el motor dio por hecho el fundido antes de que el callback lo consumiera"
+        );
+    }
+
+    // ----- H06: el vamp solo existe con un rango válido y entra/sale sin desalinear el reloj del audio -----
+
+    #[tokio::test]
+    async fn test_h06_no_se_activa_el_vamp_en_un_hueco_entre_secciones() {
+        // A [0, 2) y B [3, 5): el segundo 2,5 no pertenece a ninguna sección.
+        let engine = motor_real("h06_hueco", &[("pista", 288_000)], vec![seccion("a", 0.0, 2.0), seccion("b", 3.0, 5.0)]).await;
+        engine.seek(2.5).await;
+        reproducir(&engine).await;
+        let activo = engine.toggle_vamp(Some(true)).await;
+        assert!(!activo, "sin sección activa no hay rango que repetir: el vamp no puede quedar activo");
+        assert!(!engine.is_vamping.load(Ordering::SeqCst), "el motor no debe creerse en vamp");
+        assert!(engine.clock_jumps.loop_range().is_none(), "no hay bucle en el reloj");
+    }
+
+    /// Cuenta los bloques cuyo audio no coincide con el reloj durante `n` bloques del callback simulado.
+    fn desajustes_en(engine: &PlaybackEngine, n: u32) -> (u32, u64) {
+        let (mut malos, mut ultimo_reloj) = (0u32, 0u64);
+        for _ in 0..n {
+            let (pos, reloj) = bloque(engine);
+            if desajustado(pos, reloj) {
+                malos += 1;
+            }
+            ultimo_reloj = reloj;
+        }
+        (malos, ultimo_reloj)
+    }
+
+    #[tokio::test]
+    async fn test_h06_activar_el_vamp_justo_antes_del_limite_no_desalinea_el_reloj() {
+        let engine = motor_real("h06_entrada", &[("pista", 288_000)], vec![seccion("a", 0.0, 3.0), seccion("b", 3.0, 6.0)]).await;
+        engine.seek(2.85).await;
+        reproducir(&engine).await;
+        let _ = desajustes_en(&engine, 3);
+        // A ~0,14 s del final de A el feeder ya leyó más allá de ese límite: el audio en el anillo sigue por B.
+        assert!(engine.toggle_vamp(Some(true)).await);
+        let (malos, _) = desajustes_en(&engine, 120);
+        assert!(malos <= 4, "tras activar el vamp junto al límite el reloj no coincide con el audio ({malos} bloques)");
+    }
+
+    #[tokio::test]
+    async fn test_h06_salir_del_vamp_justo_antes_del_limite_no_desalinea_el_reloj() {
+        let engine = motor_real("h06_salida", &[("pista", 288_000)], vec![seccion("a", 0.0, 3.0), seccion("b", 3.0, 6.0)]).await;
+        engine.seek(2.0).await;
+        reproducir(&engine).await;
+        assert!(engine.toggle_vamp(Some(true)).await);
+        // Dentro del bucle, a ~0,25 s del final: el feeder ya empalmó la vuelta en el anillo.
+        engine.seek(2.75).await;
+        let _ = desajustes_en(&engine, 6);
+        assert!(!engine.toggle_vamp(Some(false)).await);
+        let (malos, reloj) = desajustes_en(&engine, 120);
+        assert!(malos <= 4, "tras salir del vamp junto al límite el reloj no coincide con el audio ({malos} bloques)");
+        assert!(reloj > 144_000, "al salir del vamp la canción sigue hacia la sección siguiente (reloj {reloj})");
+    }

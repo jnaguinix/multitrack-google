@@ -64,10 +64,16 @@ pub struct PlaybackEngine {
     pub tracks: TokioMutex<Vec<ActiveTrack>>,
     pub stream_tracks: Arc<std::sync::Mutex<Vec<StreamTrackHandle>>>,
     pub fade: Arc<std::sync::Mutex<FadeEnvelope>>,
+    /// Ver `CallbackShared::fade_out_done`.
+    pub fade_out_done: Arc<AtomicBool>,
     pub stream: TokioMutex<Option<cpal::Stream>>,
     /// Frecuencia (Hz) a la que se abrió el stream actual; 0 si no hay ninguno. Distinta de `sample_rate`, que
     /// pasa a ser la de la caché al cargar un proyecto: si difieren hay que reabrir (`stream_needs_reopen`).
     pub stream_rate: AtomicU32,
+    /// Serializa las operaciones que reposicionan las pistas (`seek`, `stop`, cambio de tono en el sitio): cada una
+    /// sube la generación, pide a los feeders que se muevan, espera su confirmación y vacía los anillos. Dos a la vez
+    /// se pisarían (el seek viejo acabaría bajando `flush_done` o moviendo a un feeder al destino equivocado).
+    pub seek_lock: TokioMutex<()>,
     pub stats: Arc<AudioStreamStats>,
 
     // Phase 4 fields:
@@ -113,8 +119,10 @@ impl PlaybackEngine {
             tracks: TokioMutex::new(Vec::new()),
             stream_tracks: Arc::new(std::sync::Mutex::new(Vec::new())),
             fade: Arc::new(std::sync::Mutex::new(FadeEnvelope::new(FADE_MS, 48000))),
+            fade_out_done: Arc::new(AtomicBool::new(false)),
             stream: TokioMutex::new(None),
             stream_rate: AtomicU32::new(0),
+            seek_lock: TokioMutex::new(()),
             stats,
             sections: Arc::new(std::sync::Mutex::new(Vec::new())),
             quantize_mode: Arc::new(std::sync::Mutex::new("1-bar".to_string())),
@@ -712,9 +720,7 @@ impl PlaybackEngine {
         // se reposiciona en el mismo punto (como un seek, con su micro-fundido) para que suene el tono nuevo
         // enseguida. El reloj de la canción no cambia: el tono ya no altera la velocidad.
         if previous != clamped && has_tracks {
-            let sr = self.sample_rate.load(Ordering::SeqCst).max(1);
-            let position_sec = self.current_frame.load(Ordering::SeqCst) as f64 / sr as f64;
-            self.seek(position_sec).await;
+            self.seek_in_place().await;
         }
     }
 
@@ -861,9 +867,7 @@ impl PlaybackEngine {
         }
         drop(tracks);
         if needs_reseek {
-            let sr = self.sample_rate.load(Ordering::SeqCst).max(1);
-            let position_sec = self.current_frame.load(Ordering::SeqCst) as f64 / sr as f64;
-            self.seek(position_sec).await;
+            self.seek_in_place().await;
         }
     }
 
@@ -995,6 +999,7 @@ impl PlaybackEngine {
             clock_jumps: Arc::clone(&self.clock_jumps),
             total_frames: Arc::clone(&self.total_frames),
             fade: Arc::clone(&self.fade),
+            fade_out_done: Arc::clone(&self.fade_out_done),
             stats: Arc::clone(&self.stats),
             metronome: Arc::clone(&self.metronome),
             master_gain: Arc::clone(&self.master_gain),
