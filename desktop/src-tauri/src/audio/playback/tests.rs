@@ -2992,3 +2992,47 @@
         // …pero una pista muerta no: sin ella no llegará nada y Play se quedaría en buffering eterno.
         assert!(buffering_ready(&[handle_sin_feeder(false)], 0, 48_000), "una pista muerta no bloquea la salida de buffering");
     }
+
+    // ----- H03: dos seeks superpuestos no pueden pisarse -----
+
+    #[tokio::test]
+    async fn test_h03_dos_seeks_superpuestos_terminan_en_el_ultimo_y_el_audio_sale_de_ahi() {
+        let engine = motor_real(
+            "h03_seeks",
+            &[("uno", 288_000), ("dos", 288_000)],
+            vec![seccion("a", 0.0, 6.0)],
+        )
+        .await;
+        reproducir(&engine).await;
+        // Parejas de seeks lanzados a la vez (el segundo es el que manda), hacia delante y hacia atrás.
+        for (a, b) in [(4.0f64, 1.0f64), (0.5, 5.0), (3.0, 2.0), (1.0, 1.0)] {
+            tokio::join!(engine.seek(a), engine.seek(b));
+            let generation = engine.seek_generation.load(Ordering::SeqCst);
+            {
+                let handles = engine.stream_tracks.lock().unwrap();
+                for (i, h) in handles.iter().enumerate() {
+                    let fd = h.flush_done.load(Ordering::SeqCst);
+                    assert_eq!(
+                        fd, generation,
+                        "seeks {a} y {b}: la pista {i} quedó con flush_done {fd} y la generación es {generation}: \
+                         el callback no saldría de buffering"
+                    );
+                }
+            }
+            let objetivo = (b * 48_000.0) as i64;
+            let mut primer_audio: Option<(i64, u64)> = None;
+            let limite = Instant::now() + std::time::Duration::from_secs(3);
+            while Instant::now() < limite && primer_audio.is_none() {
+                let (pos, reloj) = bloque_n(&engine, 2.0);
+                if let Some(p) = pos {
+                    primer_audio = Some((p, reloj));
+                }
+            }
+            let (pos, reloj) = primer_audio.unwrap_or_else(|| panic!("seeks {a} y {b}: no sonó audio"));
+            assert!(
+                (pos - objetivo).abs() < 3_000,
+                "seeks {a} y {b}: sonó la posición {pos} en lugar de ~{objetivo} (reloj {reloj})"
+            );
+            assert!(!desajustado(Some(pos), reloj), "seeks {a} y {b}: el reloj no coincide con el audio");
+        }
+    }

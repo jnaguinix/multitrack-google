@@ -79,6 +79,11 @@ impl PlaybackEngine {
     }
 
     pub async fn stop(&self) {
+        let _op = self.seek_lock.lock().await;
+        self.stop_locked().await;
+    }
+
+    async fn stop_locked(&self) {
         if self.is_playing.load(Ordering::SeqCst) {
             self.fade.lock().unwrap().start_fade_out();
             tokio::time::sleep(std::time::Duration::from_millis((FADE_MS * 1.5) as u64)).await;
@@ -98,6 +103,20 @@ impl PlaybackEngine {
     }
 
     pub async fn seek(&self, target_sec: f64) {
+        let _op = self.seek_lock.lock().await;
+        self.seek_locked(target_sec).await;
+    }
+
+    /// Reposiciona en el punto actual (cambio de tono, cambio de bus transponible…). La posición se lee DENTRO de la
+    /// operación serializada: si otro seek terminó antes, se queda donde él dejó el reloj y no vuelve a la anterior.
+    pub(super) async fn seek_in_place(&self) {
+        let _op = self.seek_lock.lock().await;
+        let sr = self.sample_rate.load(Ordering::SeqCst).max(1);
+        let position_sec = self.current_frame.load(Ordering::SeqCst) as f64 / sr as f64;
+        self.seek_locked(position_sec).await;
+    }
+
+    async fn seek_locked(&self, target_sec: f64) {
         let sr = self.sample_rate.load(Ordering::SeqCst);
         let target_frame = (target_sec * sr as f64).round().max(0.0) as i64;
 
@@ -178,7 +197,8 @@ impl PlaybackEngine {
             }
             // El hueco anterior pertenece a la posición que se abandona.
             trk.skip_frames.store(0, Ordering::SeqCst);
-            trk.flush_done.store(generation, Ordering::SeqCst);
+            // Solo hacia delante: una generación vieja nunca puede bajar lo que ya confirmó una más nueva.
+            trk.flush_done.fetch_max(generation, Ordering::SeqCst);
         }
     }
 
