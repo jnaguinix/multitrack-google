@@ -10,6 +10,7 @@ let importGate: Promise<void> = Promise.resolve();
 let controlDelayMs = 0;
 let controlsApplied = 0;
 let lastLoadArgs: any = null;
+const controlArgs: any[] = [];
 
 const fakeInvoke = async (cmd: string, args: any = {}) => {
   calls.push(cmd === 'audio_load_project' || cmd === 'audio_import_tracks' ? `${cmd}:${args.projectId}` : cmd);
@@ -26,6 +27,8 @@ const fakeInvoke = async (cmd: string, args: any = {}) => {
       lastLoadArgs = args;
       return { durationSec: 10, sampleRate: 48000, totalFrames: 480000, trackCount: 1, trackPeaks: {} };
     case 'audio_set_track_controls':
+      controlArgs.push(args);
+    // eslint-disable-next-line no-fallthrough
     case 'audio_set_master_gains':
     case 'audio_set_config':
       if (controlDelayMs) await tick(controlDelayMs);
@@ -152,6 +155,22 @@ async function main() {
     (engine as any).applySnapshot(snap(true, 6000));
     assert.equal(notices.filter((m) => m.includes('tarda demasiado')).length, 2, 'tras recuperarse, un atasco nuevo vuelve a avisar');
     console.log('OK H07: pista sin lectura y buffering atascado se avisan');
+  }
+
+  // H02: quitar una pista del proyecto la silencia ya en el motor (sigue montada hasta volver a montar la canción).
+  {
+    const engine = new NativeAudioEngine();
+    await tick();
+    ready.clear();
+    ready.set('R', true);
+    await engine.loadProject(song('R'));
+    await tick(30);
+    controlArgs.length = 0;
+    engine.removeTrack('R-t1');
+    await tick(30);
+    const silenciada = controlArgs.find((a) => a.trackId === 'R-t1' && a.muted === true);
+    assert.ok(silenciada, 'removeTrack silencia la pista en el motor');
+    console.log('OK H02: removeTrack silencia la pista');
   }
 
   // H04b: si la cola nunca termina, Play sale igual (tope) y no queda colgado.

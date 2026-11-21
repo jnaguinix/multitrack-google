@@ -757,7 +757,18 @@ export class NativeAudioEngine {
     return 0;
   }
 
-  public removeTrack(_trackId: string): void {}
+  /**
+   * La pista deja de ser del proyecto: se silencia YA en el motor (sigue montada hasta volver a montar la canción) y
+   * su caché queda ignorada en la próxima carga, que solo monta las pistas del proyecto (manifiesto).
+   */
+  public removeTrack(trackId: string): void {
+    debugMode.trace('carga', () => `removeTrack ${trackId}`);
+    this.controlSync.enqueue({
+      key: `track:${trackId}`,
+      cmd: 'audio_set_track_controls',
+      args: { trackId, muted: true, monitor: false },
+    });
+  }
 
   public evictSongFromRamCache(_projectId: string): void {}
 
