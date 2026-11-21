@@ -3036,3 +3036,57 @@
             assert!(!desajustado(Some(pos), reloj), "seeks {a} y {b}: el reloj no coincide con el audio");
         }
     }
+
+    // ----- H08: el fundido de salida lo confirma el callback, no un `sleep` -----
+
+    #[tokio::test]
+    async fn test_h08_la_pausa_espera_a_que_el_callback_consuma_el_fundido_de_salida() {
+        let dir = escribir_cache_lr("h08_fundido", &[("uno", 288_000, 12_000, 12_000)]);
+        let engine = Arc::new(motor_de_prueba());
+        engine
+            .load_project(&dir, "h08_fundido", SR_PRUEBA, Some(120.0), Some(4), Some(vec![seccion("a", 0.0, 6.0)]), Some("1-bar".to_string()))
+            .await
+            .expect("load_project");
+        engine.set_track_controls("uno", None, None, None, None, Some("main")).await;
+        reproducir(&engine).await;
+        // «Hay una salida abierta»: el motor espera a que su callback consuma el fundido.
+        engine.stream_rate.store(SR_PRUEBA, Ordering::SeqCst);
+
+        // Un callback lento (cada 50 ms, como con un búfer grande) en su propio hilo.
+        let bloques = Arc::new(std::sync::Mutex::new(Vec::<Vec<f32>>::new()));
+        let parar = Arc::new(AtomicBool::new(false));
+        let hilo = {
+            let (engine, bloques, parar) = (Arc::clone(&engine), Arc::clone(&bloques), Arc::clone(&parar));
+            std::thread::spawn(move || {
+                while !parar.load(Ordering::SeqCst) {
+                    let mut b = vec![0.0f32; 480 * 2];
+                    engine.simulate_callback_block(&mut b, 2);
+                    bloques.lock().unwrap().push(b);
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                }
+            })
+        };
+        // Deja sonar y pausa justo después de un bloque: el siguiente llega ~50 ms más tarde, mucho después de 12 ms.
+        while bloques.lock().unwrap().len() < 8 {
+            tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+        }
+        let n = bloques.lock().unwrap().len();
+        while bloques.lock().unwrap().len() == n {
+            tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+        }
+        engine.pause().await;
+        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+        parar.store(true, Ordering::SeqCst);
+        hilo.join().unwrap();
+
+        let bloques = bloques.lock().unwrap();
+        let ultimo = bloques.iter().rposition(|b| b.iter().any(|v| v.abs() > 1e-6)).expect("sonó audio");
+        let b = &bloques[ultimo];
+        let ultima_muestra = b[b.len() - 2].abs();
+        let primera_muestra = b[0].abs();
+        assert!(primera_muestra > 0.01, "el último bloque sonoro debe empezar con audio: {primera_muestra}");
+        assert!(
+            ultima_muestra < 1e-3,
+            "el audio se cortó en seco (última muestra {ultima_muestra}): el motor dio por hecho el fundido antes de que el callback lo consumiera"
+        );
+    }

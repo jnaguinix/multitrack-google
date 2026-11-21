@@ -51,6 +51,9 @@ pub struct CallbackShared {
     pub clock_jumps: Arc<ClockJumps>,
     pub total_frames: Arc<AtomicU64>,
     pub fade: Arc<Mutex<FadeEnvelope>>,
+    /// Lo pone a `true` el callback al consumir el último fotograma de un fundido de salida; el motor lo baja antes de
+    /// pedir el fundido y lo espera antes de pausar, parar o reposicionar (en lugar de dormir un tiempo fijo).
+    pub fade_out_done: Arc<AtomicBool>,
     pub stats: Arc<AudioStreamStats>,
     pub metronome: Arc<Mutex<MetronomeEngine>>,
     pub master_gain: Arc<AtomicU32>,
@@ -432,6 +435,10 @@ impl BlockMixer {
                 limited += (o.abs() > LIMITER_KNEE) as u64;
                 *v = soft_limit(o);
             }
+        }
+        // Fundido de salida consumido por completo: el motor ya puede pausar, parar o reposicionar sin un corte en seco.
+        if fade.is_fade_out_complete() {
+            s.fade_out_done.store(true, Ordering::Release);
         }
         if limited > 0 {
             s.stats.limited_samples.fetch_add(limited, Ordering::Relaxed);

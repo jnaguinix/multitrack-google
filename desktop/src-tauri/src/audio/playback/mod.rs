@@ -64,6 +64,8 @@ pub struct PlaybackEngine {
     pub tracks: TokioMutex<Vec<ActiveTrack>>,
     pub stream_tracks: Arc<std::sync::Mutex<Vec<StreamTrackHandle>>>,
     pub fade: Arc<std::sync::Mutex<FadeEnvelope>>,
+    /// Ver `CallbackShared::fade_out_done`.
+    pub fade_out_done: Arc<AtomicBool>,
     pub stream: TokioMutex<Option<cpal::Stream>>,
     /// Frecuencia (Hz) a la que se abrió el stream actual; 0 si no hay ninguno. Distinta de `sample_rate`, que
     /// pasa a ser la de la caché al cargar un proyecto: si difieren hay que reabrir (`stream_needs_reopen`).
@@ -117,6 +119,7 @@ impl PlaybackEngine {
             tracks: TokioMutex::new(Vec::new()),
             stream_tracks: Arc::new(std::sync::Mutex::new(Vec::new())),
             fade: Arc::new(std::sync::Mutex::new(FadeEnvelope::new(FADE_MS, 48000))),
+            fade_out_done: Arc::new(AtomicBool::new(false)),
             stream: TokioMutex::new(None),
             stream_rate: AtomicU32::new(0),
             seek_lock: TokioMutex::new(()),
@@ -996,6 +999,7 @@ impl PlaybackEngine {
             clock_jumps: Arc::clone(&self.clock_jumps),
             total_frames: Arc::clone(&self.total_frames),
             fade: Arc::clone(&self.fade),
+            fade_out_done: Arc::clone(&self.fade_out_done),
             stats: Arc::clone(&self.stats),
             metronome: Arc::clone(&self.metronome),
             master_gain: Arc::clone(&self.master_gain),

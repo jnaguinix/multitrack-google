@@ -4,6 +4,10 @@ use std::time::Instant;
 use crate::audio::output::AudioEngineState;
 
 use super::fade::FADE_MS;
+
+/// Tope de la espera al fundido de salida: si el callback no llega a consumirlo (salida parada, dispositivo
+/// bloqueado) se sigue igualmente en lugar de colgar la orden.
+const FADE_OUT_WAIT_MAX_MS: u64 = 100;
 use super::bus::TrackBus;
 use super::types::{LevelPair, MetersSnapshotDto, PlaybackStateSnapshot, TrackControlSnapshot, TrackLevel};
 use super::PlaybackEngine;
@@ -66,14 +70,38 @@ impl PlaybackEngine {
         Ok(())
     }
 
+    /// Pide el fundido de salida y espera a que el CALLBACK confirme que consumió el último fotograma (antes se
+    /// dormía un tiempo fijo: con un búfer grande o un callback retrasado, pausar o reposicionar cortaba el audio
+    /// en seco). Sin salida abierta o en buffering no hay callback que lo consuma: se duerme el tiempo del fundido.
+    /// Con tope (`FADE_OUT_WAIT_MAX_MS`) por si el callback no llega.
+    async fn fade_out_and_wait(&self) {
+        // Primero se baja la confirmación y después se pide el fundido: el callback solo puede subirla tras verlo.
+        self.fade_out_done.store(false, Ordering::SeqCst);
+        self.fade.lock().unwrap().start_fade_out();
+        let has_callback = self.stream_rate.load(Ordering::SeqCst) != 0
+            && !self.device_disconnected.load(Ordering::SeqCst)
+            && !self.is_buffering.load(Ordering::SeqCst);
+        if !has_callback {
+            tokio::time::sleep(std::time::Duration::from_millis((FADE_MS * 1.5) as u64)).await;
+            return;
+        }
+        let deadline = Instant::now() + std::time::Duration::from_millis(FADE_OUT_WAIT_MAX_MS);
+        while !self.fade_out_done.load(Ordering::SeqCst) {
+            if Instant::now() >= deadline {
+                tracing::warn!("[NativeEngine] El callback no confirmó el fundido de salida en {FADE_OUT_WAIT_MAX_MS} ms; se continúa");
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+        }
+    }
+
     pub async fn pause(&self) {
         if !self.is_playing.load(Ordering::SeqCst) {
             return;
         }
 
-        // Apply 8 ms fade-out before pausing to avoid clicks
-        self.fade.lock().unwrap().start_fade_out();
-        tokio::time::sleep(std::time::Duration::from_millis((FADE_MS * 1.5) as u64)).await;
+        // Fundido de salida de 8 ms antes de pausar, para evitar el clic.
+        self.fade_out_and_wait().await;
 
         self.is_playing.store(false, Ordering::SeqCst);
     }
@@ -85,8 +113,7 @@ impl PlaybackEngine {
 
     async fn stop_locked(&self) {
         if self.is_playing.load(Ordering::SeqCst) {
-            self.fade.lock().unwrap().start_fade_out();
-            tokio::time::sleep(std::time::Duration::from_millis((FADE_MS * 1.5) as u64)).await;
+            self.fade_out_and_wait().await;
             self.is_playing.store(false, Ordering::SeqCst);
         }
 
@@ -122,8 +149,7 @@ impl PlaybackEngine {
 
         let was_playing = self.is_playing.load(Ordering::SeqCst);
         if was_playing {
-            self.fade.lock().unwrap().start_fade_out();
-            tokio::time::sleep(std::time::Duration::from_millis((FADE_MS * 1.2) as u64)).await;
+            self.fade_out_and_wait().await;
         }
 
         // Si el destino cae fuera del bucle de vamp, el bucle ya no tiene sentido: dejarlo activo devolvería
