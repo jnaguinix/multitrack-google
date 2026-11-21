@@ -74,6 +74,11 @@ impl PlaybackEngine {
         // Start 8 ms fade-in
         self.fade.lock().unwrap().start_fade_in();
         self.is_playing.store(true, Ordering::SeqCst);
+        // Si sigue en buffering (canción recién cargada o seek sin salida abierta), la espera cuenta desde ahora y no
+        // desde la carga: la interfaz avisa de un atasco cuando pasa de unos segundos.
+        if self.is_buffering.load(Ordering::SeqCst) {
+            *self.buffering_start_time.lock().unwrap() = Some(Instant::now());
+        }
 
         // Ensure CPAL output stream is active
         if let Err(error) = open_output().await {
@@ -328,7 +333,9 @@ impl PlaybackEngine {
             meters,
             track_controls,
             open_device: self.open_device.lock().unwrap().clone(),
-            buffering_ms: if self.is_buffering.load(Ordering::SeqCst) {
+            // Solo cuenta con la reproducción pedida: sin Play no hay salida abierta ni callback que saque al motor de
+            // buffering (la canción recién cargada lo está), y eso no es un atasco.
+            buffering_ms: if self.is_buffering.load(Ordering::SeqCst) && self.is_playing.load(Ordering::SeqCst) {
                 self.buffering_start_time.lock().unwrap().map_or(0, |t| t.elapsed().as_millis() as u64)
             } else {
                 0
