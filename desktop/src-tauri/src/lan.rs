@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashMap, VecDeque},
     io,
-    net::SocketAddr,
+    net::{IpAddr, SocketAddr},
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
@@ -64,6 +64,66 @@ impl RejectGuard {
     }
 }
 
+/// Fallos de emparejamiento seguidos que se toleran desde un mismo origen (IP) dentro de `PAIR_FAILURE_WINDOW`.
+const PAIR_FAILURE_LIMIT: usize = 5;
+const PAIR_FAILURE_WINDOW: Duration = Duration::from_secs(60);
+/// Orígenes distintos que se recuerdan a la vez (el mapa no crece sin límite).
+const PAIR_TRACKED_LIMIT: usize = 256;
+
+/// Intentos de emparejamiento fallidos por origen (plan 3.4). El código del enlace es imposible de adivinar (144 bits),
+/// pero sin límite cualquiera en la red podía probar sin parar; con él, `PAIR_FAILURE_LIMIT` fallos en
+/// `PAIR_FAILURE_WINDOW` bloquean a ese origen (429) hasta que el más antiguo salga de la ventana.
+#[derive(Default)]
+struct PairLimiter {
+    failures: HashMap<IpAddr, VecDeque<Instant>>,
+}
+
+impl PairLimiter {
+    fn prune(entries: &mut VecDeque<Instant>, now: Instant) {
+        while entries
+            .front()
+            .is_some_and(|at| now.saturating_duration_since(*at) >= PAIR_FAILURE_WINDOW)
+        {
+            entries.pop_front();
+        }
+    }
+
+    /// `true` si este origen ya agotó sus intentos.
+    fn blocked(&mut self, ip: IpAddr, now: Instant) -> bool {
+        let Some(entries) = self.failures.get_mut(&ip) else {
+            return false;
+        };
+        Self::prune(entries, now);
+        if entries.is_empty() {
+            self.failures.remove(&ip);
+            return false;
+        }
+        entries.len() >= PAIR_FAILURE_LIMIT
+    }
+
+    fn failed(&mut self, ip: IpAddr, now: Instant) {
+        if self.failures.len() >= PAIR_TRACKED_LIMIT && !self.failures.contains_key(&ip) {
+            self.failures.retain(|_, entries| {
+                Self::prune(entries, now);
+                !entries.is_empty()
+            });
+            if self.failures.len() >= PAIR_TRACKED_LIMIT {
+                // Todos los orígenes tienen fallos recientes: se descarta el más antiguo para no crecer.
+                let oldest = self
+                    .failures
+                    .iter()
+                    .filter_map(|(ip, entries)| entries.back().map(|at| (*ip, *at)))
+                    .min_by_key(|(_, at)| *at)
+                    .map(|(ip, _)| ip);
+                if let Some(oldest) = oldest {
+                    self.failures.remove(&oldest);
+                }
+            }
+        }
+        self.failures.entry(ip).or_default().push_back(now);
+    }
+}
+
 pub fn random_token() -> io::Result<String> {
     let mut bytes = [0u8; 32];
     getrandom::fill(&mut bytes).map_err(|error| io::Error::other(error.to_string()))?;
@@ -76,6 +136,11 @@ pub fn pairing_token() -> io::Result<String> {
     let mut bytes = [0u8; 18];
     getrandom::fill(&mut bytes).map_err(|error| io::Error::other(error.to_string()))?;
     Ok(URL_SAFE_NO_PAD.encode(bytes))
+}
+
+struct PairingTokens {
+    monitor: String,
+    mixer: String,
 }
 
 struct Session {
@@ -112,6 +177,7 @@ struct Inner {
     inflight: Vec<Pending>,
     next_id: u32,
     last_exchange: Option<Instant>,
+    pair_failures: PairLimiter,
 }
 
 impl Inner {
@@ -125,8 +191,8 @@ pub struct Hub {
     host: String,
     origin: String,
     pub epoch: String,
-    monitor_token: String,
-    mixer_token: String,
+    /// Códigos de los enlaces de emparejamiento (Músicos, Sonidista). Cambian al expulsar un dispositivo (plan 3.4).
+    tokens: Mutex<PairingTokens>,
     cancel: CancellationToken,
     inner: Mutex<Inner>,
     latest: watch::Sender<Arc<Snapshot>>,
@@ -138,18 +204,21 @@ impl Hub {
             host: addr.to_string(),
             origin: format!("http://{addr}"),
             epoch: random_token()?,
-            monitor_token: pairing_token()?,
-            mixer_token: pairing_token()?,
+            tokens: Mutex::new(PairingTokens {
+                monitor: pairing_token()?,
+                mixer: pairing_token()?,
+            }),
             cancel: CancellationToken::new(),
             inner: Mutex::new(Inner::default()),
             latest: watch::channel(Arc::new(Snapshot::default())).0,
         })
     }
 
-    fn token(&self, role: Role) -> &str {
+    fn token(&self, role: Role) -> String {
+        let tokens = self.tokens.lock().expect("LAN tokens");
         match role {
-            Role::Monitor => &self.monitor_token,
-            Role::Mixer => &self.mixer_token,
+            Role::Monitor => tokens.monitor.clone(),
+            Role::Mixer => tokens.mixer.clone(),
         }
     }
 
@@ -174,15 +243,34 @@ impl Hub {
         devices
     }
 
+    /// Expulsa un dispositivo: cierra su socket, borra su sesión y cambia el código del enlace de su rol, para que
+    /// el enlace que se había compartido (el mismo que usó) ya no empareje (plan 3.4, H18). Los demás dispositivos
+    /// del rol siguen con su sesión; quien deba entrar de nuevo necesita el enlace nuevo. Devuelve `false` si no
+    /// había tal dispositivo o no se pudo generar el código nuevo (no se expulsa nada: sin enlace nuevo, expulsar
+    /// no serviría de nada).
     pub fn kick(&self, device_id: u32) -> bool {
         let mut inner = self.inner.lock().expect("LAN state");
-        let Some(key) = inner
+        let Some((key, role)) = inner
             .sessions
             .iter()
-            .find_map(|(key, session)| (session.id == device_id).then(|| key.clone()))
+            .find_map(|(key, session)| (session.id == device_id).then(|| (key.clone(), session.role)))
         else {
             return false;
         };
+        let fresh = match pairing_token() {
+            Ok(token) => token,
+            Err(error) => {
+                tracing::error!(device_id, %error, "no se pudo renovar el enlace; no se expulsa");
+                return false;
+            }
+        };
+        {
+            let mut tokens = self.tokens.lock().expect("LAN tokens");
+            match role {
+                Role::Monitor => tokens.monitor = fresh,
+                Role::Mixer => tokens.mixer = fresh,
+            }
+        }
         if let Some(connection) = inner
             .sessions
             .remove(&key)
@@ -191,7 +279,7 @@ impl Hub {
             connection.cancel.cancel();
         }
         inner.queue.retain(|pending| pending.device_id != device_id);
-        tracing::info!(device_id, "device revoked");
+        tracing::info!(device_id, ?role, "device revoked, pairing link renewed");
         true
     }
 
@@ -495,16 +583,24 @@ struct PairRequest {
 async fn pair(
     State(hub): State<Arc<Hub>>,
     Path(path): Path<String>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
     Json(request): Json<PairRequest>,
 ) -> Response {
     let Some(role) = Role::from_path(&path) else {
         return StatusCode::NOT_FOUND.into_response();
     };
+    let ip = addr.ip();
+    let now = Instant::now();
+    if hub.inner.lock().expect("LAN state").pair_failures.blocked(ip, now) {
+        tracing::warn!(?role, %ip, "pairing blocked: too many failed attempts");
+        return StatusCode::TOO_MANY_REQUESTS.into_response();
+    }
     if !hub.origin_ok(&headers)
         || !bool::from(request.token.as_bytes().ct_eq(hub.token(role).as_bytes()))
     {
-        tracing::warn!(?role, "pairing rejected");
+        hub.inner.lock().expect("LAN state").pair_failures.failed(ip, now);
+        tracing::warn!(?role, %ip, "pairing rejected");
         return StatusCode::FORBIDDEN.into_response();
     }
     if session_cookie(&headers, role).is_some_and(|key| hub.has_session(key, role)) {
@@ -726,6 +822,31 @@ mod tests {
             }],
             ..Snapshot::default()
         }
+    }
+
+    #[test]
+    fn pair_limiter_blocks_one_origin_for_a_while_and_stays_bounded() {
+        let t0 = Instant::now();
+        let at = |secs: u64| t0 + Duration::from_secs(secs);
+        let a: IpAddr = "192.168.0.10".parse().unwrap();
+        let b: IpAddr = "192.168.0.11".parse().unwrap();
+        let mut limiter = PairLimiter::default();
+        for i in 0..PAIR_FAILURE_LIMIT as u64 {
+            assert!(!limiter.blocked(a, at(i)), "hasta el límite no se bloquea");
+            limiter.failed(a, at(i));
+        }
+        assert!(limiter.blocked(a, at(5)), "agotados los intentos, se bloquea");
+        assert!(!limiter.blocked(b, at(5)), "otro origen no se ve afectado");
+        // Los fallos salen de la ventana: el bloqueo es temporal.
+        assert!(!limiter.blocked(a, at(PAIR_FAILURE_WINDOW.as_secs() + 10)));
+
+        // El mapa no crece sin límite aunque lleguen muchos orígenes distintos.
+        let mut limiter = PairLimiter::default();
+        for n in 0..(PAIR_TRACKED_LIMIT as u32 * 3) {
+            let ip = IpAddr::from([10, 0, (n >> 8) as u8, n as u8]);
+            limiter.failed(ip, at(1));
+        }
+        assert!(limiter.failures.len() <= PAIR_TRACKED_LIMIT);
     }
 
     #[test]

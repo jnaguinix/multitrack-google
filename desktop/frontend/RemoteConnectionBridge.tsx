@@ -51,6 +51,11 @@ function errorMessage(error: unknown) {
   return describeError(error);
 }
 
+function samePairings(left: Pairing[], right: Pairing[]) {
+  return left.length === right.length && left.every((pairing, index) =>
+    pairing.role === right[index].role && pairing.url === right[index].url);
+}
+
 function sameDevices(left: Device[], right: Device[]) {
   return left.length === right.length && left.every((device, index) =>
     device.id === right[index].id && device.role === right[index].role && device.address === right[index].address);
@@ -64,6 +69,7 @@ export default memo(function RemoteConnectionBridge({ project, setlist, activati
   const [connection, setConnection] = useState<Connection | null>(null);
   const [interfaces, setInterfaces] = useState<Status['interfaces']>([]);
   const [devices, setDevices] = useState<Device[]>([]);
+  const [pairings, setPairings] = useState<Pairing[]>([]);
   const [address, setAddress] = useState('');
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState('');
@@ -88,6 +94,10 @@ export default memo(function RemoteConnectionBridge({ project, setlist, activati
     epoch.current = next?.epoch ?? null;
     setConnection((previous) => previous?.epoch === next?.epoch ? previous : next);
     setDevices(next?.devices ?? []);
+    // Los enlaces cambian dentro de la misma conexión (al expulsar un dispositivo se renueva el de su rol): van aparte
+    // para no reiniciar el bucle de intercambio, que depende de `connection`.
+    const fresh = next?.pairings ?? [];
+    setPairings((previous) => samePairings(previous, fresh) ? previous : fresh);
   }
 
   async function refresh() {
@@ -130,9 +140,13 @@ export default memo(function RemoteConnectionBridge({ project, setlist, activati
     if (!invoke || !connection) return;
     setBusy(true);
     try {
-      await invoke('remote_kick', { epoch: connection.epoch, deviceId });
+      const kicked = devices.find((device) => device.id === deviceId);
+      const updated = await invoke<Connection>('remote_kick', { epoch: connection.epoch, deviceId });
       setDevices((previous) => previous.filter((device) => device.id !== deviceId));
-      setNotice('Dispositivo expulsado.');
+      setPairings((previous) => samePairings(previous, updated.pairings) ? previous : updated.pairings);
+      setNotice(kicked
+        ? `Dispositivo expulsado. El enlace de ${roleName[kicked.role]} cambió: el anterior ya no sirve; comparte el nuevo.`
+        : 'Dispositivo expulsado.');
     } catch (error) {
       setNotice(errorMessage(error));
     } finally {
@@ -273,7 +287,7 @@ export default memo(function RemoteConnectionBridge({ project, setlist, activati
   if (!invoke) return null;
 
   // La IP con la que se emitieron los enlaces ya no pertenece a ningún adaptador (cambió la red).
-  const serverHost = urlHost(connection?.pairings[0]?.url ?? '');
+  const serverHost = urlHost(pairings[0]?.url ?? '');
   const staleAddress = serverHost && interfaces.length > 0
     && !interfaces.some((entry) => entry.address === serverHost) ? serverHost : null;
 
@@ -327,7 +341,7 @@ export default memo(function RemoteConnectionBridge({ project, setlist, activati
           <>
             <p className="lt-remote-status" role="status">
               <span className="lt-remote-dot" aria-hidden="true" />
-              Servidor activo en {urlHost(connection.pairings[0]?.url ?? '') ?? 'la red local'}
+              Servidor activo en {urlHost(pairings[0]?.url ?? '') ?? 'la red local'}
             </p>
             {failures > 0 && (
               <p className="lt-remote-warning" role="alert">
@@ -342,7 +356,7 @@ export default memo(function RemoteConnectionBridge({ project, setlist, activati
               </p>
             )}
             <div className="lt-remote-pairings">
-              {connection.pairings.map((pairing) => (
+              {pairings.map((pairing) => (
                 <section key={pairing.role}>
                   <h3>{roleName[pairing.role]}</h3>
                   <p className="lt-remote-hint">{roleHint[pairing.role]}</p>

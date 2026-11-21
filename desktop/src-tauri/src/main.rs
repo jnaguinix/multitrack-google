@@ -143,11 +143,12 @@ async fn remote_kick(
     state: State<'_, RemoteState>,
     epoch: String,
     device_id: u32,
-) -> Result<(), String> {
+) -> Result<ConnectionInfo, String> {
     let running = state.0.lock().await;
     let server = active_server(&running, &epoch)?;
     server.hub.kick(device_id);
-    Ok(())
+    // Expulsar renueva el enlace del rol: se devuelve la información al día para que la interfaz muestre el nuevo.
+    connection_info(server)
 }
 
 fn active_server<'a>(running: &'a Option<Server>, epoch: &str) -> Result<&'a Server, String> {

@@ -6,13 +6,15 @@
 type Invoke = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
 
 let running = false;
+// Cada expulsión renueva el enlace del Sonidista, como hace el servidor real (plan 3.4).
+let mixerLink = 1;
 
 const connection = () => ({
   epoch: 'vista-previa',
   devices: [],
   pairings: [
     { role: 'monitor', url: 'http://192.168.0.10:8765/m/ejemplo-musicos' },
-    { role: 'mixer', url: 'http://192.168.0.10:8765/s/ejemplo-sonidista' },
+    { role: 'mixer', url: 'http://192.168.0.10:8765/s/ejemplo-sonidista-' + mixerLink },
   ],
 });
 
@@ -47,7 +49,8 @@ export const previewInvoke: Invoke = async <T,>(command: string): Promise<T> => 
       } as T;
     }
     case 'remote_kick':
-      return undefined as T;
+      mixerLink += 1;
+      return connection() as T;
     default:
       throw new Error(`Vista previa: el comando «${command}» no está simulado.`);
   }
