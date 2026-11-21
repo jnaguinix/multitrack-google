@@ -658,6 +658,7 @@ async function hydrateStem(stem: StoredAudioStem): Promise<StoredAudioStem> {
     const file: File = await stem.fileHandle.getFile();
     return { ...stem, blob: file };
   } catch (err) {
+    // catch-ok: el fallo se devuelve como estado (`unavailable`: falta el archivo o el permiso), no se pierde
     const name = (err as { name?: string })?.name;
     return { ...stem, unavailable: name === 'NotFoundError' ? 'missing' : 'permission' };
   }

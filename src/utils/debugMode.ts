@@ -155,6 +155,7 @@ export function describeError(error: unknown): string {
   try {
     return JSON.stringify(error);
   } catch {
+    // catch-ok: dar formato a un error no puede registrar otro error (el registro lo usa); queda String(error)
     return String(error);
   }
 }
@@ -167,6 +168,7 @@ export function summarizeArgs(args: Record<string, unknown> | undefined): string
       JSON.stringify(args, (_k, v) => (Array.isArray(v) && v.length > 8 ? `[${v.length} elementos]` : v))
     );
   } catch {
+    // catch-ok: argumentos que no se pueden serializar se anotan con un texto fijo en el registro
     return '(args no serializables)';
   }
 }

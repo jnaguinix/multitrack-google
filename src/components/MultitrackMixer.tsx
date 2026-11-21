@@ -84,7 +84,7 @@ const PanKnob: React.FC<PanKnobProps> = ({ name, pan, onChangePan }) => {
           try {
             e.currentTarget.setPointerCapture(e.pointerId);
           } catch {
-            // Ignore pointer capture errors on non-standard touch/pen drivers
+            // catch-ok: algunos controladores táctiles o de lápiz rechazan la captura del puntero
           }
           dragRef.current = { pointerId: e.pointerId, startY: e.clientY, startPanPct: panPct };
         }}
@@ -100,7 +100,7 @@ const PanKnob: React.FC<PanKnobProps> = ({ name, pan, onChangePan }) => {
               e.currentTarget.releasePointerCapture(e.pointerId);
             }
           } catch {
-            // Ignore
+            // catch-ok: soltar una captura que el controlador ya perdió no es un fallo
           }
           dragRef.current = null;
         }}
@@ -215,7 +215,7 @@ const StudioFader: React.FC<StudioFaderProps> = ({
             try {
               e.currentTarget.setPointerCapture(e.pointerId);
             } catch {
-              // Ignore pointer capture errors
+              // catch-ok: algunos controladores táctiles o de lápiz rechazan la captura del puntero
             }
             updateFromClientY(e.clientY);
           }}
@@ -234,7 +234,7 @@ const StudioFader: React.FC<StudioFaderProps> = ({
                 e.currentTarget.releasePointerCapture(e.pointerId);
               }
             } catch {
-              // Ignore
+              // catch-ok: soltar una captura que el controlador ya perdió no es un fallo
             }
           }}
           onPointerCancel={() => {
