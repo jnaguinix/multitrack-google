@@ -29,6 +29,8 @@ export interface EngineTrackControl {
   splitSequence?: boolean;
   cueGain?: number;
   cueMuted?: boolean;
+  /** `false` si el hilo de lectura de la pista murió: no suena y hay que avisarlo. */
+  feederAlive?: boolean;
 }
 
 export interface EngineGlobals {
@@ -68,6 +70,23 @@ export function desiredTrack(t: TrackChannel): TrackDesired {
     cueGain: Number.isFinite(t.cueGain) ? (t.cueGain as number) : 1,
     cueMuted: Boolean(t.cueMuted),
     bus: engineBus(t),
+  };
+}
+
+/** La mezcla de una pista como la espera `audio_load_project` (`trackControls`): todos los campos, con el bus explícito. */
+export function initialTrackControl(t: TrackChannel) {
+  const d = desiredTrack(t);
+  return {
+    trackId: d.id,
+    gain: d.gain,
+    pan: d.pan,
+    muted: d.muted,
+    soloed: d.soloed,
+    monitor: d.monitor,
+    splitSequence: d.splitSequence,
+    cueGain: d.cueGain,
+    cueMuted: d.cueMuted,
+    bus: d.bus,
   };
 }
 

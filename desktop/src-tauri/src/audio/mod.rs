@@ -341,6 +341,7 @@ pub async fn audio_load_project(
     beats_per_bar: Option<u32>,
     sections: Option<Vec<playback::NativeSongSection>>,
     quantize_mode: Option<String>,
+    track_controls: Option<Vec<playback::InitialTrackControl>>,
 ) -> Result<playback::ProjectLoadInfo, String> {
     let local_data = app
         .path()
@@ -352,7 +353,7 @@ pub async fn audio_load_project(
 
     state
         .playback
-        .load_project(
+        .load_project_with_controls(
             &local_data,
             &project_id,
             sr,
@@ -360,6 +361,7 @@ pub async fn audio_load_project(
             beats_per_bar,
             sections,
             quantize_mode,
+            track_controls,
         )
         .await
 }

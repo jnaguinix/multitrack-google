@@ -14,6 +14,23 @@ pub struct NativeSongSection {
     pub end_sec: f64,
 }
 
+/// La mezcla de una pista tal como la quiere la interfaz, enviada junto con la carga de la canción para que ninguna
+/// pista nazca con ganancia 1, sin mute o con un bus deducido del ID (p. ej. un Click en `stem-04`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InitialTrackControl {
+    pub track_id: String,
+    pub gain: Option<f32>,
+    pub pan: Option<i32>,
+    pub muted: Option<bool>,
+    pub soloed: Option<bool>,
+    pub bus: Option<String>,
+    pub monitor: Option<bool>,
+    pub split_sequence: Option<bool>,
+    pub cue_gain: Option<f32>,
+    pub cue_muted: Option<bool>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct QueuedJumpInfo {
@@ -90,6 +107,9 @@ pub struct StreamTrackHandle {
     pub eof: Arc<AtomicBool>,
     pub flush_done: Arc<AtomicU64>,
     pub skip_frames: Arc<AtomicU64>,
+    /// `false` si el hilo feeder de la pista terminó (no pudo abrir su PCM, falló o entró en pánico): no va a
+    /// llegar más audio de ella y el buffering no debe esperarla.
+    pub feeder_alive: Arc<AtomicBool>,
 }
 
 /// Pico (valor absoluto máximo) desde la última lectura, por canal, guardado como bits de f32.
@@ -228,6 +248,9 @@ pub struct PlaybackStateSnapshot {
     /// Vacío si en ese instante el motor estaba aplicando una orden (se vuelve a leer en el siguiente sondeo).
     #[serde(default)]
     pub track_controls: Vec<TrackControlSnapshot>,
+    /// Milisegundos que lleva el motor en buffering (0 si no está en buffering). La interfaz avisa si no termina.
+    #[serde(default)]
+    pub buffering_ms: u64,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -248,4 +271,11 @@ pub struct TrackControlSnapshot {
     pub cue_gain: f32,
     #[serde(default)]
     pub cue_muted: bool,
+    /// `false` si el hilo de lectura de esta pista murió: la pista no suena y la interfaz debe avisarlo.
+    #[serde(default = "default_true")]
+    pub feeder_alive: bool,
+}
+
+fn default_true() -> bool {
+    true
 }

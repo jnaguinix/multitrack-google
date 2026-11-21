@@ -1062,6 +1062,8 @@
                 eof: Arc::clone(&t.eof),
                 flush_done: Arc::clone(&t.flush_done),
                 skip_frames: Arc::clone(&t.skip_frames),
+                // Estas pruebas no tienen hilo feeder pero simulan uno vivo (el buffering espera su audio).
+                feeder_alive: Arc::new(AtomicBool::new(true)),
             });
             active.push(t);
         }
@@ -2742,6 +2744,8 @@
                 eof: Arc::clone(&t.eof),
                 flush_done: Arc::clone(&t.flush_done),
                 skip_frames: Arc::clone(&t.skip_frames),
+                // Estas pruebas no tienen hilo feeder pero simulan uno vivo (el buffering espera su audio).
+                feeder_alive: Arc::new(AtomicBool::new(true)),
             });
             activas.push(t);
         }
@@ -2860,3 +2864,131 @@
         assert!(!fuera_de_sitio(pos, reloj), "la pista que se atrasó no volvió a su sitio: audio {pos:?}, reloj {reloj}");
     }
 
+    fn control_inicial(id: &str, gain: f32, pan: i32, muted: bool, bus: &str) -> InitialTrackControl {
+        InitialTrackControl {
+            track_id: id.to_string(),
+            gain: Some(gain),
+            pan: Some(pan),
+            muted: Some(muted),
+            soloed: Some(false),
+            bus: Some(bus.to_string()),
+            monitor: Some(false),
+            split_sequence: Some(false),
+            cue_gain: Some(0.5),
+            cue_muted: Some(false),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_h04_al_montar_cada_pista_nace_con_la_mezcla_pedida_y_no_a_ganancia_1() {
+        // Un Click que está en `stem-04` (el ID no lo delata) y una pista en mute con el fader a media altura.
+        let dir = escribir_cache_lr("h04_montaje", &[("stem-01", 48_000, 8_000, 8_000), ("stem-04", 48_000, 8_000, 8_000)]);
+
+        // Antes: sin controles, todo nace a ganancia 1, sin mute y con el bus deducido del ID (Main para ambas).
+        let sin = motor_de_prueba();
+        sin.load_project(&dir, "h04_montaje", SR_PRUEBA, Some(120.0), Some(4), Some(vec![seccion("a", 0.0, 1.0)]), Some("1-bar".to_string()))
+            .await
+            .expect("load_project");
+        {
+            let t = sin.tracks.lock().await;
+            let t4 = t.iter().find(|t| t.track_id == "stem-04").unwrap();
+            assert_eq!(TrackBus::from_u8(t4.bus.load(Ordering::Relaxed)), TrackBus::Main, "sin controles el bus se deduce del ID");
+        }
+
+        // Ahora: la mezcla viaja con la carga y el primer bloque ya sale como se pidió.
+        let engine = motor_de_prueba();
+        engine
+            .load_project_with_controls(
+                &dir,
+                "h04_montaje",
+                SR_PRUEBA,
+                Some(120.0),
+                Some(4),
+                Some(vec![seccion("a", 0.0, 1.0)]),
+                Some("1-bar".to_string()),
+                Some(vec![control_inicial("stem-01", 0.4, 30, true, "main"), control_inicial("stem-04", 0.8, -20, false, "click")]),
+            )
+            .await
+            .expect("load_project_with_controls");
+        let t = engine.tracks.lock().await;
+        let t1 = t.iter().find(|t| t.track_id == "stem-01").unwrap();
+        let t4 = t.iter().find(|t| t.track_id == "stem-04").unwrap();
+        assert!((f32::from_bits(t1.gain.load(Ordering::Relaxed)) - 0.4).abs() < 1e-6, "la ganancia pedida, no 1");
+        assert!(t1.muted.load(Ordering::Relaxed), "la pista en mute nace en mute");
+        assert_eq!(t1.pan.load(Ordering::Relaxed), 30);
+        assert_eq!(TrackBus::from_u8(t4.bus.load(Ordering::Relaxed)), TrackBus::CueClick, "el Click de stem-04 nace en su bus");
+        assert!((f32::from_bits(t4.cue_gain.load(Ordering::Relaxed)) - 0.5).abs() < 1e-6);
+    }
+
+    #[tokio::test]
+    async fn test_h04_una_ganancia_no_finita_en_la_carga_se_descarta() {
+        let dir = escribir_cache_lr("h04_nan", &[("stem-01", 48_000, 8_000, 8_000)]);
+        let engine = motor_de_prueba();
+        engine
+            .load_project_with_controls(
+                &dir,
+                "h04_nan",
+                SR_PRUEBA,
+                Some(120.0),
+                Some(4),
+                Some(vec![seccion("a", 0.0, 1.0)]),
+                Some("1-bar".to_string()),
+                Some(vec![control_inicial("stem-01", f32::NAN, 500, false, "main")]),
+            )
+            .await
+            .expect("load_project_with_controls");
+        let t = engine.tracks.lock().await;
+        let g = f32::from_bits(t[0].gain.load(Ordering::Relaxed));
+        assert!(g.is_finite() && g == 1.0, "NaN no puede quedar de ganancia: {g}");
+        assert_eq!(t[0].pan.load(Ordering::Relaxed), 100, "el paneo se limita a -100..100");
+    }
+
+    // ----- H07: un feeder que no puede leer su PCM no puede dejar a Play esperando para siempre -----
+
+    #[tokio::test]
+    async fn test_h07_un_pcm_truncado_hace_fallar_la_carga_con_el_nombre_de_la_pista() {
+        use crate::audio::cache::get_project_cache_dir;
+        let dir = escribir_cache_lr("h07_truncado", &[("stem-01", 48_000, 8_000, 8_000), ("stem-02", 48_000, 8_000, 8_000)]);
+        // El PCM de la segunda pista se queda a la mitad (disco lleno, copia interrumpida).
+        let pcm = get_project_cache_dir(&dir, "h07_truncado", SR_PRUEBA).join("stem-02.pcm");
+        let f = std::fs::OpenOptions::new().write(true).open(&pcm).unwrap();
+        f.set_len(48_000 * 4 / 2).unwrap();
+        drop(f);
+
+        let engine = motor_de_prueba();
+        let err = engine
+            .load_project(&dir, "h07_truncado", SR_PRUEBA, Some(120.0), Some(4), None, None)
+            .await
+            .expect_err("un PCM incompleto no se monta");
+        assert!(err.contains("stem-02") && err.contains("incompleto"), "el error nombra la pista y dice qué pasa: {err}");
+        assert!(engine.tracks.lock().await.is_empty(), "no queda nada a medio montar");
+    }
+
+    fn handle_sin_feeder(vivo: bool) -> StreamTrackHandle {
+        let (_productor, consumidor) = rtrb::RingBuffer::<f32>::new(4096);
+        StreamTrackHandle {
+            consumer: Arc::new(std::sync::Mutex::new(consumidor)),
+            gain: Arc::new(AtomicU32::new(1.0f32.to_bits())),
+            pan: Arc::new(AtomicI32::new(0)),
+            muted: Arc::new(AtomicBool::new(false)),
+            soloed: Arc::new(AtomicBool::new(false)),
+            monitor: Arc::new(AtomicBool::new(false)),
+            split: Arc::new(AtomicBool::new(false)),
+            cue_gain: Arc::new(AtomicU32::new(1.0f32.to_bits())),
+            cue_muted: Arc::new(AtomicBool::new(false)),
+            bus: Arc::new(AtomicU8::new(TrackBus::Main as u8)),
+            meter: Arc::new(PeakMeter::default()),
+            eof: Arc::new(AtomicBool::new(false)),
+            flush_done: Arc::new(AtomicU64::new(0)),
+            skip_frames: Arc::new(AtomicU64::new(0)),
+            feeder_alive: Arc::new(AtomicBool::new(vivo)),
+        }
+    }
+
+    #[test]
+    fn test_h07_el_buffering_no_espera_a_una_pista_cuyo_feeder_murio() {
+        // Con el anillo vacío, una pista viva sí se espera (llegará audio)…
+        assert!(!buffering_ready(&[handle_sin_feeder(true)], 0, 48_000), "una pista viva con el anillo vacío se espera");
+        // …pero una pista muerta no: sin ella no llegará nada y Play se quedaría en buffering eterno.
+        assert!(buffering_ready(&[handle_sin_feeder(false)], 0, 48_000), "una pista muerta no bloquea la salida de buffering");
+    }

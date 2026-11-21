@@ -228,6 +228,7 @@ impl PlaybackEngine {
                     split_sequence: trk.split.load(Ordering::Relaxed),
                     cue_gain: f32::from_bits(trk.cue_gain.load(Ordering::Relaxed)),
                     cue_muted: trk.cue_muted.load(Ordering::Relaxed),
+                    feeder_alive: trk.feeder_alive.load(Ordering::Relaxed),
                 })
                 .collect(),
             Err(_) => Vec::new(),
@@ -267,6 +268,11 @@ impl PlaybackEngine {
             monitor_gain: f32::from_bits(self.monitor_gain.load(Ordering::Relaxed)),
             meters,
             track_controls,
+            buffering_ms: if self.is_buffering.load(Ordering::SeqCst) {
+                self.buffering_start_time.lock().unwrap().map_or(0, |t| t.elapsed().as_millis() as u64)
+            } else {
+                0
+            },
         }
     }
 
