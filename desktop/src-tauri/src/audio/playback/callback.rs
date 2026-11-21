@@ -26,7 +26,7 @@ use super::types::{BusMeters, StreamTrackHandle};
 pub const MAX_CALLBACK_FRAMES: usize = 32_768;
 
 /// Pistas con volumen y paneo suavizados (estado preasignado; una pista más allá de este número se aplica sin rampa).
-const MAX_SMOOTH_TRACKS: usize = 64;
+const MAX_SMOOTH_TRACKS: usize = 256;
 
 /// Volumen y paneo que la pista tenía al final del bloque anterior. `key` identifica a la pista (la dirección de su
 /// `Arc` de ganancia): si en esa posición hay otra pista (se cargó otra canción) el estado se descarta y se parte del
@@ -34,8 +34,11 @@ const MAX_SMOOTH_TRACKS: usize = 64;
 #[derive(Clone, Copy)]
 struct TrackSmooth {
     key: usize,
+    /// Ganancia de la música ya con el mute y el solo aplicados (0 si la pista está silenciada).
     gain: f32,
     pan: f32,
+    /// Ganancia del canal de click y guía de una secuencia dividida, con su mute y el solo aplicados.
+    cue: f32,
 }
 
 /// Estado del motor que lee el callback. Son los mismos `Arc` de `PlaybackEngine`, clonados una vez al abrir la
@@ -129,7 +132,7 @@ impl BlockMixer {
             mon_r: buf(),
             click_buf: buf(),
             expected_start_frame: u64::MAX,
-            track_smooth: vec![TrackSmooth { key: 0, gain: 1.0, pan: 0.0 }; MAX_SMOOTH_TRACKS],
+            track_smooth: vec![TrackSmooth { key: 0, gain: 1.0, pan: 0.0, cue: 1.0 }; MAX_SMOOTH_TRACKS],
             smooth_master: f32::NAN,
             smooth_cue: f32::NAN,
             smooth_monitor: f32::NAN,
@@ -240,7 +243,32 @@ impl BlockMixer {
             let cue_on = split_on && !trk.cue_muted.load(Ordering::Relaxed) && !solo_silent;
             let cue_g_trk = f32::from_bits(trk.cue_gain.load(Ordering::Relaxed));
 
-            if !music_on && !cue_on {
+            // Volumen, paneo, mute y solo no saltan de un bloque al siguiente: se pasa del valor anterior al nuevo con
+            // una rampa lineal dentro del bloque (si no, un cambio de fader, un mute o un solo suenan a clic, o a
+            // «zumbido» al arrastrar). El mute y el solo son ganancia 0: entran en el mismo suavizado, que además se
+            // actualiza con la pista silenciada (al quitar el mute no hay un barrido desde un volumen viejo).
+            let g_target = if music_on { f32::from_bits(trk.gain.load(Ordering::Relaxed)) } else { 0.0 };
+            let cue_target = if cue_on { cue_g_trk } else { 0.0 };
+            let pan_target = trk.pan.load(Ordering::Relaxed) as f32 / 100.0;
+            let (g0, p0, g1, p1, c0, c1) = match track_smooth.get_mut(index) {
+                Some(st) => {
+                    let key = Arc::as_ptr(&trk.gain) as usize;
+                    if st.key != key {
+                        *st = TrackSmooth { key, gain: g_target, pan: pan_target, cue: cue_target };
+                    }
+                    let (g0, p0, c0) = (st.gain, st.pan, st.cue);
+                    st.gain = smooth_toward(g0, g_target, alpha);
+                    st.pan = smooth_toward(p0, pan_target, alpha);
+                    st.cue = smooth_toward(c0, cue_target, alpha);
+                    (g0, p0, st.gain, st.pan, c0, st.cue)
+                }
+                None => (g_target, pan_target, g_target, pan_target, cue_target, cue_target),
+            };
+            // Sigue sonando mientras la rampa de salida no haya llegado a 0 (o la de entrada ya haya salido de él).
+            let music_active = g0 != 0.0 || g1 != 0.0;
+            let cue_active = c0 != 0.0 || c1 != 0.0;
+
+            if !music_active && !cue_active {
                 // Una pista silenciada también avanza: se consume (y se resincroniza) igual.
                 if let Ok(mut c) = trk.consumer.try_lock() {
                     callback_min_track_frames = callback_min_track_frames.min((c.slots() / 2) as u64);
@@ -251,23 +279,7 @@ impl BlockMixer {
                 continue;
             }
 
-            // Volumen y paneo no saltan de un bloque al siguiente: se pasa del valor anterior al nuevo con una rampa
-            // lineal dentro del bloque (si no, un cambio de fader suena a clic o a «zumbido» al arrastrar).
-            let g_target = f32::from_bits(trk.gain.load(Ordering::Relaxed));
-            let pan_target = trk.pan.load(Ordering::Relaxed) as f32 / 100.0;
-            let (g0, p0, g1, p1) = match track_smooth.get_mut(index) {
-                Some(st) => {
-                    let key = Arc::as_ptr(&trk.gain) as usize;
-                    if st.key != key {
-                        *st = TrackSmooth { key, gain: g_target, pan: pan_target };
-                    }
-                    let (g0, p0) = (st.gain, st.pan);
-                    st.gain = smooth_toward(g0, g_target, alpha);
-                    st.pan = smooth_toward(p0, pan_target, alpha);
-                    (g0, p0, st.gain, st.pan)
-                }
-                None => (g_target, pan_target, g_target, pan_target),
-            };
+            let d_cue_trk = (c1 - c0) * inv_frames;
             let law0 = pan_law(p0, g0);
             let law1 = pan_law(p1, g1);
             let (d_l, d_r, d_c) = (
@@ -287,12 +299,12 @@ impl BlockMixer {
                     let law = PanLaw { pan_l: law0.pan_l + d_l * t, pan_r: law0.pan_r + d_r * t, cross: law0.cross + d_c * t };
                     if split_on {
                         // Canal izquierdo (click y guía) → auriculares; canal derecho (instrumentos) → música.
-                        if cue_on {
-                            let cl = l * cue_g_trk;
+                        if cue_active {
+                            let cl = l * (c0 + d_cue_trk * t);
                             cue_l[f] += cl;
                             cue_r[f] += cl;
                         }
-                        if music_on {
+                        if music_active {
                             let (ml, mr) = apply_pan(r, r, law);
                             pk_l = pk_l.max(ml.abs());
                             pk_r = pk_r.max(mr.abs());

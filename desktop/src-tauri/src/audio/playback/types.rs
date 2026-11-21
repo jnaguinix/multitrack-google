@@ -14,6 +14,18 @@ pub struct NativeSongSection {
     pub end_sec: f64,
 }
 
+/// El dispositivo de salida que el motor tiene REALMENTE abierto (no el que piden los ajustes guardados).
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenDeviceInfo {
+    pub name: String,
+    pub sample_rate: u32,
+    pub channels: u16,
+    /// El nombre que pidieron los ajustes al abrirlo (`None` = el predeterminado de Windows). No viaja a la interfaz.
+    #[serde(skip)]
+    pub requested_name: Option<String>,
+}
+
 /// La mezcla de una pista tal como la quiere la interfaz, enviada junto con la carga de la canción para que ninguna
 /// pista nazca con ganancia 1, sin mute o con un bus deducido del ID (p. ej. un Click en `stem-04`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -251,6 +263,9 @@ pub struct PlaybackStateSnapshot {
     /// Milisegundos que lleva el motor en buffering (0 si no está en buffering). La interfaz avisa si no termina.
     #[serde(default)]
     pub buffering_ms: u64,
+    /// El dispositivo realmente abierto (`None` si todavía no hay salida abierta). Sin comas en este comentario: el verificador de IPC parte por comas.
+    #[serde(default)]
+    pub open_device: Option<OpenDeviceInfo>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]

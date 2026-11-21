@@ -43,9 +43,18 @@ pub async fn audio_set_config(
     state: State<'_, AudioEngineState>,
     settings: AudioSettings,
 ) -> Result<(), String> {
+    // Un cambio de dispositivo con el motor sonando se rechaza antes de guardar nada.
+    let device_changed = state.playback.check_device_change(settings.device_name.as_deref())?;
     output::save_settings_to_disk(&state.settings_path, &settings)?;
-    let mut current = state.current_settings.lock().await;
-    *current = settings;
+    {
+        let mut current = state.current_settings.lock().await;
+        *current = settings;
+    }
+    // Estando en pausa, la salida se reabre ya en el dispositivo nuevo: si no se puede abrir (desconectado, otra
+    // frecuencia…), el error llega ahora a Ajustes de audio y no en mitad del culto al pulsar Play.
+    if device_changed {
+        state.playback.reopen_stream(&state).await?;
+    }
     Ok(())
 }
 

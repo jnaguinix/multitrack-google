@@ -70,6 +70,8 @@ pub struct PlaybackEngine {
     /// Frecuencia (Hz) a la que se abrió el stream actual; 0 si no hay ninguno. Distinta de `sample_rate`, que
     /// pasa a ser la de la caché al cargar un proyecto: si difieren hay que reabrir (`stream_needs_reopen`).
     pub stream_rate: AtomicU32,
+    /// El dispositivo realmente abierto (lo escribe `ensure_stream`; la interfaz lo muestra).
+    pub open_device: std::sync::Mutex<Option<OpenDeviceInfo>>,
     /// Serializa las operaciones que reposicionan las pistas (`seek`, `stop`, cambio de tono en el sitio): cada una
     /// sube la generación, pide a los feeders que se muevan, espera su confirmación y vacía los anillos. Dos a la vez
     /// se pisarían (el seek viejo acabaría bajando `flush_done` o moviendo a un feeder al destino equivocado).
@@ -122,6 +124,7 @@ impl PlaybackEngine {
             fade_out_done: Arc::new(AtomicBool::new(false)),
             stream: TokioMutex::new(None),
             stream_rate: AtomicU32::new(0),
+            open_device: std::sync::Mutex::new(None),
             seek_lock: TokioMutex::new(()),
             stats,
             sections: Arc::new(std::sync::Mutex::new(Vec::new())),
@@ -889,6 +892,7 @@ impl PlaybackEngine {
             }
             *stream_guard = None;
             self.stream_rate.store(0, Ordering::SeqCst);
+            *self.open_device.lock().unwrap() = None;
             self.device_disconnected.store(false, Ordering::SeqCst);
         }
 
@@ -981,6 +985,12 @@ impl PlaybackEngine {
 
         stream.play().map_err(|e| format!("Error iniciando stream: {e}"))?;
         self.stream_rate.store(sample_rate_u32, Ordering::SeqCst);
+        *self.open_device.lock().unwrap() = Some(OpenDeviceInfo {
+            name: device_name.clone(),
+            sample_rate: sample_rate_u32,
+            channels: channels as u16,
+            requested_name: settings.device_name.clone(),
+        });
         *stream_guard = Some(stream);
 
         Ok(())

@@ -58,6 +58,8 @@ interface PlaybackStateSnapshot {
   quantizeMode?: string;
   masterGain?: number;
   cueMasterGain?: number;
+  /** El dispositivo que el motor tiene REALMENTE abierto (no el elegido en la lista). */
+  openDevice?: { name: string; sampleRate: number; channels: number } | null;
 }
 
 interface TestToneResult {
@@ -358,6 +360,18 @@ export default memo(function DesktopAudioSettings({ triggerHost }: Props) {
         {activeDevice && (
           <div className="text-[11px] text-neutral-400 font-mono">
             {activeDevice.channels} salidas · {activeDevice.defaultSampleRate.toLocaleString('es-ES')} Hz · búfer {activeDevice.minBufferSize ?? 480} ({Math.round(((activeDevice.minBufferSize ?? 480) / (activeDevice.defaultSampleRate || 48000)) * 1000)} ms) · {activeDevice.sampleFormat || 'f32'}
+          </div>
+        )}
+        {playbackState?.openDevice && (
+          <div className="text-[11px] text-neutral-400 font-mono">
+            Abierto ahora: {playbackState.openDevice.name} · {playbackState.openDevice.sampleRate.toLocaleString('es-ES')} Hz ·{' '}
+            {playbackState.openDevice.channels} {playbackState.openDevice.channels === 1 ? 'salida' : 'salidas'}
+          </div>
+        )}
+        {playbackState?.openDevice && activeDevice && playbackState.openDevice.name !== activeDevice.name && (
+          <div role="alert" className="text-[12px] text-amber-400">
+            El motor está usando «{playbackState.openDevice.name}», no «{activeDevice.name}». Con el audio detenido, pulsa Guardar para
+            cambiar de dispositivo.{playbackState.isPlaying ? ' Ahora suena algo: detén la reproducción primero.' : ''}
           </div>
         )}
         {activeDevice && activeDevice.defaultSampleRate < MIN_WORK_SAMPLE_RATE && (

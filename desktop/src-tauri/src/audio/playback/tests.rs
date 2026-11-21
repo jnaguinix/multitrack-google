@@ -1244,7 +1244,8 @@
     #[test]
     fn test_medidores_por_pista_post_fader_y_mute_solo() {
         let k = std::f32::consts::FRAC_1_SQRT_2; // pan centro: cos(π/4) = sin(π/4)
-        let engine = engine_con_pistas(&[("a", 0.5), ("b", 0.25)], 16_384);
+        // Anillo largo: con las rampas de mute, solo y volumen se consumen más de 16 384 fotogramas.
+        let engine = engine_con_pistas(&[("a", 0.5), ("b", 0.25)], 32_768);
         let mut buf = vec![0.0f32; 512 * 2];
 
         engine.simulate_callback_block(&mut buf, 2);
@@ -1260,6 +1261,7 @@
 
         // Mute en b: su medidor queda a 0; a sigue midiendo.
         engine.tracks.try_lock().unwrap()[1].muted.store(true, Ordering::SeqCst);
+        asentar(&engine, &mut buf, 12); // el mute es una rampa corta, no un corte
         engine.simulate_callback_block(&mut buf, 2);
         let s = engine.get_playback_state();
         assert_eq!(nivel(&s, "b"), (0.0, 0.0), "pista en mute -> 0");
@@ -1268,6 +1270,7 @@
         // Solo en b (sin mute): a queda a 0.
         engine.tracks.try_lock().unwrap()[1].muted.store(false, Ordering::SeqCst);
         engine.tracks.try_lock().unwrap()[1].soloed.store(true, Ordering::SeqCst);
+        asentar(&engine, &mut buf, 12); // el solo también es una rampa corta
         engine.simulate_callback_block(&mut buf, 2);
         let s = engine.get_playback_state();
         assert_eq!(nivel(&s, "a"), (0.0, 0.0), "fuera del solo -> 0");
@@ -1887,6 +1890,7 @@
         // Sin click ni guía: no puede sonar nada en sus salidas (y la música sigue en las suyas).
         engine.set_track_controls("click", None, None, Some(true), None, None).await;
         engine.set_track_controls("guia", None, None, Some(true), None, None).await;
+        asentar_picos(&engine, 4); // el mute es una rampa corta: se deja asentar antes de medir
         let solo_musica = picos_por_canal(&engine, 4, 40);
         assert!(solo_musica[0] > 1e-3 && solo_musica[1] > 1e-3, "{solo_musica:?}");
         assert_eq!(solo_musica[2], 0.0, "la música se coló en la salida del click");
@@ -1896,6 +1900,7 @@
         engine.set_track_controls("click", None, None, Some(false), None, None).await;
         engine.set_track_controls("guia", None, None, Some(false), None, None).await;
         engine.set_track_controls("musica", None, None, Some(true), None, None).await;
+        asentar_picos(&engine, 4);
         let solo_cue = picos_por_canal(&engine, 4, 40);
         assert_eq!(solo_cue[0], 0.0, "el click/guía se coló en la música izquierda: {solo_cue:?}");
         assert_eq!(solo_cue[1], 0.0, "el click/guía se coló en la música derecha: {solo_cue:?}");
@@ -1911,6 +1916,7 @@
 
         engine.set_track_controls("click", None, None, Some(true), None, None).await;
         engine.set_track_controls("guia", None, None, Some(true), None, None).await;
+        asentar_picos(&engine, 2);
         let solo_musica = picos_por_canal(&engine, 2, 40);
         assert!(solo_musica[1] > 1e-3);
         assert_eq!(solo_musica[0], 0.0, "la música se coló en la salida de click y guía (izquierda)");
@@ -1918,6 +1924,7 @@
         engine.set_track_controls("click", None, None, Some(false), None, None).await;
         engine.set_track_controls("guia", None, None, Some(false), None, None).await;
         engine.set_track_controls("musica", None, None, Some(true), None, None).await;
+        asentar_picos(&engine, 2);
         let solo_cue = picos_por_canal(&engine, 2, 40);
         assert_eq!(solo_cue[1], 0.0, "el click o la guía se colaron en la salida de música (derecha): {solo_cue:?}");
         assert!(solo_cue[0] > 1e-3);
@@ -2090,12 +2097,14 @@
         assert!(a[0] > 1e-3 && a[1] > 1e-3, "{a:?}");
         // Mute de la pista: apaga la música, el click sigue.
         engine.set_track_controls("secuencia", None, None, Some(true), None, None).await;
+        asentar_picos(&engine, 2);
         let m = picos_por_canal(&engine, 2, 40);
         assert_eq!(m[1], 0.0, "el mute de la pista apaga la música: {m:?}");
         assert!(m[0] > 1e-3, "el click de la secuencia sigue sonando: {m:?}");
         engine.set_track_controls("secuencia", None, None, Some(false), None, None).await;
         // Mute del click (fader Click): apaga el click, la música sigue.
         engine.set_track_cue("secuencia", None, Some(true)).await;
+        asentar_picos(&engine, 2);
         let c = picos_por_canal(&engine, 2, 40);
         assert_eq!(c[0], 0.0, "el mute del Click apaga el click de la secuencia: {c:?}");
         assert!(c[1] > 1e-3, "{c:?}");
@@ -2103,6 +2112,7 @@
         // Volumen del click a la mitad: el click baja, la música no cambia.
         let pleno = picos_por_canal(&engine, 2, 60);
         engine.set_track_cue("secuencia", Some(0.5), None).await;
+        asentar_picos(&engine, 2);
         let medio = picos_por_canal(&engine, 2, 60);
         assert!(medio[0] < pleno[0] * 0.75, "el fader Click baja el click ({} vs {})", medio[0], pleno[0]);
         assert!((medio[1] - pleno[1]).abs() < 1e-4, "la música no cambia ({} vs {})", medio[1], pleno[1]);
@@ -2187,6 +2197,7 @@
         assert!(a[0] > 1e-3);
         // Pista silenciada: no envía nada a auriculares.
         engine.set_track_controls("musica", None, None, Some(true), None, None).await;
+        asentar_picos(&engine, 2);
         let m = picos_por_canal(&engine, 2, 40);
         assert_eq!(m[0], 0.0, "una pista en mute no se oye ni en auriculares: {m:?}");
         engine.set_track_controls("musica", None, None, Some(false), None, None).await;
@@ -3143,4 +3154,146 @@
         let (malos, reloj) = desajustes_en(&engine, 120);
         assert!(malos <= 4, "tras salir del vamp junto al límite el reloj no coincide con el audio ({malos} bloques)");
         assert!(reloj > 144_000, "al salir del vamp la canción sigue hacia la sección siguiente (reloj {reloj})");
+    }
+
+    // ----- H11: cambiar el dispositivo de audio -----
+
+    fn dispositivo_abierto(pedido: Option<&str>) -> OpenDeviceInfo {
+        OpenDeviceInfo { name: "Realtek".to_string(), sample_rate: 48_000, channels: 2, requested_name: pedido.map(str::to_string) }
+    }
+
+    #[test]
+    fn test_h11_el_cambio_de_dispositivo_se_detecta_contra_el_abierto() {
+        use crate::audio::output::device_change_needs_reopen as cambia;
+        let a = dispositivo_abierto(Some("Realtek"));
+        assert!(!cambia(Some(&a), Some("Realtek")), "el mismo dispositivo no se reabre");
+        assert!(cambia(Some(&a), Some("Jabra")), "otro dispositivo sí");
+        assert!(cambia(Some(&a), None), "pasar a «predeterminado» también es un cambio");
+        let por_defecto = dispositivo_abierto(None);
+        assert!(!cambia(Some(&por_defecto), None));
+        assert!(cambia(Some(&por_defecto), Some("Jabra")));
+        assert!(!cambia(None, Some("Jabra")), "sin salida abierta no hay nada que reabrir");
+    }
+
+    #[test]
+    fn test_h11_no_se_cambia_de_dispositivo_con_el_motor_sonando() {
+        let engine = motor_de_prueba();
+        *engine.open_device.lock().unwrap() = Some(dispositivo_abierto(Some("Realtek")));
+        assert_eq!(engine.check_device_change(Some("Realtek")), Ok(false));
+        assert_eq!(engine.check_device_change(Some("Jabra")), Ok(true), "en pausa el cambio se acepta");
+        engine.is_playing.store(true, Ordering::SeqCst);
+        let err = engine.check_device_change(Some("Jabra")).expect_err("sonando no se puede");
+        assert!(err.contains("Detén la reproducción"), "{err}");
+        assert_eq!(engine.check_device_change(Some("Realtek")), Ok(false), "los mismos ajustes sí, aunque suene");
+    }
+
+    // ----- H16: mute, solo y cue con rampa; sin barridos al quitar el mute; más de 64 pistas -----
+
+    #[test]
+    fn test_h16_un_mute_no_da_un_escalon() {
+        let engine = motor_estable();
+        let (salida, previo) = salida_tras_cambio(&engine, 24, |e| {
+            e.tracks.try_lock().unwrap()[0].muted.store(true, Ordering::SeqCst);
+        });
+        let salto = mayor_salto(&salida, previo);
+        assert!(salto < 0.01, "el mute no debe cortar el audio en seco (salto {salto})");
+        assert!(salida[salida.len() - 2].abs() < 1e-5, "al asentarse la pista queda en silencio");
+    }
+
+    #[test]
+    fn test_h16_quitar_el_mute_no_da_un_escalon() {
+        let engine = motor_estable();
+        engine.tracks.try_lock().unwrap()[0].muted.store(true, Ordering::SeqCst);
+        let mut buf = vec![0.0f32; 480 * 2];
+        asentar(&engine, &mut buf, 12);
+        let (salida, previo) = salida_tras_cambio(&engine, 24, |e| {
+            e.tracks.try_lock().unwrap()[0].muted.store(false, Ordering::SeqCst);
+        });
+        let salto = mayor_salto(&salida, previo);
+        assert!(salto < 0.01, "quitar el mute no debe devolver el audio de golpe (salto {salto})");
+        let k = std::f32::consts::FRAC_1_SQRT_2;
+        assert!((salida[salida.len() - 2] - 0.5 * k).abs() < 1e-5, "al asentarse vuelve a su nivel");
+    }
+
+    #[test]
+    fn test_h16_el_fader_movido_con_la_pista_en_mute_no_da_un_barrido_al_quitarlo() {
+        // Con la pista en mute el volumen suavizado no se actualizaba: al quitar el mute el audio barría desde el
+        // volumen de antes del mute (aquí 1,0) hasta el nuevo (0,2) durante unos 30 ms.
+        let engine = motor_estable();
+        engine.tracks.try_lock().unwrap()[0].muted.store(true, Ordering::SeqCst);
+        let mut buf = vec![0.0f32; 480 * 2];
+        asentar(&engine, &mut buf, 12);
+        engine.tracks.try_lock().unwrap()[0].gain.store(0.2f32.to_bits(), Ordering::SeqCst);
+        asentar(&engine, &mut buf, 12);
+        let (salida, _) = salida_tras_cambio(&engine, 24, |e| {
+            e.tracks.try_lock().unwrap()[0].muted.store(false, Ordering::SeqCst);
+        });
+        let k = std::f32::consts::FRAC_1_SQRT_2;
+        let techo = 0.5 * k * 0.2 + 1e-3;
+        let mayor = salida.iter().fold(0.0f32, |m, v| m.max(v.abs()));
+        assert!(mayor <= techo, "al quitar el mute suena más fuerte de lo pedido ({mayor} > {techo}): barrido desde el volumen viejo");
+    }
+
+    #[test]
+    fn test_h16_el_solo_no_da_un_escalon_en_las_demas_pistas() {
+        let engine = engine_con_pistas(&[("a", 0.4), ("b", 0.4)], 48_000);
+        *engine.fade.lock().unwrap() = FadeEnvelope::new(FADE_MS, 48000);
+        let mut buf = vec![0.0f32; 480 * 2];
+        asentar(&engine, &mut buf, 3);
+        let (salida, previo) = salida_tras_cambio(&engine, 24, |e| {
+            e.tracks.try_lock().unwrap()[1].soloed.store(true, Ordering::SeqCst);
+        });
+        let salto = mayor_salto(&salida, previo);
+        assert!(salto < 0.01, "hacer solo una pista no debe cortar las otras en seco (salto {salto})");
+        let k = std::f32::consts::FRAC_1_SQRT_2;
+        assert!((salida[salida.len() - 2] - 0.4 * k).abs() < 1e-5, "al asentarse solo suena la pista en solo");
+    }
+
+    #[test]
+    fn test_h16_mas_de_64_pistas_tambien_se_suavizan() {
+        let mut amps: Vec<(String, f32)> = (0..69).map(|i| (format!("p{i}"), 0.0)).collect();
+        amps.push(("ultima".to_string(), 0.5));
+        let refs: Vec<(&str, f32)> = amps.iter().map(|(n, a)| (n.as_str(), *a)).collect();
+        let engine = engine_con_pistas(&refs, 48_000);
+        *engine.fade.lock().unwrap() = FadeEnvelope::new(FADE_MS, 48000);
+        let mut buf = vec![0.0f32; 480 * 2];
+        asentar(&engine, &mut buf, 3);
+        let (salida, previo) = salida_tras_cambio(&engine, 24, |e| {
+            e.tracks.try_lock().unwrap()[69].gain.store(0.1f32.to_bits(), Ordering::SeqCst);
+        });
+        let salto = mayor_salto(&salida, previo);
+        assert!(salto < 0.01, "la pista 70 salta de volumen sin rampa (salto {salto})");
+    }
+
+    /// Mayor salto entre fotogramas de `bloques` bloques consecutivos del callback simulado (2 canales), empezando
+    /// desde el último fotograma de un bloque ya renderizado.
+    fn salto_tras(engine: &PlaybackEngine, bloques: usize, previo: [f32; 2]) -> f32 {
+        let mut salida = Vec::new();
+        for _ in 0..bloques {
+            let mut buf = vec![0.0f32; 480 * 2];
+            engine.simulate_callback_block(&mut buf, 2);
+            std::thread::sleep(std::time::Duration::from_millis(2));
+            salida.extend_from_slice(&buf);
+        }
+        mayor_salto(&salida, previo)
+    }
+
+    fn ultimo_fotograma(engine: &PlaybackEngine) -> [f32; 2] {
+        let mut buf = vec![0.0f32; 480 * 2];
+        engine.simulate_callback_block(&mut buf, 2);
+        [buf[buf.len() - 2], buf[buf.len() - 1]]
+    }
+
+    #[tokio::test]
+    async fn test_h16_el_volumen_y_el_mute_del_click_de_la_secuencia_no_dan_escalon() {
+        let engine = motor_secuencia("h16_cue", 12_000, 12_000, true, &proponer_ruteo(2)).await;
+        let _ = picos_por_canal(&engine, 2, 40); // sale de buffering y se estabiliza
+        let previo = ultimo_fotograma(&engine);
+        engine.set_track_cue("secuencia", Some(0.1), None).await;
+        let s1 = salto_tras(&engine, 24, previo);
+        assert!(s1 < 0.02, "el fader Click no debe saltar entre fotogramas (salto {s1})");
+        let previo = ultimo_fotograma(&engine);
+        engine.set_track_cue("secuencia", None, Some(true)).await;
+        let s2 = salto_tras(&engine, 24, previo);
+        assert!(s2 < 0.02, "el mute del Click no debe cortar el click en seco (salto {s2})");
     }

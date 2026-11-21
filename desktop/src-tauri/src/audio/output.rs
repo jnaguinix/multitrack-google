@@ -65,6 +65,12 @@ pub fn effective_cache_rate(requested: Option<u32>) -> u32 {
     }
 }
 
+/// ¿El dispositivo pedido por los ajustes difiere del que está abierto? (`None` = predeterminado de Windows.)
+/// Sin stream abierto no hay nada que reabrir: se abrirá con los ajustes nuevos al reproducir.
+pub fn device_change_needs_reopen(open: Option<&crate::audio::playback::OpenDeviceInfo>, requested_name: Option<&str>) -> bool {
+    open.is_some_and(|o| o.requested_name.as_deref() != requested_name)
+}
+
 /// ¿Hay que reabrir el stream? Sí si hay uno abierto a una frecuencia distinta de la de la caché cargada: los
 /// feeders producen a la frecuencia de la caché y el callback consumiría a otra velocidad.
 pub fn stream_needs_reopen(open_rate: Option<u32>, cache_rate: Option<u32>) -> bool {
