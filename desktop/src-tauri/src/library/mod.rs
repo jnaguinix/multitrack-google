@@ -34,6 +34,31 @@ fn unique_tmp_name(base: &str) -> String {
     format!("{base}.{}.{}.tmp", std::process::id(), TMP_COUNTER.fetch_add(1, Ordering::Relaxed))
 }
 
+/// Intentos de renombrado al reemplazar un archivo (ver `replace_file_atomic`).
+const REPLACE_ATTEMPTS: u32 = 8;
+
+/// Reemplaza `target` por `tmp` con un renombrado atómico: `target` es siempre el archivo anterior completo o el
+/// nuevo completo, nunca uno a medias. En Windows el renombrado sobre un archivo que otro programa tiene abierto
+/// (antivirus, indexador, copia de seguridad) falla un instante, así que se reintenta (~0,45 s en total). Si no se
+/// logra, NO se escribe directamente sobre `target` (una escritura interrumpida lo dejaría truncado): se borra `tmp`,
+/// `target` queda como estaba y se devuelve el error.
+fn replace_file_atomic(tmp: &Path, target: &Path) -> Result<(), String> {
+    let mut delay_ms = 10u64;
+    let mut last_error = String::new();
+    for attempt in 0..REPLACE_ATTEMPTS {
+        match fs::rename(tmp, target) {
+            Ok(()) => return Ok(()),
+            Err(e) => last_error = e.to_string(),
+        }
+        if attempt + 1 < REPLACE_ATTEMPTS {
+            std::thread::sleep(std::time::Duration::from_millis(delay_ms));
+            delay_ms = (delay_ms * 2).min(100);
+        }
+    }
+    let _ = fs::remove_file(tmp);
+    Err(format!("no se pudo reemplazar {}: {last_error}", target.display()))
+}
+
 /// Lee el primer valor JSON del texto e ignora lo que venga después. Un archivo con basura al final (la
 /// consecuencia de una escritura interrumpida o solapada) sigue siendo recuperable. Devuelve también si había
 /// algo más que espacios tras el valor.
@@ -257,8 +282,10 @@ pub fn sidecar_json(song: &LibrarySong) -> Result<String, String> {
     serde_json::to_string_pretty(&slim).map_err(|e| format!("Error serializando sidecar: {e}"))
 }
 
-/// Writes the canonical `omnitracks.project.json` sidecar directly into the song's directory.
-/// Non-fatal if the directory is read-only.
+/// Escribe el sidecar canónico `omnitracks.project.json` en la carpeta de la canción, con archivo temporal único y
+/// reemplazo atómico (nunca una escritura directa sobre el sidecar). Si no se puede (carpeta ausente, de solo
+/// lectura, disco desconectado, archivo bloqueado) devuelve el error: quien llama decide cómo avisar, pero no se
+/// da por guardado algo que no lo está.
 pub fn write_sidecar(folder_path: &Path, song: &LibrarySong) -> Result<(), String> {
     if !folder_path.exists() || !folder_path.is_dir() {
         return Err(format!("La carpeta '{}' no existe", folder_path.display()));
@@ -268,25 +295,11 @@ pub fn write_sidecar(folder_path: &Path, song: &LibrarySong) -> Result<(), Strin
 
     let tmp = folder_path.join(unique_tmp_name("omnitracks.project.json"));
     if let Err(e) = fs::write(&tmp, &json_str) {
-        tracing::warn!(
-            "[Sidecar] No se pudo escribir archivo temporal en '{}': {}",
-            folder_path.display(),
-            e
-        );
-        return Ok(());
-    }
-
-    if let Err(_e) = fs::rename(&tmp, &target) {
         let _ = fs::remove_file(&tmp);
-        if let Err(write_err) = fs::write(&target, &json_str) {
-            tracing::warn!(
-                "[Sidecar] No se pudo escribir omnitracks.project.json en '{}': {}",
-                folder_path.display(),
-                write_err
-            );
-            return Ok(());
-        }
+        return Err(format!("No se pudo escribir en la carpeta '{}': {e}", folder_path.display()));
     }
+    replace_file_atomic(&tmp, &target)
+        .map_err(|e| format!("No se pudo guardar {SIDECAR_CANONICAL_FILENAME} en '{}': {e}", folder_path.display()))?;
 
     tracing::info!(
         "[Sidecar] omnitracks.project.json guardado en '{}'",
@@ -647,29 +660,38 @@ pub fn save_library_internal(local_data: &Path, library: &LibraryFile) -> Result
         .map_err(|e| format!("Error serializando library.json: {e}"))?;
 
     // 1. Write to tmp file
-    fs::write(&tmp_path, json_str.as_bytes())
-        .map_err(|e| format!("Error escribiendo en {}: {e}", tmp_path.display()))?;
+    if let Err(e) = fs::write(&tmp_path, json_str.as_bytes()) {
+        let _ = fs::remove_file(&tmp_path);
+        return Err(format!("Error escribiendo en {}: {e}", tmp_path.display()));
+    }
 
     // 2. Si hay un library.json válido, se copia como respaldo antes de reemplazarlo. Uno corrupto no pisa un
-    //    respaldo bueno.
+    //    respaldo bueno. El respaldo también se escribe en un temporal y se renombra: copiar directo sobre él y
+    //    quedar a medias dejaría sin copia buena justo cuando hiciera falta. Si no se puede refrescar, el guardado
+    //    sigue (lo nuevo importa más) y queda avisado en el registro.
     if lib_path.exists() {
         let current_is_valid = fs::read_to_string(&lib_path)
             .map(|s| parse_library_lenient(&s).map(|(_, trailing)| !trailing).unwrap_or(false))
             .unwrap_or(false);
         if current_is_valid {
-            let _ = fs::copy(&lib_path, &backup_path);
+            let backup_tmp = local_data.join(unique_tmp_name(LIBRARY_BACKUP_FILENAME));
+            match fs::copy(&lib_path, &backup_tmp) {
+                Ok(_) => {
+                    if let Err(e) = replace_file_atomic(&backup_tmp, &backup_path) {
+                        tracing::warn!("[Library] No se pudo refrescar library.backup.json: {e}");
+                    }
+                }
+                Err(e) => {
+                    let _ = fs::remove_file(&backup_tmp);
+                    tracing::warn!("[Library] No se pudo copiar el respaldo de library.json: {e}");
+                }
+            }
         }
     }
 
-    // 3. Atomically replace lib_path
-    if let Err(e) = fs::rename(&tmp_path, &lib_path) {
-        // Fallback for Windows cross-volume or lock edge cases
-        let _ = fs::remove_file(&tmp_path);
-        fs::write(&lib_path, json_str.as_bytes())
-            .map_err(|e2| format!("Error reemplazando {}: rename={e}, write={e2}", lib_path.display()))?;
-    }
-
-    Ok(())
+    // 3. Reemplazo atómico de library.json. Sin plan B de escritura directa: si no se logra, el library.json anterior
+    //    queda intacto y el error llega a quien guarda.
+    replace_file_atomic(&tmp_path, &lib_path).map_err(|e| format!("Error guardando library.json: {e}"))
 }
 
 /// La sonoridad la mide el motor, no la interfaz: si esta guarda la canción sin ella (aún no se había enterado de la
@@ -751,12 +773,26 @@ pub async fn library_save(app: AppHandle, library: LibraryFile) -> Result<(), St
 }
 
 #[tauri::command]
-pub async fn library_save_song(app: AppHandle, song: LibrarySong) -> Result<(), String> {
+pub async fn library_save_song(app: AppHandle, song: LibrarySong) -> Result<SaveSongOutcome, String> {
     let local_data = app
         .path()
         .app_local_data_dir()
         .map_err(|e| format!("Error resolviendo app_local_data_dir: {e}"))?;
+    save_song_internal(&local_data, song)
+}
 
+/// Resultado de guardar una canción. Si falla el guardado en `library.json`, es un error del comando. Que no se
+/// pueda escribir el sidecar de su carpeta no impide guardarla (la biblioteca manda), pero se informa aquí para que la
+/// interfaz avise: la mezcla no quedó en la carpeta de la canción.
+#[derive(Serialize, Debug, Default, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveSongOutcome {
+    pub sidecar_error: Option<String>,
+}
+
+/// Guarda la canción en `library.json` y su sidecar. Separado del comando para poder probarlo sin la aplicación.
+pub fn save_song_internal(local_data: &Path, song: LibrarySong) -> Result<SaveSongOutcome, String> {
+    let local_data = local_data.to_path_buf();
     {
         // Leer, modificar y escribir como una sola operación: dos guardados a la vez no se pisan.
         let _guard = lock_library();
@@ -784,15 +820,16 @@ pub async fn library_save_song(app: AppHandle, song: LibrarySong) -> Result<(), 
         save_library_internal(&local_data, &lib)?;
     }
 
-    // Attempt sidecar write if folder path is available
+    // El sidecar va a la carpeta de la canción (si tiene): un fallo no deshace el guardado de la biblioteca, pero sale
+    // en el resultado para que la interfaz lo muestre.
+    let mut outcome = SaveSongOutcome::default();
     if let Some(ref folder) = song.folder_path {
-        let p = Path::new(folder);
-        if p.exists() && p.is_dir() {
-            let _ = write_sidecar(p, &song);
+        if let Err(e) = write_sidecar(Path::new(folder), &song) {
+            tracing::warn!("[Sidecar] '{}': {e}", song.id);
+            outcome.sidecar_error = Some(e);
         }
     }
-
-    Ok(())
+    Ok(outcome)
 }
 
 #[tauri::command]
@@ -1283,6 +1320,138 @@ mod tests {
         let on_disk = fs::read_to_string(dir.join(LIBRARY_FILENAME)).unwrap();
         assert!(serde_json::from_str::<LibraryFile>(&on_disk).is_ok());
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    // ---- Escritura segura de library.json, su respaldo y el sidecar (plan 4.2)
+
+    fn sin_temporales(dir: &Path) -> bool {
+        fs::read_dir(dir).unwrap().all(|e| !e.unwrap().file_name().to_string_lossy().ends_with(".tmp"))
+    }
+
+    /// Abre el archivo como lo haría un antivirus o un indexador: otros pueden leerlo y escribirlo, pero no
+    /// renombrarlo ni borrarlo (sin FILE_SHARE_DELETE).
+    #[cfg(windows)]
+    fn abrir_sin_compartir_borrado(path: &Path) -> fs::File {
+        use std::os::windows::fs::OpenOptionsExt;
+        fs::OpenOptions::new().read(true).share_mode(1 | 2).open(path).unwrap()
+    }
+
+    fn biblioteca_con_titulo(titulo: &str) -> LibraryFile {
+        let mut lib = LibraryFile::default();
+        lib.songs.push(song("a", titulo));
+        lib
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn test_si_no_se_puede_reemplazar_library_json_no_se_escribe_directo_sobre_el_archivo() {
+        let dir = carpeta_de_prueba("reemplazo_bloqueado");
+        save_library_internal(&dir, &biblioteca_con_titulo("Version 1")).unwrap();
+        let bloqueo = abrir_sin_compartir_borrado(&dir.join(LIBRARY_FILENAME));
+
+        // Con el archivo abierto sin permitir renombrarlo, el reemplazo no es posible. Antes caía a `fs::write`
+        // directo sobre library.json (que Windows sí permite): una escritura interrumpida lo habría dejado truncado.
+        let resultado = save_library_internal(&dir, &biblioteca_con_titulo("Version 2"));
+        assert!(resultado.is_err(), "sin poder reemplazar, el guardado debe avisar del error");
+        let contenido = fs::read_to_string(dir.join(LIBRARY_FILENAME)).unwrap();
+        assert!(contenido.contains("Version 1") && !contenido.contains("Version 2"), "el archivo anterior queda intacto");
+        assert!(sin_temporales(&dir), "no debe quedar el temporal del intento fallido");
+
+        // Liberado el archivo, el siguiente guardado funciona.
+        drop(bloqueo);
+        save_library_internal(&dir, &biblioteca_con_titulo("Version 2")).unwrap();
+        assert!(fs::read_to_string(dir.join(LIBRARY_FILENAME)).unwrap().contains("Version 2"));
+        assert!(sin_temporales(&dir));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn test_un_bloqueo_pasajero_del_archivo_se_reintenta_y_el_guardado_sale() {
+        let dir = carpeta_de_prueba("reemplazo_pasajero");
+        save_library_internal(&dir, &biblioteca_con_titulo("Version 1")).unwrap();
+        let bloqueo = abrir_sin_compartir_borrado(&dir.join(LIBRARY_FILENAME));
+        // Como un antivirus que suelta el archivo a los pocos milisegundos.
+        let liberador = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(40));
+            drop(bloqueo);
+        });
+        save_library_internal(&dir, &biblioteca_con_titulo("Version 2")).expect("debe reintentar hasta que se libere");
+        liberador.join().unwrap();
+        assert!(fs::read_to_string(dir.join(LIBRARY_FILENAME)).unwrap().contains("Version 2"));
+        assert!(sin_temporales(&dir));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn test_el_respaldo_no_se_copia_directo_sobre_el_anterior() {
+        let dir = carpeta_de_prueba("respaldo_bloqueado");
+        save_library_internal(&dir, &biblioteca_con_titulo("Version 1")).unwrap();
+        save_library_internal(&dir, &biblioteca_con_titulo("Version 2")).unwrap(); // respaldo = «Version 1»
+        let bloqueo = abrir_sin_compartir_borrado(&dir.join(LIBRARY_BACKUP_FILENAME));
+
+        // Lo nuevo se guarda aunque el respaldo no se pueda refrescar...
+        save_library_internal(&dir, &biblioteca_con_titulo("Version 3")).expect("el guardado no depende del respaldo");
+        assert!(fs::read_to_string(dir.join(LIBRARY_FILENAME)).unwrap().contains("Version 3"));
+        // ...y el respaldo, que no se pudo reemplazar, no se sobrescribió a medias: sigue siendo el anterior completo.
+        let respaldo = fs::read_to_string(dir.join(LIBRARY_BACKUP_FILENAME)).unwrap();
+        assert!(respaldo.contains("Version 1") && !respaldo.contains("Version 2"), "{respaldo}");
+        assert!(parse_library_lenient(&respaldo).is_ok());
+        drop(bloqueo);
+        assert!(sin_temporales(&dir));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_un_sidecar_que_no_se_puede_escribir_devuelve_el_error_y_no_deja_temporales() {
+        let carpeta = carpeta_de_prueba("sidecar_error");
+        // Una carpeta donde el sidecar no se puede crear: en su sitio hay una carpeta con ese nombre.
+        fs::create_dir(carpeta.join(SIDECAR_CANONICAL_FILENAME)).unwrap();
+        let cancion = song("a", "Una");
+        let error = write_sidecar(&carpeta, &cancion).expect_err("no se pudo escribir: debe decirlo, no devolver Ok");
+        assert!(error.contains(SIDECAR_CANONICAL_FILENAME), "{error}");
+        assert!(sin_temporales(&carpeta));
+
+        // Carpeta que no existe (disco desconectado, carpeta movida).
+        assert!(write_sidecar(&carpeta.join("no-existe"), &cancion).is_err());
+
+        // Con la carpeta en buen estado se escribe, completo y sin temporales.
+        let buena = carpeta_de_prueba("sidecar_bueno");
+        write_sidecar(&buena, &cancion).unwrap();
+        let escrito = fs::read_to_string(buena.join(SIDECAR_CANONICAL_FILENAME)).unwrap();
+        assert!(serde_json::from_str::<serde_json::Value>(&escrito).is_ok());
+        assert!(sin_temporales(&buena));
+        let _ = fs::remove_dir_all(&carpeta);
+        let _ = fs::remove_dir_all(&buena);
+    }
+
+    #[test]
+    fn test_guardar_una_cancion_informa_si_su_sidecar_no_se_pudo_escribir_y_la_biblioteca_si_se_guarda() {
+        let datos = carpeta_de_prueba("guardar_cancion_datos");
+        let carpeta_mala = carpeta_de_prueba("guardar_cancion_mala");
+        fs::create_dir(carpeta_mala.join(SIDECAR_CANONICAL_FILENAME)).unwrap();
+        let carpeta_buena = carpeta_de_prueba("guardar_cancion_buena");
+
+        let mut con_carpeta_mala = song("a", "Una");
+        con_carpeta_mala.folder_path = Some(carpeta_mala.to_string_lossy().to_string());
+        let resultado = save_song_internal(&datos, con_carpeta_mala).expect("la biblioteca sí se guarda");
+        assert!(resultado.sidecar_error.is_some(), "el fallo del sidecar debe salir en el resultado");
+        assert_eq!(read_song(&datos, "a").unwrap().unwrap().title, "Una", "y la canción quedó en la biblioteca");
+
+        let mut con_carpeta_buena = song("b", "Dos");
+        con_carpeta_buena.folder_path = Some(carpeta_buena.to_string_lossy().to_string());
+        assert_eq!(save_song_internal(&datos, con_carpeta_buena).unwrap(), SaveSongOutcome::default());
+        assert!(carpeta_buena.join(SIDECAR_CANONICAL_FILENAME).is_file());
+
+        // Sin carpeta (importada por archivos): no hay sidecar que escribir ni error que avisar.
+        assert_eq!(save_song_internal(&datos, song("c", "Tres")).unwrap(), SaveSongOutcome::default());
+        // El resultado llega a la interfaz con este nombre.
+        let json = serde_json::to_string(&SaveSongOutcome { sidecar_error: Some("x".into()) }).unwrap();
+        assert_eq!(json, "{\"sidecarError\":\"x\"}");
+        let _ = fs::remove_dir_all(&datos);
+        let _ = fs::remove_dir_all(&carpeta_mala);
+        let _ = fs::remove_dir_all(&carpeta_buena);
     }
 
     // ---- Sonoridad medida por el motor

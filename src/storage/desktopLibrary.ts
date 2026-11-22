@@ -5,6 +5,8 @@
 
 import { SongProject } from '../types/project';
 import { isDesktopApp } from '../utils/nativeDialog';
+import { notifyUser } from '../utils/userNotices';
+import { FailureTracker } from './failureTracker';
 
 export interface LibraryFilePayload {
   version: number;
@@ -51,11 +53,28 @@ export async function saveDesktopSong(song: SongProject): Promise<void> {
   const invoke = (window as any).__TAURI__?.core?.invoke;
   if (!invoke) return;
   try {
-    await invoke('library_save_song', { song });
+    const outcome = await invoke('library_save_song', { song });
+    saveFailures.report('library', null);
+    // La biblioteca se guardó; si el archivo de la carpeta de la canción no se pudo escribir, se avisa (una vez por
+    // fallo): la mezcla no quedó junto a sus pistas.
+    const sidecarError = typeof outcome?.sidecarError === 'string' ? outcome.sidecarError : null;
+    if (sidecarFailures.report(song.id, sidecarError)) {
+      console.warn(`[Library] Sidecar de '${song.id}' sin escribir: ${sidecarError}`);
+      notifyUser(
+        `«${song.title}»: se guardó en la biblioteca, pero no en su carpeta (¿sin conexión, de solo lectura o bloqueada?). Detalle en la consola.`
+      );
+    }
   } catch (err) {
     console.error(`[Library] Error guardando canción '${song.id}' en library.json:`, err);
+    if (saveFailures.report('library', String(err))) {
+      notifyUser(`No se pudo guardar «${song.title}» en la biblioteca. Detalle en la consola.`);
+    }
   }
 }
+
+// Un fallo que se repite en cada guardado avisa una sola vez (ver `FailureTracker`).
+const saveFailures = new FailureTracker();
+const sidecarFailures = new FailureTracker();
 
 /**
  * Permanently removes a song from library.json and deletes its native PCM cache (pcm/<id>).

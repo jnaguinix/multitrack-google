@@ -5,6 +5,7 @@ import { loadAllProjectsFromDb } from '../storage/projectDb';
 import { projectSaves } from '../storage/projectSaves';
 import { flightRecorder } from '../utils/flightRecorder';
 import { logAsyncError } from '../utils/asyncErrors';
+import { onUserNotice } from '../utils/userNotices';
 import { findDuplicateTrackIds } from '../utils/trackIds';
 import type { SongProject } from '../types/project';
 
@@ -29,6 +30,9 @@ export function useProjectPersistence({
   setCurrentProject,
   showToast,
 }: Deps) {
+  // Avisos de las capas de almacenamiento (p. ej. el archivo de la carpeta de una canción que no se pudo escribir).
+  useEffect(() => onUserNotice(showToast), [showToast]);
+
   // Initial load from IndexedDB: carga la lista del repertorio; montar una canción en el DAW lo hace `useAlwaysMountedSong`
   useEffect(() => {
     let mounted = true;
