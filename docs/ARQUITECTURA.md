@@ -72,6 +72,10 @@ Gestiona el catálogo de canciones y la integridad de metadatos locales:
   - Picos de forma de onda fuera de `library.json`: `peaks/<id>.json` (`store_song_peaks`, `attach_song_peaks`, `remove_song_peaks`, `read_song_peaks`). Se guardan solo si cambiaron (resumen hash en memoria). `load_library_internal` (guardados) no los trae; `load_library_for_ui` (`library_load`) los une solo a las canciones del setlist, y `library_get_song_peaks` entrega los de una canción cuando se añade al setlist. Una biblioteca antigua con los picos dentro se migra sola; si no se pueden escribir, se quedan en `library.json`.
   - Comandos Tauri IPC expuestos: `library_load`, `library_get_song_peaks`, `library_save`, `library_save_song`, `library_delete_song`, `library_update_song_folder`, `library_write_sidecar`, `library_read_sidecar`.
 
+### 3.1 Guardado diferido, borrado y cierre de la ventana
+- **`src/storage/saveScheduler.ts`**: agrupa los cambios continuos de una canción (400 ms). Los guardados de una misma canción van en fila (uno no empieza hasta que termina el anterior). `cancel(id)` —lo usa `useLibraryDeletion` antes de borrar— descarta lo pendiente, espera lo que ya iba y durante 10 s ignora los guardados de esa canción, para que un fader movido hace un instante no la recree. `flush(id)` guarda y espera una canción; `flushAll` espera también lo que estaba en curso.
+- **`desktop/src-tauri/src/close_gate.rs`** + **`src/utils/closeFlush.ts`**: al pedir cerrar la ventana, Rust detiene el primer cierre, envía `app://close-requested`; la interfaz vacía `flushAll` y confirma con `app_confirm_close`, que cierra. Si la interfaz no contesta en `CLOSE_GRACE_MS` (2,5 s), Rust cierra igualmente. «Cerrar e instalar» (`DesktopUpdates.tsx`) también vacía antes de instalar.
+
 ---
 
 ## 4. Servidor Remoto LAN (`desktop/src-tauri/src/lan.rs`)

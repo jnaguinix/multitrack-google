@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { audioEngine } from '../audio/audioEngine';
 import { deleteProjectFromDb } from '../storage/projectDb';
+import { projectSaves } from '../storage/projectSaves';
 import { deleteProjectNativeCache } from '../utils/nativeDialog';
 import type { SongProject, TransportState } from '../types/project';
 
@@ -38,6 +39,9 @@ export function useLibraryDeletion({
     }
 
     audioEngine.evictSongFromRamCache(song.id);
+    // Antes de borrar: un guardado diferido (un fader movido hace menos de 400 ms) o ya en curso volvería a crear la
+    // canción en la biblioteca justo después. Se descarta lo pendiente, se espera lo que ya iba y se ignora lo nuevo.
+    await projectSaves.cancel(song.id);
     await deleteProjectFromDb(song.id);
     if (isDesktopApp) {
       deleteProjectNativeCache(song.id).catch((err: any) => {

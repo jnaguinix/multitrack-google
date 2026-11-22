@@ -5,6 +5,7 @@ import { loadAllProjectsFromDb } from '../storage/projectDb';
 import { projectSaves } from '../storage/projectSaves';
 import { flightRecorder } from '../utils/flightRecorder';
 import { logAsyncError } from '../utils/asyncErrors';
+import { installCloseFlush } from '../utils/closeFlush';
 import { findDuplicateTrackIds } from '../utils/trackIds';
 import type { SongProject } from '../types/project';
 
@@ -82,6 +83,26 @@ export function useProjectPersistence({
     return () => {
       document.removeEventListener('visibilitychange', onVisibility);
       window.removeEventListener('pagehide', flush);
+    };
+  }, []);
+
+  // Escritorio: al cerrar la ventana, Rust espera a que se guarde lo pendiente (y a que se confirme) antes de cerrar.
+  useEffect(() => {
+    const tauri = (window as any).__TAURI__;
+    const listen = tauri?.event?.listen;
+    const invoke = tauri?.core?.invoke;
+    if (!listen || !invoke) return;
+    let cancelled = false;
+    let unlisten: (() => void) | undefined;
+    installCloseFlush({ listen, invoke, flush: () => projectSaves.flushAll(), onError: logAsyncError })
+      .then((off) => {
+        if (cancelled) off();
+        else unlisten = off;
+      })
+      .catch(logAsyncError('preparar el guardado al cerrar'));
+    return () => {
+      cancelled = true;
+      unlisten?.();
     };
   }, []);
 

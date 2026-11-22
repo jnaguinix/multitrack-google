@@ -1,10 +1,11 @@
 use omnitracks_desktop::{
+    close_gate::{CloseDecision, CloseGate, CLOSE_EVENT, CLOSE_GRACE_MS},
     lan::{Device, Server},
     protocol::{Dispatch, Receipt, Role, Snapshot},
 };
 use serde::Serialize;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-use tauri::{Manager, State};
+use tauri::{Emitter, Manager, State};
 use tokio::sync::Mutex;
 mod updates;
 use updates::{desktop_update_check, desktop_update_download, desktop_update_install};
@@ -192,6 +193,30 @@ fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(RemoteState::default())
+        .manage(CloseGate::default())
+        .on_window_event(|window, event| {
+            // Cerrar la ventana espera (con tope) a que la interfaz guarde lo pendiente: ver `close_gate`.
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                let gate = window.state::<CloseGate>();
+                match gate.on_close_requested() {
+                    CloseDecision::Allow => {}
+                    CloseDecision::Wait => api.prevent_close(),
+                    CloseDecision::Ask => {
+                        api.prevent_close();
+                        if let Err(error) = window.emit(CLOSE_EVENT, ()) {
+                            tracing::warn!("[Cierre] No se pudo avisar a la interfaz: {error}");
+                        }
+                        let window = window.clone();
+                        std::thread::spawn(move || {
+                            std::thread::sleep(std::time::Duration::from_millis(CLOSE_GRACE_MS));
+                            // Si la interfaz ya confirmó, la ventana ya no existe y `close` no hace nada.
+                            window.state::<CloseGate>().confirm();
+                            let _ = window.close();
+                        });
+                    }
+                }
+            }
+        })
         .setup(|app| {
             app.manage(updates::init(app.handle()));
             let local_data = app
@@ -213,6 +238,7 @@ fn main() {
             desktop_update_check,
             desktop_update_download,
             desktop_update_install,
+            omnitracks_desktop::close_gate::app_confirm_close,
             omnitracks_desktop::audio::audio_list_hosts,
             omnitracks_desktop::audio::audio_list_devices,
             omnitracks_desktop::audio::audio_get_config,

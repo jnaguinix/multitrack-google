@@ -13,6 +13,7 @@
     "allow-desktop-update-check",
     "allow-desktop-update-download",
     "allow-desktop-update-install",
+    "allow-app-confirm-close",
     "dialog:allow-open",
     "core:event:allow-listen",
     "core:event:allow-unlisten",

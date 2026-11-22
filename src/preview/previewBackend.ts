@@ -225,6 +225,7 @@ export function createPreviewBackend() {
       songsById.delete(a?.songId);
       return null;
     },
+    app_confirm_close: () => null,
     library_update_song_folder: () => null,
     library_get_song_peaks: () => ({}),
     audio_analyze_loudness: () => 0,
