@@ -58,9 +58,14 @@ export function useNativeCacheBanner({ currentProject, isDesktopApp, showToast }
       setIsGeneratingNativeCache(true);
       setNativeCacheProgress({ percent: 5, text: 'Iniciando verificación...' });
       try {
-        const ok = await nativeAudioEngine.generateNativeCacheForProject(project, (percent, text) => {
-          setNativeCacheProgress({ percent, text });
-        });
+        // Botón pulsado por el usuario: aquí sí se le puede pedir la carpeta si los archivos ya no están.
+        const ok = await nativeAudioEngine.generateNativeCacheForProject(
+          project,
+          (percent, text) => {
+            setNativeCacheProgress({ percent, text });
+          },
+          { askForFolder: true }
+        );
         if (ok) {
           setMissingNativeCache(false);
           await nativeAudioEngine.loadProject(project);

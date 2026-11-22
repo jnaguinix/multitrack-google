@@ -538,9 +538,10 @@ export class NativeAudioEngine {
   /** Genera la caché PCM nativa; nunca dos decodificaciones a la vez del mismo proyecto. */
   public generateNativeCacheForProject(
     project: SongProject,
-    onProgress?: (percent: number, text: string) => void
+    onProgress?: (percent: number, text: string) => void,
+    options?: { askForFolder?: boolean }
   ): Promise<boolean> {
-    return this.cache.generateNativeCacheForProject(project, onProgress);
+    return this.cache.generateNativeCacheForProject(project, onProgress, options);
   }
 
   public async loadProject(

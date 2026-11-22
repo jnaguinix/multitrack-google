@@ -61,7 +61,7 @@ Salida de la ola 2: `cargo test --lib` completo, informe de lo no medido, lista 
 
 ## Ola 5 — Robustez de uso
 - [ ] **5.1 `ErrorBoundary` en la raíz (AG H36)** con «copiar diagnóstico».
-- [ ] **5.2 Sin selector de carpeta automático al arrancar (AG H37).**
+- [x] **5.2 Sin selector de carpeta automático al arrancar (AG H37).** HECHO en `fix/ola5-sin-selector-al-arrancar`: al montar una canción (la primera del setlist al abrir la app) `loadProject` genera la caché si falta y, con los archivos originales ausentes, `runGenerateNativeCache` caía en su «intento 3» y abría solo el selector de carpetas. Ahora ese intento exige `askForFolder`, que solo pasan los botones «Generar caché nativa» (`useNativeCacheBanner`) y «Optimizar» (`useOptimization`); en lo demás falla con un aviso («Usa Generar caché nativa o Reubicar carpeta») y el aviso de caché faltante queda visible. Probado en `test/nativeCacheGeneration.test.ts` (casos 9 y 10; falla si se quita la condición, comprobado). El texto original de AG H37 no está en el repositorio: se interpretó por lo que hace el código. No medido en el `.exe`.
 - [ ] **5.3 Aviso de dispositivo desconectado persistente hasta que reabrir tenga éxito (H17).**
 - [ ] **5.4 `DesktopAudioSettings` con `Dialog` común (AG H38).**
 - [ ] **5.5 Correcciones de documentación** (nombre `save_library_internal` en lugar de `atomic_write_file`, lista de `catch` (ya con `catch-ok`, ver ensayo 1), BOM de `desktop/build-frontend.ps1` (quitado en el ensayo 1), cuantización tardía = compás siguiente al siguiente, importación que decodifica si ya está en el setlist, precarga sin expulsión de RAM, empalmes sin `begin_new_segment`).

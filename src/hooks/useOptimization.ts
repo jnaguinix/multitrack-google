@@ -26,9 +26,14 @@ export function useOptimization({
       setIsGeneratingNativeCache(true);
       setNativeCacheProgress({ percent: 5, text: 'Iniciando verificación...' });
       nativeAudioEngine
-        .generateNativeCacheForProject(projectToOptimize, (percent, text) => {
-          setNativeCacheProgress({ percent, text });
-        })
+        // Botón «Optimizar» pulsado por el usuario: puede pedirle la carpeta si los archivos originales ya no están.
+        .generateNativeCacheForProject(
+          projectToOptimize,
+          (percent, text) => {
+            setNativeCacheProgress({ percent, text });
+          },
+          { askForFolder: true }
+        )
         .then(async (ok) => {
           if (ok) {
             if (currentProjectRef.current?.id === projectToOptimize.id) {
