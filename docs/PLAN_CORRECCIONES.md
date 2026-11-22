@@ -62,7 +62,7 @@ Salida de la ola 2: `cargo test --lib` completo, informe de lo no medido, lista 
 ## Ola 5 — Robustez de uso
 - [ ] **5.1 `ErrorBoundary` en la raíz (AG H36)** con «copiar diagnóstico».
 - [ ] **5.2 Sin selector de carpeta automático al arrancar (AG H37).**
-- [ ] **5.3 Aviso de dispositivo desconectado persistente hasta que reabrir tenga éxito (H17).**
+- [x] **5.3 Aviso de dispositivo desconectado persistente hasta que reabrir tenga éxito (H17).** HECHO en `fix/ola5-aviso-dispositivo-persistente`: `reopen_stream` bajaba `device_disconnected` ANTES de intentar reabrir (y `ensure_stream` al descartar el stream roto, que es lo que pasa al pulsar Play); si el dispositivo seguía ausente, la reapertura fallaba pero la marca ya estaba en falso, el siguiente sondeo informaba «conectado» y el aviso desaparecía sin que hubiera salida. Ahora la marca solo se baja cuando la salida se abre de verdad. Probado en `test_53_*` (Rust, con un dispositivo inexistente: falla si se vuelve a bajar antes, comprobado) y en `test/nativeCacheGeneration.test.ts` caso 11 (la interfaz no apaga el aviso si reabrir falla). No medido: un stream real que se desconecta (necesita hardware) ni el `.exe`.
 - [ ] **5.4 `DesktopAudioSettings` con `Dialog` común (AG H38).**
 - [ ] **5.5 Correcciones de documentación** (nombre `save_library_internal` en lugar de `atomic_write_file`, lista de `catch` (ya con `catch-ok`, ver ensayo 1), BOM de `desktop/build-frontend.ps1` (quitado en el ensayo 1), cuantización tardía = compás siguiente al siguiente, importación que decodifica si ya está en el setlist, precarga sin expulsión de RAM, empalmes sin `begin_new_segment`).
 

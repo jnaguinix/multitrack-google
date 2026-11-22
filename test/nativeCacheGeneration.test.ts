@@ -15,6 +15,7 @@ let progressHandler: Handler | null = null;
 let cacheReady = false;
 let importCalls = 0;
 let failNextImport = false;
+let reopenFails = false;
 const statusArgs: any[] = [];
 
 const emit = (payload: any) => progressHandler?.({ payload });
@@ -52,6 +53,9 @@ const fakeInvoke = async (cmd: string, args: any = {}) => {
       cacheReady = true;
       return { tracks: args.files.map((f: any) => ({ trackId: f.trackId })), errors: [] };
     }
+    case 'audio_reopen_stream':
+      if (reopenFails) throw new Error('el dispositivo sigue ausente');
+      return null;
     default:
       return null;
   }
@@ -190,6 +194,19 @@ async function main() {
   assert(engine.getImportProgress(project.id)?.percent === 10, 'tras reiniciar, el avance vuelve a contar desde 0');
   unsub8();
   console.log('OK 8: porcentaje y pista no retroceden con eventos cruzados; reinicio vuelve a 0');
+
+  // 11. Reabrir el dispositivo (plan 5.3): si falla, el aviso de desconexión NO se apaga; si funciona, sí.
+  const disconnectedEvents: boolean[] = [];
+  engine.setOnDeviceDisconnected((d) => disconnectedEvents.push(d));
+  notices.length = 0;
+  reopenFails = true;
+  await engine.reopenDevice();
+  assert(disconnectedEvents.length === 0, 'reabrir con fallo no apaga el aviso de desconexión');
+  assert(notices.some((n) => n.includes('sigue ausente')), 'el fallo al reabrir se muestra al usuario');
+  reopenFails = false;
+  await engine.reopenDevice();
+  assert(disconnectedEvents.join() === 'false', 'reabrir con éxito apaga el aviso');
+  console.log('OK 11: reabrir con fallo mantiene el aviso; con éxito lo quita');
 
   console.log('\nTODAS LAS PRUEBAS PASARON');
   process.exit(0);

@@ -20,7 +20,8 @@ impl PlaybackEngine {
             self.stream_rate.store(0, Ordering::SeqCst);
             *self.open_device.lock().unwrap() = None;
         }
-        self.device_disconnected.store(false, Ordering::SeqCst);
+        // La marca de desconexión se baja solo cuando la salida se abre (dentro de `ensure_stream`): si el dispositivo
+        // sigue ausente y esto falla, el aviso debe seguir puesto (plan 5.3).
         self.ensure_stream(engine_state).await?;
         tracing::info!("[NativeEngine] Audio stream reopened successfully");
         Ok(())

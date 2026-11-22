@@ -920,7 +920,9 @@ impl PlaybackEngine {
             *stream_guard = None;
             self.stream_rate.store(0, Ordering::SeqCst);
             *self.open_device.lock().unwrap() = None;
-            self.device_disconnected.store(false, Ordering::SeqCst);
+            // La marca `device_disconnected` NO se baja aquí: solo cuando la salida nueva se abre de verdad (más
+            // abajo). Si se bajara al descartar y la reapertura fallara (el dispositivo sigue ausente), el aviso de
+            // «dispositivo desconectado» desaparecería sin que hubiera salida (plan 5.3).
         }
 
         let settings = engine_state.current_settings.lock().await.clone();
@@ -1011,6 +1013,8 @@ impl PlaybackEngine {
             .map_err(|e| format!("Error construyendo corriente de salida CPAL: {e}"))?;
 
         stream.play().map_err(|e| format!("Error iniciando stream: {e}"))?;
+        // Salida abierta y sonando: ahora sí, el aviso de desconexión ya no aplica.
+        self.device_disconnected.store(false, Ordering::SeqCst);
         self.stream_rate.store(sample_rate_u32, Ordering::SeqCst);
         *self.open_device.lock().unwrap() = Some(OpenDeviceInfo {
             name: device_name.clone(),
