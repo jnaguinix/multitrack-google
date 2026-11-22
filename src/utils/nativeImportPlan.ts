@@ -138,34 +138,98 @@ export function scannedSections(scanned: ScannedFolderInfo): SongSection[] {
   }));
 }
 
+/** Ruta comparable: sin distinguir mayúsculas ni el tipo de barra. */
+function normalizedPath(path: string | undefined): string {
+  return (path ?? '').replace(/\\/g, '/').toLowerCase();
+}
+
+/** Resultado de reimportar: las pistas y a qué ID final corresponde cada ID que dio el escaneo. */
+export interface ReimportPlan {
+  tracks: TrackChannel[];
+  /** ID de la pista en el escaneo -> ID que lleva en la canción. El motor debe decodificar con el segundo. */
+  idByScanId: Map<string, string>;
+}
+
 /**
  * Reimportar una canción que ya está en la biblioteca: cada pista nueva conserva el ID, la mezcla (volumen, paneo,
- * mute, solo) y lo que falte (ruta, tamaño, duración) de la pista anterior que coincide por ID, nombre o archivo.
+ * mute, solo, «Aur.», volumen y mute del click de una secuencia dividida) y lo que falte (ruta, tamaño, duración) de la
+ * pista anterior que le corresponde.
+ *
+ * El emparejamiento va de lo más seguro a lo menos y cada pista anterior se usa una sola vez: 1) misma ruta de archivo,
+ * 2) mismo nombre de archivo, 3) mismo ID (solo si el archivo no es otro), 4) mismo nombre de pista entre las que
+ * quedaron sin pareja. Antes bastaba con coincidir en cualquiera de las tres cosas y ganaba la primera pista anterior
+ * que lo cumpliera: con nombres iguales entre archivos distintos la mezcla se cruzaba, y dos pistas nuevas podían quedar
+ * con el mismo ID.
+ *
+ * Una pista nueva sin pareja que traiga un ID de alguna pista anterior (aunque esa se descarte) recibe uno nuevo: si no,
+ * heredaría la caché PCM de otro archivo.
  */
-export function mergeReimportedTracks(initialTracks: TrackChannel[], existing: SongProject): TrackChannel[] {
-  return initialTracks.map((it) => {
-    const prev = existing.tracks.find(
-      (pt) =>
-        pt.id === it.id ||
-        pt.name.toLowerCase() === it.name.toLowerCase() ||
-        (pt.fileName && it.fileName && pt.fileName.toLowerCase() === it.fileName.toLowerCase())
-    );
-    if (prev) {
-      return {
-        ...it,
-        id: prev.id,
-        gain: prev.gain,
-        pan: prev.pan,
-        muted: prev.muted,
-        soloed: prev.soloed,
-        filePath: it.filePath || prev.filePath,
-        fileName: it.fileName || prev.fileName,
-        fileSize: it.fileSize ?? prev.fileSize,
-        durationSec: it.durationSec ?? prev.durationSec,
-      };
+export function planReimportedTracks(initialTracks: TrackChannel[], existing: SongProject): ReimportPlan {
+  const previous = existing.tracks;
+  const claimed = new Set<number>();
+  const matchOf: Array<TrackChannel | null> = initialTracks.map(() => null);
+
+  const pass = (accepts: (prev: TrackChannel, next: TrackChannel) => boolean) => {
+    initialTracks.forEach((next, i) => {
+      if (matchOf[i]) return;
+      const j = previous.findIndex((prev, k) => !claimed.has(k) && accepts(prev, next));
+      if (j >= 0) {
+        claimed.add(j);
+        matchOf[i] = previous[j];
+      }
+    });
+  };
+  const otherFile = (prev: TrackChannel, next: TrackChannel) =>
+    Boolean(prev.fileName && next.fileName && prev.fileName.toLowerCase() !== next.fileName.toLowerCase());
+
+  pass((prev, next) => Boolean(prev.filePath && next.filePath) && normalizedPath(prev.filePath) === normalizedPath(next.filePath));
+  pass((prev, next) => Boolean(prev.fileName && next.fileName) && prev.fileName!.toLowerCase() === next.fileName!.toLowerCase());
+  pass((prev, next) => prev.id === next.id && !otherFile(prev, next));
+  pass((prev, next) => prev.name.toLowerCase() === next.name.toLowerCase());
+
+  const taken = new Set<string>([...previous.map((p) => p.id), ...initialTracks.map((t) => t.id)]);
+  const used = new Set<string>();
+  const freshId = (base: string): string => {
+    for (let n = 2; ; n++) {
+      const candidate = `${base}-n${n}`;
+      if (!taken.has(candidate)) {
+        taken.add(candidate);
+        return candidate;
+      }
     }
-    return it;
+  };
+
+  const idByScanId = new Map<string, string>();
+  const tracks = initialTracks.map((next, i) => {
+    const prev = matchOf[i];
+    let id = prev ? prev.id : next.id;
+    // Sin pareja: no puede llevar el ID de una pista anterior (su caché es de otro archivo). Y ningún ID se repite.
+    if ((!prev && previous.some((p) => p.id === id)) || used.has(id)) id = freshId(id);
+    used.add(id);
+    idByScanId.set(next.id, id);
+    if (!prev) return id === next.id ? next : { ...next, id };
+    return {
+      ...next,
+      id,
+      gain: prev.gain,
+      pan: prev.pan,
+      muted: prev.muted,
+      soloed: prev.soloed,
+      ...(prev.monitor !== undefined ? { monitor: prev.monitor } : {}),
+      ...(prev.cueGain !== undefined ? { cueGain: prev.cueGain } : {}),
+      ...(prev.cueMuted !== undefined ? { cueMuted: prev.cueMuted } : {}),
+      filePath: next.filePath || prev.filePath,
+      fileName: next.fileName || prev.fileName,
+      fileSize: next.fileSize ?? prev.fileSize,
+      durationSec: next.durationSec ?? prev.durationSec,
+    };
   });
+  return { tracks, idByScanId };
+}
+
+/** Las pistas de `planReimportedTracks` (sin el mapa de IDs). */
+export function mergeReimportedTracks(initialTracks: TrackChannel[], existing: SongProject): TrackChannel[] {
+  return planReimportedTracks(initialTracks, existing).tracks;
 }
 
 /** Valores iniciales de una canción importada desde una carpeta nueva. */

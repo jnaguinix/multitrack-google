@@ -5,6 +5,7 @@ import {
   buildWizardFiles,
   buildWizardMeta,
   mergeReimportedTracks,
+  planReimportedTracks,
   newImportedSong,
   scannedSections,
 } from '../src/utils/nativeImportPlan';
@@ -98,6 +99,63 @@ const track = (over: Partial<TrackChannel>): TrackChannel => ({
   assert(out.durationSec === 120, 'la duración real más larga');
   assert(out.tracks[0].pcm?.sampleRate === 48000 && out.tracks[0].pcm?.frames === 5_760_000 && out.tracks[0].fileSize === 7, 'datos de la caché PCM en la pista decodificada');
   assert(out.tracks[1].pcm === undefined && out.tracks[1].durationSec === 80, 'la pista no decodificada no cambia');
+}
+
+// ---- Reimportar sin cruzar controles (plan 4.5)
+{
+  const prev = (o: Partial<TrackChannel>) => track({ role: 'guitar', ...o });
+  const existing = (tracks: TrackChannel[]) => ({ tracks }) as unknown as SongProject;
+
+  // 1. Los nombres se repiten entre archivos distintos: manda el archivo, no el nombre (antes ganaba la primera pista
+  //    anterior con cualquiera de las coincidencias y la mezcla de una acababa en la otra).
+  const viejoA = prev({ id: 'old-a', name: 'Guitarra 1', fileName: 'a.wav', filePath: 'C:/m/a.wav', gain: 0.2, pan: -1, monitor: true });
+  const viejoB = prev({ id: 'old-b', name: 'Guitarra 2', fileName: 'b.wav', filePath: 'C:/m/b.wav', gain: 0.9, pan: 1, muted: true });
+  const cruzado = planReimportedTracks(
+    [
+      track({ id: 'n1', name: 'Guitarra 1', fileName: 'b.wav', filePath: 'C:/m/b.wav' }),
+      track({ id: 'n2', name: 'Guitarra 2', fileName: 'a.wav', filePath: 'C:/m/a.wav' }),
+    ],
+    existing([viejoA, viejoB])
+  );
+  assert(cruzado.tracks[0].id === 'old-b' && cruzado.tracks[0].gain === 0.9 && cruzado.tracks[0].muted === true, 'b.wav conserva la mezcla de b.wav aunque el nombre de la pista sea el de la otra');
+  assert(cruzado.tracks[1].id === 'old-a' && cruzado.tracks[1].gain === 0.2 && cruzado.tracks[1].monitor === true, 'a.wav conserva la mezcla de a.wav');
+  assert(cruzado.idByScanId.get('n1') === 'old-b' && cruzado.idByScanId.get('n2') === 'old-a', 'el mapa dice con qué ID decodificar cada archivo');
+
+  // 2. Una pista anterior se usa una sola vez: dos pistas nuevas con el mismo nombre no comparten ID.
+  const dos = planReimportedTracks(
+    [track({ id: 'x1', name: 'Piano', fileName: 'p1.wav' }), track({ id: 'x2', name: 'Piano', fileName: 'p2.wav' })],
+    existing([prev({ id: 'old-piano', name: 'Piano', fileName: 'viejo.wav', gain: 0.4 })])
+  );
+  const ids = dos.tracks.map((t) => t.id);
+  assert(new Set(ids).size === 2, 'los IDs son únicos: ' + ids.join(','));
+  assert(dos.tracks.filter((t) => t.id === 'old-piano').length === 1, 'solo una hereda la pista anterior');
+  assert(dos.tracks.filter((t) => t.gain === 0.4).length === 1, 'y solo una hereda su mezcla');
+
+  // 3. Se conservan «Aur.», el volumen y el mute del click de una secuencia dividida (antes se perdían).
+  const secuencia = planReimportedTracks(
+    [track({ id: 's', name: 'Secuencia', fileName: 'seq.wav', splitSequence: true })],
+    existing([prev({ id: 'old-seq', name: 'Secuencia', fileName: 'seq.wav', monitor: false, cueGain: 0.35, cueMuted: true, splitSequence: true })])
+  );
+  assert(secuencia.tracks[0].cueGain === 0.35 && secuencia.tracks[0].cueMuted === true && secuencia.tracks[0].monitor === false, 'cueGain, cueMuted y monitor se conservan');
+
+  // 4. Una pista nueva sin pareja no puede llevar el ID de una pista anterior (heredaría la caché de otro archivo).
+  const colision = planReimportedTracks(
+    [track({ id: 'old-z', name: 'Strings', fileName: 'strings.wav' })],
+    existing([prev({ id: 'old-z', name: 'Pad', fileName: 'pad.wav' })])
+  );
+  assert(colision.tracks[0].id !== 'old-z', 'ID ajeno: recibe uno nuevo: ' + colision.tracks[0].id);
+  assert(colision.idByScanId.get('old-z') === colision.tracks[0].id, 'y el mapa lo refleja');
+
+  // 5. Misma ruta con otra mayúscula o barra sigue siendo el mismo archivo.
+  const ruta = planReimportedTracks(
+    [track({ id: 'r', name: 'Bajo', fileName: 'Bajo.WAV', filePath: 'c:MBajo.wav' })],
+    existing([prev({ id: 'old-bajo', name: 'Otro', fileName: 'bajo.wav', filePath: 'C:/m/bajo.wav', gain: 0.6 })])
+  );
+  assert(ruta.tracks[0].id === 'old-bajo' && ruta.tracks[0].gain === 0.6, 'la ruta se compara sin mayúsculas ni tipo de barra');
+
+  // 6. Sin parejas: cada pista conserva su ID y todo sigue igual.
+  const sin = planReimportedTracks([track({ id: 'q', name: 'Voz', fileName: 'voz.wav' })], existing([]));
+  assert(sin.tracks[0].id === 'q' && sin.idByScanId.get('q') === 'q', 'sin pista anterior no cambia nada');
 }
 
 console.log('nativeImportPlan: OK');
