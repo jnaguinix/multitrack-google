@@ -12,7 +12,7 @@ pub mod track_ids;
 
 use cache::{ImportProgressEvent, ProjectCacheStatus};
 use import::{ImportResult, ImportTrackFile};
-use track_ids::assign_track_ids;
+use track_ids::{ids_for_files, sidecar_tracks_from_json, SidecarTrack};
 use output::{
     AudioDeviceInfo, AudioEngineState, AudioSettings, AudioStreamStatsSnapshot, TestToneResult,
 };
@@ -785,7 +785,7 @@ pub async fn audio_scan_folder(
     let mut bpm = None;
     let mut key = None;
     let mut sections = Vec::new();
-    let mut sidecar_track_ids: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    let mut sidecar_tracks: Vec<SidecarTrack> = Vec::new();
 
     if let Some(ref sp) = sidecar_path {
         if let Ok(content) = std::fs::read_to_string(sp) {
@@ -821,16 +821,7 @@ pub async fn audio_scan_folder(
                         }
                     }
                 }
-                if let Some(tracks_arr) = json_val.get("tracks").and_then(|v| v.as_array()) {
-                    for t in tracks_arr {
-                        if let (Some(id), Some(name)) = (
-                            t.get("id").and_then(|v| v.as_str()),
-                            t.get("name").and_then(|v| v.as_str()),
-                        ) {
-                            sidecar_track_ids.insert(name.to_lowercase(), id.to_string());
-                        }
-                    }
-                }
+                sidecar_tracks = sidecar_tracks_from_json(&json_val);
             }
         }
     } else {
@@ -864,14 +855,12 @@ pub async fn audio_scan_folder(
         })
         .collect();
     audio_paths.sort();
-    let matched_ids: Vec<Option<String>> = audio_paths
+    // Los IDs que el sidecar guardó se emparejan por nombre de ARCHIVO (la pista lleva el nombre del catálogo).
+    let file_names: Vec<String> = audio_paths
         .iter()
-        .map(|path| {
-            let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("Pista").to_lowercase();
-            sidecar_track_ids.get(&stem).cloned()
-        })
+        .map(|path| path.file_name().and_then(|s| s.to_str()).unwrap_or("").to_string())
         .collect();
-    let track_ids = assign_track_ids(&matched_ids);
+    let track_ids = ids_for_files(&sidecar_tracks, &file_names);
     for (path, track_id) in audio_paths.into_iter().zip(track_ids) {
         let file_name = path.file_name().and_then(|s| s.to_str()).unwrap_or("").to_string();
         let file_stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("Pista").to_string();
@@ -921,31 +910,45 @@ pub async fn audio_scan_files(
     let audio_extensions = ["mp3", "wav", "ogg", "flac", "m4a", "aac"];
     let mut files = Vec::new();
 
-    let mut auto_idx = 0;
-    for fp in file_paths {
+    // Archivos de audio válidos de la selección, en el orden elegido.
+    let valid_paths: Vec<String> = file_paths
+        .into_iter()
+        .filter(|fp| {
+            let path = Path::new(fp);
+            path.is_file()
+                && path
+                    .extension()
+                    .and_then(|s| s.to_str())
+                    .map(|s| audio_extensions.contains(&s.to_lowercase().as_str()))
+                    .unwrap_or(false)
+        })
+        .collect();
+    // Si la carpeta de los archivos tiene sidecar, las pistas que ya conoce conservan su ID (emparejadas por nombre de
+    // archivo) y las nuevas no heredan el de ninguna pista conocida. Antes todo era `stem-01`, `stem-02`… por posición y
+    // chocaba con los IDs de las pistas ya guardadas al añadir archivos a una canción.
+    let sidecar_tracks: Vec<SidecarTrack> = crate::library::find_sidecar_path(&parent)
+        .and_then(|sp| std::fs::read_to_string(sp).ok())
+        .and_then(|content| serde_json::from_str::<serde_json::Value>(&content).ok())
+        .map(|json| sidecar_tracks_from_json(&json))
+        .unwrap_or_default();
+    let file_names: Vec<String> = valid_paths
+        .iter()
+        .map(|fp| Path::new(fp).file_name().and_then(|s| s.to_str()).unwrap_or("").to_string())
+        .collect();
+    let track_ids = ids_for_files(&sidecar_tracks, &file_names);
+    for ((fp, file_name), track_id) in valid_paths.into_iter().zip(file_names).zip(track_ids) {
         let path = Path::new(&fp);
-        if path.is_file() {
-            if let Some(ext) = path.extension().and_then(|s| s.to_str()).map(|s| s.to_lowercase()) {
-                if audio_extensions.contains(&ext.as_str()) {
-                    let file_name = path.file_name().and_then(|s| s.to_str()).unwrap_or("").to_string();
-                    let file_stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("Pista").to_string();
-
-                    auto_idx += 1;
-                    let track_id = format!("stem-{:02}", auto_idx);
-                    let est_duration_sec = probe_audio_duration(path);
-                    let file_size = path.metadata().ok().map(|m| m.len());
-
-                    files.push(ScannedAudioFile {
-                        file_path: fp,
-                        file_name,
-                        track_name: file_stem,
-                        track_id,
-                        est_duration_sec,
-                        file_size,
-                    });
-                }
-            }
-        }
+        let file_stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("Pista").to_string();
+        let est_duration_sec = probe_audio_duration(path);
+        let file_size = path.metadata().ok().map(|m| m.len());
+        files.push(ScannedAudioFile {
+            file_path: fp.clone(),
+            file_name,
+            track_name: file_stem,
+            track_id,
+            est_duration_sec,
+            file_size,
+        });
     }
 
     files.sort_by(|a, b| a.track_name.cmp(&b.track_name));
