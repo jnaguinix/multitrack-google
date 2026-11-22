@@ -9,6 +9,7 @@ import {
 import { useLiveMeters } from '../audio/liveMeters';
 import { isClickTrack, isGuideTrack, sortInstrumentTracks } from '../utils/instrumentCatalog';
 import { computeMixerLevels, trackLevels } from '../utils/mixerLevels';
+import { SongMapStrip } from './SongMapStrip';
 
 const MIN_DB = -40;
 const MAX_DB = 10;
@@ -361,6 +362,9 @@ export interface MultitrackMixerProps {
   onEditTracks?: () => void;
   /** Abre «Cambiar instrumento» para una pista (clic en su nombre). */
   onPickInstrument?: (trackId: string) => void;
+  /** Mapa de la canción en la página Mezcla: clic en la onda para mover el cursor, clic en una sección para saltar. */
+  onSeekSeconds?: (seconds: number) => void;
+  onJumpSection?: (sectionId: string) => void;
 }
 
 export const MultitrackMixer: React.FC<MultitrackMixerProps> = ({
@@ -382,6 +386,8 @@ export const MultitrackMixer: React.FC<MultitrackMixerProps> = ({
   onResetMixer,
   onEditTracks,
   onPickInstrument,
+  onSeekSeconds,
+  onJumpSection,
 }) => {
   const anySolo = project.tracks.some((t) => t.soloed);
   const activeSection = project.sections.find((s) => s.id === transport.activeSectionId);
@@ -448,6 +454,10 @@ export const MultitrackMixer: React.FC<MultitrackMixerProps> = ({
             </button>
           </div>
         </div>
+      )}
+
+      {!docked && onSeekSeconds && onJumpSection && (
+        <SongMapStrip project={project} transport={transport} onSeekSeconds={onSeekSeconds} onJumpSection={onJumpSection} />
       )}
 
       {/* Main Console Strip Container */}

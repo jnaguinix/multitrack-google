@@ -1668,6 +1668,10 @@
 .lt-map-header strong { font-size: 15px; font-weight: 650; margin-right: 10px; }
 .lt-map-header span { color: var(--lt-mut); font-size: 12px; }
 .lt-map-wave { height: clamp(110px, calc(100dvh / var(--ui-zoom, 1) - 535px), 260px); }
+/* Mapa de la canción en la página Mezcla: franja baja entre la barra superior y los canales. */
+.lt-mix-map { padding: 10px 18px 0; flex: none; }
+.lt-mix-map-wave { height: 84px; }
+@media (max-width: 640px) { .lt-mix-map { padding: 10px 12px 0; } }
 .lt-map-badge {
   position: absolute;
   top: 8px;
