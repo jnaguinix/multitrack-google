@@ -3,6 +3,7 @@ import './utils/invokeTraceInstall';
 import { Profiler } from 'react';
 import { createRoot } from 'react-dom/client';
 import App from './App.tsx';
+import { ErrorBoundary } from './components/app/ErrorBoundary';
 import '@fontsource-variable/inter/opsz.css';
 import './index.css';
 
@@ -16,7 +17,12 @@ function recordRender(_id: string, _phase: string, actualDuration: number): void
   if (actualDuration > s.maxMs) s.maxMs = actualDuration;
 }
 
-const app = <App />;
+// Si un componente falla al dibujarse, el ErrorBoundary muestra un aviso con diagnóstico en vez de una pantalla en blanco.
+const app = (
+  <ErrorBoundary>
+    <App />
+  </ErrorBoundary>
+);
 createRoot(document.getElementById('root')!).render(
   import.meta.env.DEV ? (
     <Profiler id="app" onRender={recordRender}>

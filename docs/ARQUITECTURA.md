@@ -116,6 +116,7 @@ src/hooks/
 
 src/components/app/
 ├── StatusBanners.tsx        # Avisos de dispositivo desconectado y caché faltante
+├── ErrorBoundary.tsx        # Aviso con diagnóstico si un componente falla al dibujarse
 ├── WorkspacePlaceholders.tsx# Capa de arrastre y páginas Arreglo/Mezcla sin canción
 ├── DockedMixerDialog.tsx    # Consola flotante del Arreglo y MixerHandlers (acciones de consola compartidas)
 └── TrackEditDialogs.tsx     # «Editar pistas» y «Cambiar instrumento»
