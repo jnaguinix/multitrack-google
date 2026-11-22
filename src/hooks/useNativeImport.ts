@@ -12,6 +12,7 @@ import {
   buildImportedTracks,
   buildWizardFiles,
   buildWizardMeta,
+  importedSongBecomesMounted,
   mergeReimportedTracks,
   newImportedSong,
   scannedSections,
@@ -185,9 +186,10 @@ export function useNativeImport({
               updatedAt: Date.now(),
             };
 
-            audioEngine.prepareProjectShell(newSongProject);
-            setMissingNativeCache(false);
-            if (newSongProject.inSetlist) {
+            // Solo si pasa a ser la canción de la consola: si no, el motor y el audio que suena no se tocan.
+            if (importedSongBecomesMounted(newSongProject, currentProjectRef.current?.id)) {
+              audioEngine.prepareProjectShell(newSongProject);
+              setMissingNativeCache(false);
               setCurrentProject(newSongProject);
             }
             setProjects((prev) =>
@@ -207,9 +209,11 @@ export function useNativeImport({
               tracks: initialTracks,
             });
 
-            audioEngine.prepareProjectShell(newSongProject);
-            setMissingNativeCache(false);
-            if (newSongProject.inSetlist) {
+            // Una canción nueva entra en la biblioteca, no en la consola: no se toca el motor ni lo que suena.
+            // (Antes, prepareProjectShell cambiaba la canción del motor y detenía el audio.)
+            if (importedSongBecomesMounted(newSongProject, currentProjectRef.current?.id)) {
+              audioEngine.prepareProjectShell(newSongProject);
+              setMissingNativeCache(false);
               setCurrentProject(newSongProject);
             }
             setProjects((prev) => [newSongProject, ...prev]);

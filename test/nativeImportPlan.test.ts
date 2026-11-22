@@ -4,6 +4,7 @@ import {
   buildImportedTracks,
   buildWizardFiles,
   buildWizardMeta,
+  importedSongBecomesMounted,
   mergeReimportedTracks,
   newImportedSong,
   scannedSections,
@@ -98,6 +99,16 @@ const track = (over: Partial<TrackChannel>): TrackChannel => ({
   assert(out.durationSec === 120, 'la duración real más larga');
   assert(out.tracks[0].pcm?.sampleRate === 48000 && out.tracks[0].pcm?.frames === 5_760_000 && out.tracks[0].fileSize === 7, 'datos de la caché PCM en la pista decodificada');
   assert(out.tracks[1].pcm === undefined && out.tracks[1].durationSec === 80, 'la pista no decodificada no cambia');
+}
+
+// ---- Importar a la biblioteca no toca la canción montada ni su audio (plan 4.6)
+{
+  assert(importedSongBecomesMounted({ id: 'nueva', inSetlist: false }, 'sonando') === false, 'una canción nueva de la biblioteca no reemplaza a la que suena');
+  assert(importedSongBecomesMounted({ id: 'nueva', inSetlist: true }, 'sonando') === false, 'tampoco una del setlist si ya hay otra montada');
+  assert(importedSongBecomesMounted({ id: 'sonando', inSetlist: false }, 'sonando') === true, 'reimportar la montada sí la actualiza (aunque no esté en el setlist)');
+  assert(importedSongBecomesMounted({ id: 'a', inSetlist: true }, null) === true, 'sin nada montado, una del setlist se monta');
+  assert(importedSongBecomesMounted({ id: 'a', inSetlist: false }, null) === false, 'sin nada montado, una de la biblioteca no se monta sola');
+  assert(importedSongBecomesMounted({ id: 'a' }, undefined) === false, 'sin marca de setlist cuenta como biblioteca');
 }
 
 console.log('nativeImportPlan: OK');
