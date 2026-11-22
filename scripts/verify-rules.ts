@@ -246,7 +246,6 @@ const ALLOW_MODAL: Record<string, string> = {
   'src/components/ui/Dialog.tsx': 'es la pieza común',
   'src/components/ui/Menu.tsx': 'es la pieza común',
   'src/components/AppDialogs.tsx': 'ActionToast: popover="manual" para quedar sobre los <dialog>',
-  'desktop/frontend/DesktopAudioSettings.tsx': 'deuda conocida, plan 5.4 (pasar a Dialog)',
   'src/components/TransportDeck.tsx': 'panel «Ajustes de reproducción» con popover propio (lleva controles, no es una lista de opciones); sin decidir si pasa a PopoverMenu',
 };
 const ALLOW_BOM: Record<string, string> = {};

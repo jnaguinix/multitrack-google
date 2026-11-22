@@ -63,7 +63,7 @@ Salida de la ola 2: `cargo test --lib` completo, informe de lo no medido, lista 
 - [ ] **5.1 `ErrorBoundary` en la raíz (AG H36)** con «copiar diagnóstico».
 - [ ] **5.2 Sin selector de carpeta automático al arrancar (AG H37).**
 - [ ] **5.3 Aviso de dispositivo desconectado persistente hasta que reabrir tenga éxito (H17).**
-- [ ] **5.4 `DesktopAudioSettings` con `Dialog` común (AG H38).**
+- [x] **5.4 `DesktopAudioSettings` con `Dialog` común (AG H38).** HECHO en `fix/ola5-ajustes-audio-con-dialog`: el diálogo «Audio» era un `<dialog>` propio con `fixed inset-0` y `showModal()` a mano; ahora usa `Dialog`/`DialogHeader`/`DialogBody`/`DialogFooter` (Escape, foco atrapado y devuelto al botón «Audio», cierre con X y «Cancelar»). Se quitó su excepción de `ALLOW_MODAL` en `scripts/verify-rules.ts`: con el archivo antiguo la regla falla (comprobado) y con el nuevo pasa. Verificado en la vista previa (abre, Escape, Cancelar, X, foco de vuelta). Los controles internos conservan sus clases de Tailwind (solo cabecera, pie y botones pasaron a `lt-*`). No medido en el `.exe`.
 - [ ] **5.5 Correcciones de documentación** (nombre `save_library_internal` en lugar de `atomic_write_file`, lista de `catch` (ya con `catch-ok`, ver ensayo 1), BOM de `desktop/build-frontend.ps1` (quitado en el ensayo 1), cuantización tardía = compás siguiente al siguiente, importación que decodifica si ya está en el setlist, precarga sin expulsión de RAM, empalmes sin `begin_new_segment`).
 
 ## Transversal — ensayo (script de autorrevisión)
