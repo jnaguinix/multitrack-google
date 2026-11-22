@@ -4,7 +4,12 @@ import { nativeAudioEngine } from '../audio/nativeAudioEngine';
 import { audioEngine } from '../audio/audioEngine';
 import { saveProjectToDb } from '../storage/projectDb';
 import { deleteProjectNativeCache } from '../utils/nativeDialog';
-import { loadDesktopLibrary, loadDesktopSongPeaks, saveDesktopLibrary } from '../storage/desktopLibrary';
+import {
+  clearDesktopSetlist,
+  loadDesktopSongPeaks,
+  removeSongFromDesktopSetlist,
+  reorderDesktopSetlist,
+} from '../storage/desktopLibrary';
 import { songLacksPeaks, withSongPeaks } from '../utils/songPeaks';
 
 interface UseSetlistDeps {
@@ -135,6 +140,13 @@ export function useSetlist({
     doAdd();
   };
 
+  // El cambio del setlist ya se ve en pantalla; si Rust no lo pudo guardar, el del disco quedaría distinto del que se
+  // ve (al reabrir volvería el anterior): se registra con su contexto y se avisa.
+  const warnSetlistNotSaved = (context: string) => (error: unknown) => {
+    logAsyncError(context)(error);
+    showToast('No se pudo guardar el cambio del Setlist en la biblioteca. Al reabrir la app puede volver el anterior.');
+  };
+
   const handleRemoveFromSetlist = (projectId: string) => {
     const song = projectsRef.current.find((x) => x.id === projectId);
 
@@ -151,15 +163,19 @@ export function useSetlist({
       });
     }
 
-    // 3. Mark inSetlist = false (remains in library intact!)
+    // 3. Mark inSetlist = false (remains in library intact!). En escritorio lo guarda Rust (solo pertenencia y orden);
+    // en el navegador se guarda la canción como siempre.
     setProjects((prev) =>
       prev.map((p) => {
         if (p.id !== projectId) return p;
         const updated: SongProject = { ...p, inSetlist: false, setlistOrder: undefined };
-        saveProjectToDb(updated).catch(logAsyncError('guardar la canción'));
+        if (!isDesktopApp) saveProjectToDb(updated).catch(logAsyncError('guardar la canción'));
         return updated;
       })
     );
+    if (isDesktopApp) {
+      removeSongFromDesktopSetlist(projectId).catch(warnSetlistNotSaved('quitar la canción del setlist en la biblioteca'));
+    }
 
     if (currentProjectRef.current?.id === projectId) {
       const remaining = setlistQueue.filter((s) => s.id !== projectId);
@@ -168,20 +184,6 @@ export function useSetlist({
       } else {
         setCurrentProject(null);
       }
-    }
-
-    if (isDesktopApp) {
-      loadDesktopLibrary().then((lib) => {
-        if (lib) {
-          lib.activeSetlist = (lib.activeSetlist || []).filter((id) => id !== projectId);
-          const s = lib.songs.find((x) => x.id === projectId);
-          if (s) {
-            s.inSetlist = false;
-            s.setlistOrder = undefined;
-          }
-          saveDesktopLibrary(lib).catch(logAsyncError('guardar la biblioteca de escritorio'));
-        }
-      }).catch(logAsyncError('actualizar la biblioteca de escritorio'));
     }
 
     showToast(
@@ -214,29 +216,19 @@ export function useSetlist({
       prev.map((p) => {
         if (!idSet.has(p.id)) return p;
         const updated: SongProject = { ...p, inSetlist: false, setlistOrder: undefined };
-        saveProjectToDb(updated).catch(logAsyncError('guardar la canción'));
+        if (!isDesktopApp) saveProjectToDb(updated).catch(logAsyncError('guardar la canción'));
         return updated;
       })
     );
 
     setCurrentProject(null);
 
-    // 4. Update desktop library file if on desktop
+    // 4. En escritorio, Rust vacía el setlist en la biblioteca del disco (solo pertenencia y orden).
     if (isDesktopApp) {
       try {
-        const lib = await loadDesktopLibrary();
-        if (lib) {
-          lib.activeSetlist = [];
-          for (const s of lib.songs) {
-            if (idSet.has(s.id)) {
-              s.inSetlist = false;
-              s.setlistOrder = undefined;
-            }
-          }
-          await saveDesktopLibrary(lib);
-        }
+        await clearDesktopSetlist();
       } catch (err) {
-        console.warn('[Library] Error limpiando setlist en library.json:', err);
+        warnSetlistNotSaved('vaciar el setlist en la biblioteca')(err);
       }
     }
 
@@ -258,10 +250,14 @@ export function useSetlist({
       prev.map((p) => {
         if (!orderMap.has(p.id)) return p;
         const updated = { ...p, setlistOrder: orderMap.get(p.id)! };
-        saveProjectToDb(updated).catch(logAsyncError('guardar la canción'));
+        if (!isDesktopApp) saveProjectToDb(updated).catch(logAsyncError('guardar la canción'));
         return updated;
       })
     );
+    // En escritorio, una sola orden a Rust con el orden nuevo (antes se reescribía la biblioteca una vez por canción).
+    if (isDesktopApp) {
+      reorderDesktopSetlist(queue.map((item) => item.id)).catch(warnSetlistNotSaved('reordenar el setlist en la biblioteca'));
+    }
   };
 
   // Live page: make a song the one that plays after the current one

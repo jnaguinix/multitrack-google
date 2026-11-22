@@ -73,6 +73,32 @@ export async function deleteDesktopSong(songId: string): Promise<void> {
 }
 
 /**
+ * Cambios del setlist hechos por Rust sobre la biblioteca del disco: solo cambian la pertenencia y el orden, no
+ * reescriben una copia completa que la interfaz pudiera tener desactualizada. Si el comando falla, el error sube a
+ * quien llama (que debe avisar al usuario: el setlist en pantalla y el del disco ya no coincidirían).
+ */
+export async function removeSongFromDesktopSetlist(songId: string): Promise<boolean> {
+  if (!isDesktopApp()) return false;
+  const invoke = (window as any).__TAURI__?.core?.invoke;
+  if (!invoke) return false;
+  return Boolean(await invoke('library_setlist_remove', { songId }));
+}
+
+export async function clearDesktopSetlist(): Promise<number> {
+  if (!isDesktopApp()) return 0;
+  const invoke = (window as any).__TAURI__?.core?.invoke;
+  if (!invoke) return 0;
+  return Number(await invoke('library_setlist_clear')) || 0;
+}
+
+export async function reorderDesktopSetlist(songIds: string[]): Promise<void> {
+  if (!isDesktopApp()) return;
+  const invoke = (window as any).__TAURI__?.core?.invoke;
+  if (!invoke) return;
+  await invoke('library_setlist_reorder', { songIds });
+}
+
+/**
  * Updates the folder path for a song that has been moved on disk.
  */
 export async function updateDesktopSongFolder(
