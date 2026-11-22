@@ -18,6 +18,10 @@ export interface LibraryFilePayload {
 /**
  * Loads the library index from %LOCALAPPDATA%/org.omnitracks.desktop/library.json.
  * If absent, the Rust backend creates an empty library.json and returns it.
+ *
+ * Devuelve `null` solo cuando no hay escritorio (navegador). Si el archivo existe pero no se puede leer (bloqueado,
+ * corrupto sin respaldo válido…) LANZA el error: devolver `null` o una lista vacía haría pasar un fallo de lectura por
+ * «biblioteca vacía» y el usuario creería que perdió sus canciones.
  */
 export async function loadDesktopLibrary(): Promise<LibraryFilePayload | null> {
   if (!isDesktopApp()) return null;
@@ -27,7 +31,7 @@ export async function loadDesktopLibrary(): Promise<LibraryFilePayload | null> {
     return await invoke('library_load');
   } catch (err) {
     console.error('[Library] Error cargando library.json desde disco:', err);
-    return null;
+    throw new Error(typeof err === 'string' ? err : (err as { message?: string } | null)?.message ?? String(err));
   }
 }
 

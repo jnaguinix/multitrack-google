@@ -492,8 +492,11 @@ export async function saveProjectToDb(project: SongProject): Promise<void> {
 
 export async function loadAllProjectsFromDb(): Promise<SongProject[]> {
   if (isDesktopApp()) {
+    // Un fallo de lectura lanza (ver `loadDesktopLibrary`): no se confunde con una biblioteca vacía. `null` solo si no
+    // hay puente con el escritorio.
     const lib = await loadDesktopLibrary();
-    if (!lib || !Array.isArray(lib.songs)) return [];
+    if (!lib) return [];
+    if (!Array.isArray(lib.songs)) throw new Error('library.json no tiene la lista de canciones esperada');
     const activeSet = new Set(lib.activeSetlist || []);
     const userProjects: SongProject[] = lib.songs.map((item: any) => {
       const inSet = item.inSetlist !== undefined ? Boolean(item.inSetlist) : activeSet.has(item.id);

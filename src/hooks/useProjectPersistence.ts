@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useRef } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { audioEngine } from '../audio/audioEngine';
 import { isContinuousOnly } from '../audio/controlSync';
+import { tryLoadLibrary } from '../storage/libraryLoader';
 import { loadAllProjectsFromDb } from '../storage/projectDb';
 import { projectSaves } from '../storage/projectSaves';
 import { flightRecorder } from '../utils/flightRecorder';
@@ -34,26 +35,33 @@ export function useProjectPersistence({
   // Avisos de las capas de almacenamiento (p. ej. el archivo de la carpeta de una canción que no se pudo escribir).
   useEffect(() => onUserNotice(showToast), [showToast]);
 
-  // Initial load from IndexedDB: carga la lista del repertorio; montar una canción en el DAW lo hace `useAlwaysMountedSong`
-  useEffect(() => {
-    let mounted = true;
-    (async () => {
-      try {
-        const saved = await loadAllProjectsFromDb();
-        if (!mounted) return;
-        setProjects(saved);
-        projectsRef.current = saved;
-      } catch (err) {
-        // La biblioteca queda vacía, pero el fallo no puede pasar en silencio: parecería que se perdieron las canciones.
-        logAsyncError('cargar la biblioteca')(err);
-        showToast('No se pudo cargar la biblioteca. Revisa la consola o reinicia la app.');
-      }
-    })();
-
-    return () => {
-      mounted = false;
-    };
+  // Carga la lista del repertorio; montar una canción en el DAW lo hace `useAlwaysMountedSong`. Un fallo de lectura NO
+  // se trata como biblioteca vacía: queda un aviso persistente (`libraryLoadError`) con reintento, y la lista en
+  // pantalla no se toca (parecería que se perdieron las canciones, y no es así: siguen en el disco).
+  const [libraryLoadError, setLibraryLoadError] = useState<string | null>(null);
+  const [libraryLoading, setLibraryLoading] = useState(false);
+  const mountedRef = useRef(true);
+  const loadLibrary = useCallback(async () => {
+    setLibraryLoading(true);
+    const result = await tryLoadLibrary(loadAllProjectsFromDb);
+    if (!mountedRef.current) return;
+    setLibraryLoading(false);
+    if (result.ok) {
+      setProjects(result.projects);
+      projectsRef.current = result.projects;
+      setLibraryLoadError(null);
+    } else {
+      logAsyncError('cargar la biblioteca')(result.message);
+      setLibraryLoadError(result.message);
+    }
   }, []);
+  useEffect(() => {
+    mountedRef.current = true;
+    void loadLibrary();
+    return () => {
+      mountedRef.current = false;
+    };
+  }, [loadLibrary]);
 
   // Mutate and persist current project helper
   const updateCurrentProject = useCallback(
@@ -122,5 +130,5 @@ export function useProjectPersistence({
     }
   }, [projects, showToast]);
 
-  return updateCurrentProject;
+  return { updateCurrentProject, libraryLoadError, libraryLoading, retryLoadLibrary: loadLibrary };
 }

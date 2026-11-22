@@ -44,7 +44,7 @@ import {
   type WizardMeta,
   type WizardResult,
 } from './components/modals/ImportWizardModal';
-import { DeviceDisconnectedBanner, MissingCacheBanner } from './components/app/StatusBanners';
+import { DeviceDisconnectedBanner, LibraryLoadErrorBanner, MissingCacheBanner } from './components/app/StatusBanners';
 import { DebugBadge } from './components/app/DebugBadge';
 import { ArrangerEmpty, DropOverlay, MixerEmpty } from './components/app/WorkspacePlaceholders';
 import { DockedMixerDialog, type MixerHandlers } from './components/app/DockedMixerDialog';
@@ -237,7 +237,7 @@ export default function App() {
     return unsubscribe;
   }, []);
 
-  const updateCurrentProject = useProjectPersistence({
+  const { updateCurrentProject, libraryLoadError, libraryLoading, retryLoadLibrary } = useProjectPersistence({
     projects,
     projectsRef,
     currentProjectRef,
@@ -426,6 +426,10 @@ export default function App() {
         onSelectView={handleSelectView}
         onOpenImportModal={() => setIsImportModalOpen(true)}
       />
+
+      {libraryLoadError && (
+        <LibraryLoadErrorBanner message={libraryLoadError} isRetrying={libraryLoading} onRetry={() => void retryLoadLibrary()} />
+      )}
 
       {isDeviceDisconnected && <DeviceDisconnectedBanner currentTimeSec={transport.currentTimeSec} />}
 
