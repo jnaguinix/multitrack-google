@@ -12,7 +12,7 @@ import {
   buildImportedTracks,
   buildWizardFiles,
   buildWizardMeta,
-  mergeReimportedTracks,
+  planReimportedTracks,
   newImportedSong,
   scannedSections,
 } from '../utils/nativeImportPlan';
@@ -163,9 +163,14 @@ export function useNativeImport({
         const initialBars = Math.max(4, Math.ceil(initialDurationSec / secPerBar));
         const initialSections = scannedSections(scanned);
 
+        // ID de cada pista en el escaneo -> ID que lleva en la canción (al reimportar puede conservar el anterior). El
+        // motor decodifica y guarda la caché con el segundo, que es el que luego se busca.
+        let finalIdByScanId = new Map<string, string>();
         let newSongProject: SongProject;
         if (effectiveMode === 'new-song') {
           if (existingCandidate) {
+            const reimport = planReimportedTracks(initialTracks, existingCandidate);
+            finalIdByScanId = reimport.idByScanId;
             // Re-importing existing song: keep user edits, sections and mix settings!
             newSongProject = {
               ...existingCandidate,
@@ -177,7 +182,7 @@ export function useNativeImport({
               isTitleCustom: true,
               totalBars: initialBars,
               durationSec: initialDurationSec,
-              tracks: mergeReimportedTracks(initialTracks, existingCandidate),
+              tracks: reimport.tracks,
               sections: existingCandidate.sections.length > 0 ? existingCandidate.sections : initialSections,
               inSetlist: existingCandidate.inSetlist ?? false,
               setlistOrder: existingCandidate.setlistOrder,
@@ -271,7 +276,7 @@ export function useNativeImport({
           .filter((f) => importedIds.has(f.trackId))
           .map((f) => ({
             filePath: f.filePath,
-            trackId: f.trackId,
+            trackId: finalIdByScanId.get(f.trackId) ?? f.trackId,
           }));
 
         invoke('audio_import_tracks', {
