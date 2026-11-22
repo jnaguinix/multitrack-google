@@ -225,6 +225,30 @@ export function createPreviewBackend() {
       songsById.delete(a?.songId);
       return null;
     },
+    // Setlist: como en Rust, solo cambian la pertenencia y el orden.
+    library_setlist_remove: (a) => {
+      const s = songsById.get(a?.songId);
+      const estaba = Boolean(s?.inSetlist);
+      if (s) songsById.set(s.id, { ...s, inSetlist: false, setlistOrder: undefined });
+      return estaba;
+    },
+    library_setlist_clear: () => {
+      let n = 0;
+      for (const s of songsById.values()) {
+        if (s.inSetlist) {
+          n += 1;
+          songsById.set(s.id, { ...s, inSetlist: false, setlistOrder: undefined });
+        }
+      }
+      return n;
+    },
+    library_setlist_reorder: (a) => {
+      (a?.songIds ?? []).forEach((id: string, idx: number) => {
+        const s = songsById.get(id);
+        if (s?.inSetlist) songsById.set(id, { ...s, setlistOrder: idx });
+      });
+      return null;
+    },
     library_update_song_folder: () => null,
     library_get_song_peaks: () => ({}),
     audio_analyze_loudness: () => 0,

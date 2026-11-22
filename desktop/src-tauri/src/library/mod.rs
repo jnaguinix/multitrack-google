@@ -709,6 +709,112 @@ pub fn set_song_loudness(local_data: &Path, song_id: &str, loudness: Option<Song
     Ok(true)
 }
 
+// ---- Setlist: pertenencia y orden
+//
+// Quitar, vaciar y reordenar cambian solo dos datos de cada canción (si está en el setlist y en qué posición) y la
+// lista `active_setlist`. Se hacen aquí, leyendo la biblioteca del disco y escribiéndola bajo el mismo cerrojo: la
+// interfaz ya no manda una copia completa (que podía estar desactualizada y pisar un guardado posterior de otra
+// canción, un volumen o la sonoridad que mide el motor) ni reescribe cada canción para cambiar su número de orden.
+// No tocan `updated_at` de las canciones: mover una ficha no es modificarla (afectaría a «Recientes»).
+
+/// ¿Está la canción en el setlist? El marcador de la canción manda y, sin él, la lista del setlist activo.
+fn is_in_setlist(lib: &LibraryFile, song: &LibrarySong) -> bool {
+    song.in_setlist.unwrap_or_else(|| lib.active_setlist.contains(&song.id))
+}
+
+/// Ids de las canciones del setlist en su orden actual (por `setlist_order`; las que no lo traen, al final y en el
+/// orden de la lista del setlist activo y, después, de la biblioteca).
+fn setlist_ids_in_order(lib: &LibraryFile) -> Vec<String> {
+    // Clave: `setlist_order`, posición en `active_setlist` y posición en la biblioteca (la sort es estable).
+    let mut ids: Vec<(usize, usize, String)> = lib
+        .songs
+        .iter()
+        .filter(|s| is_in_setlist(lib, s))
+        .map(|s| {
+            let activo = lib.active_setlist.iter().position(|a| a == &s.id).unwrap_or(usize::MAX);
+            (s.setlist_order.unwrap_or(usize::MAX), activo, s.id.clone())
+        })
+        .collect();
+    ids.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
+    ids.into_iter().map(|(_, _, id)| id).collect()
+}
+
+/// Escribe un orden (0, 1, 2…) en las canciones del setlist y deja `active_setlist` igual a ese orden.
+fn apply_setlist_order(lib: &mut LibraryFile, ordered: &[String]) {
+    for (pos, id) in ordered.iter().enumerate() {
+        if let Some(song) = lib.songs.iter_mut().find(|s| &s.id == id) {
+            song.in_setlist = Some(true);
+            song.setlist_order = Some(pos);
+        }
+    }
+    lib.active_setlist = ordered.to_vec();
+}
+
+/// Saca una canción del setlist (sigue en la biblioteca). `false` si ya no estaba.
+pub fn setlist_remove(local_data: &Path, song_id: &str) -> Result<bool, String> {
+    let _guard = lock_library();
+    let mut lib = load_library_internal(local_data)?;
+    let antes = lib.clone();
+    let mut resto = setlist_ids_in_order(&lib);
+    let estaba = resto.iter().any(|id| id == song_id) || lib.active_setlist.iter().any(|id| id == song_id);
+    resto.retain(|id| id != song_id);
+    if let Some(song) = lib.songs.iter_mut().find(|s| s.id == song_id) {
+        song.in_setlist = Some(false);
+        song.setlist_order = None;
+    }
+    apply_setlist_order(&mut lib, &resto);
+    if lib != antes {
+        lib.updated_at = current_timestamp_ms();
+        save_library_internal(local_data, &lib)?;
+    }
+    Ok(estaba)
+}
+
+/// Saca todas las canciones del setlist. Devuelve cuántas estaban.
+pub fn setlist_clear(local_data: &Path) -> Result<usize, String> {
+    let _guard = lock_library();
+    let mut lib = load_library_internal(local_data)?;
+    let estaban = setlist_ids_in_order(&lib);
+    for song in lib.songs.iter_mut() {
+        if estaban.contains(&song.id) {
+            song.in_setlist = Some(false);
+            song.setlist_order = None;
+        }
+    }
+    lib.active_setlist.clear();
+    if !estaban.is_empty() {
+        lib.updated_at = current_timestamp_ms();
+        save_library_internal(local_data, &lib)?;
+    }
+    Ok(estaban.len())
+}
+
+/// Reordena el setlist. `ordered` es el orden pedido: se ignoran los ids repetidos, los que no existen y los que no
+/// están en el setlist (reordenar no añade canciones); las del setlist que no aparezcan quedan después, en su orden.
+pub fn setlist_reorder(local_data: &Path, ordered: &[String]) -> Result<(), String> {
+    let _guard = lock_library();
+    let mut lib = load_library_internal(local_data)?;
+    let actuales = setlist_ids_in_order(&lib);
+    let mut nuevo: Vec<String> = Vec::with_capacity(actuales.len());
+    for id in ordered {
+        if actuales.contains(id) && !nuevo.contains(id) {
+            nuevo.push(id.clone());
+        }
+    }
+    for id in &actuales {
+        if !nuevo.contains(id) {
+            nuevo.push(id.clone());
+        }
+    }
+    let antes = lib.clone();
+    apply_setlist_order(&mut lib, &nuevo);
+    if lib == antes {
+        return Ok(());
+    }
+    lib.updated_at = current_timestamp_ms();
+    save_library_internal(local_data, &lib)
+}
+
 // ==========================================
 // TAURI COMMANDS
 // ==========================================
@@ -830,6 +936,36 @@ pub async fn library_delete_song(
     // Original files are NEVER touched!
     tracing::info!("[Library] Canción '{}' eliminada de la biblioteca", song_id);
     Ok(())
+}
+
+/// Quita una canción del setlist (sigue en la biblioteca). Devuelve si estaba en él.
+#[tauri::command]
+pub async fn library_setlist_remove(app: AppHandle, song_id: String) -> Result<bool, String> {
+    let local_data = app
+        .path()
+        .app_local_data_dir()
+        .map_err(|e| format!("Error resolviendo app_local_data_dir: {e}"))?;
+    setlist_remove(&local_data, &song_id)
+}
+
+/// Vacía el setlist (las canciones siguen en la biblioteca). Devuelve cuántas había.
+#[tauri::command]
+pub async fn library_setlist_clear(app: AppHandle) -> Result<usize, String> {
+    let local_data = app
+        .path()
+        .app_local_data_dir()
+        .map_err(|e| format!("Error resolviendo app_local_data_dir: {e}"))?;
+    setlist_clear(&local_data)
+}
+
+/// Reordena el setlist según `song_ids` (no añade ni quita canciones).
+#[tauri::command]
+pub async fn library_setlist_reorder(app: AppHandle, song_ids: Vec<String>) -> Result<(), String> {
+    let local_data = app
+        .path()
+        .app_local_data_dir()
+        .map_err(|e| format!("Error resolviendo app_local_data_dir: {e}"))?;
+    setlist_reorder(&local_data, &song_ids)
 }
 
 #[tauri::command]
@@ -1282,6 +1418,177 @@ mod tests {
         assert_eq!(final_lib.songs.len(), 8 * 25, "ningún guardado simultáneo debe perder su canción");
         let on_disk = fs::read_to_string(dir.join(LIBRARY_FILENAME)).unwrap();
         assert!(serde_json::from_str::<LibraryFile>(&on_disk).is_ok());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    // ---- Setlist por comandos de Rust (plan 4.1)
+
+    fn en_setlist(id: &str, titulo: &str, orden: usize) -> LibrarySong {
+        let mut s = song(id, titulo);
+        s.in_setlist = Some(true);
+        s.setlist_order = Some(orden);
+        s
+    }
+
+    /// a, b y c en el setlist (en ese orden) y «fuera» solo en la biblioteca. «b» lleva sonoridad y volumen master.
+    fn biblioteca_con_setlist(dir: &Path) -> LibraryFile {
+        let mut lib = LibraryFile::default();
+        lib.songs = vec![en_setlist("a", "Una", 0), en_setlist("b", "Dos", 1), en_setlist("c", "Tres", 2), song("fuera", "Fuera")];
+        lib.songs[1].loudness = Some(sonoridad(-14.0));
+        lib.songs[1].master_gain = Some(0.5);
+        lib.active_setlist = vec!["a".to_string(), "b".to_string(), "c".to_string()];
+        save_library_internal(dir, &lib).unwrap();
+        lib
+    }
+
+    fn orden_del_setlist(dir: &Path) -> Vec<String> {
+        setlist_ids_in_order(&load_library_internal(dir).unwrap())
+    }
+
+    #[test]
+    fn test_quitar_del_setlist_solo_cambia_la_pertenencia_y_no_pisa_otros_guardados() {
+        let dir = carpeta_de_prueba("setlist_quitar");
+        let inicial = biblioteca_con_setlist(&dir);
+        // Otro guardado posterior a lo que la interfaz tenía cargado (el fallo de H05: la interfaz mandaba su copia
+        // completa y esta edición se perdía).
+        let mut despues = inicial.clone();
+        despues.songs[2].title = "Tres (editada)".to_string();
+        despues.songs[2].master_gain = Some(0.8);
+        save_library_internal(&dir, &despues).unwrap();
+
+        assert!(setlist_remove(&dir, "a").unwrap());
+
+        let lib = load_library_internal(&dir).unwrap();
+        assert_eq!(lib.songs.len(), 4, "quitar del setlist no borra de la biblioteca");
+        let a = lib.songs.iter().find(|s| s.id == "a").unwrap();
+        assert_eq!(a.in_setlist, Some(false));
+        assert_eq!(a.setlist_order, None);
+        assert_eq!(a.title, "Una", "lo demás de la canción quitada sigue igual");
+        assert_eq!(lib.active_setlist, vec!["b".to_string(), "c".to_string()]);
+        assert_eq!(orden_del_setlist(&dir), vec!["b".to_string(), "c".to_string()]);
+        // Las que quedan conservan todo lo suyo, incluido lo guardado después y lo que mide el motor.
+        let c = lib.songs.iter().find(|s| s.id == "c").unwrap();
+        assert_eq!(c.title, "Tres (editada)");
+        assert_eq!(c.master_gain, Some(0.8));
+        let b = lib.songs.iter().find(|s| s.id == "b").unwrap();
+        assert_eq!(b.loudness, Some(sonoridad(-14.0)));
+        assert_eq!(b.master_gain, Some(0.5));
+        assert!(lib.songs.iter().all(|s| s.updated_at == 1), "mover fichas no cambia la fecha de modificación de las canciones");
+        assert_eq!(lib.songs.iter().find(|s| s.id == "fuera").unwrap(), &song("fuera", "Fuera"), "la que no estaba en el setlist no se toca");
+        // Quitar una que ya no está avisa y no cambia nada.
+        assert!(!setlist_remove(&dir, "a").unwrap());
+        assert!(!setlist_remove(&dir, "no-existe").unwrap());
+        assert_eq!(load_library_internal(&dir).unwrap().songs, lib.songs);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_quitar_del_setlist_una_cancion_de_biblioteca_antigua_sin_marcador() {
+        let dir = carpeta_de_prueba("setlist_sin_marcador");
+        let mut lib = LibraryFile::default();
+        // Biblioteca anterior: sin `inSetlist` en las canciones, solo la lista del setlist activo.
+        lib.songs = vec![song("a", "Una"), song("b", "Dos")];
+        lib.active_setlist = vec!["a".to_string(), "b".to_string()];
+        save_library_internal(&dir, &lib).unwrap();
+        assert_eq!(setlist_song_ids(&dir).unwrap().len(), 2);
+
+        assert!(setlist_remove(&dir, "a").unwrap());
+        assert_eq!(setlist_song_ids(&dir).unwrap(), vec!["b".to_string()], "«a» no debe volver a aparecer en el setlist");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_vaciar_el_setlist_deja_las_canciones_en_la_biblioteca() {
+        let dir = carpeta_de_prueba("setlist_vaciar");
+        let inicial = biblioteca_con_setlist(&dir);
+        assert_eq!(setlist_clear(&dir).unwrap(), 3);
+
+        let lib = load_library_internal(&dir).unwrap();
+        assert_eq!(lib.songs.len(), 4);
+        assert!(lib.active_setlist.is_empty());
+        assert!(setlist_song_ids(&dir).unwrap().is_empty());
+        for s in &lib.songs {
+            assert_ne!(s.in_setlist, Some(true), "{} no debe seguir en el setlist", s.id);
+            assert_eq!(s.setlist_order, None);
+        }
+        let b = lib.songs.iter().find(|s| s.id == "b").unwrap();
+        assert_eq!(b.loudness, inicial.songs[1].loudness, "la sonoridad medida no se pierde");
+        assert_eq!(b.master_gain, Some(0.5));
+        // Vaciar uno ya vacío no hace nada.
+        assert_eq!(setlist_clear(&dir).unwrap(), 0);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_reordenar_el_setlist_ignora_lo_que_no_es_del_setlist_y_no_pierde_canciones() {
+        let dir = carpeta_de_prueba("setlist_reordenar");
+        let inicial = biblioteca_con_setlist(&dir);
+        let ids = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+
+        // Orden completo, con un id repetido, uno que no existe y otro que no está en el setlist.
+        setlist_reorder(&dir, &ids(&["c", "a", "b", "no-existe", "c", "fuera"])).unwrap();
+        assert_eq!(orden_del_setlist(&dir), ids(&["c", "a", "b"]));
+        let lib = load_library_internal(&dir).unwrap();
+        assert_eq!(lib.active_setlist, ids(&["c", "a", "b"]));
+        for (pos, id) in ["c", "a", "b"].iter().enumerate() {
+            assert_eq!(lib.songs.iter().find(|s| s.id == *id).unwrap().setlist_order, Some(pos));
+        }
+        let fuera = lib.songs.iter().find(|s| s.id == "fuera").unwrap();
+        assert_ne!(fuera.in_setlist, Some(true), "reordenar no añade canciones al setlist");
+        assert_eq!(lib.songs.len(), 4);
+        assert!(lib.songs.iter().all(|s| s.updated_at == 1));
+        // Solo cambió el orden: lo demás de cada canción es idéntico.
+        for s in &lib.songs {
+            let mut igual = s.clone();
+            let original = inicial.songs.iter().find(|o| o.id == s.id).unwrap();
+            igual.setlist_order = original.setlist_order;
+            assert_eq!(&igual, original, "{} solo debe cambiar de posición", s.id);
+        }
+
+        // Un orden parcial deja el resto después, en el orden que ya tenían.
+        setlist_reorder(&dir, &ids(&["b"])).unwrap();
+        assert_eq!(orden_del_setlist(&dir), ids(&["b", "c", "a"]));
+        // Un orden vacío no cambia nada.
+        setlist_reorder(&dir, &[]).unwrap();
+        assert_eq!(orden_del_setlist(&dir), ids(&["b", "c", "a"]));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_cambios_del_setlist_y_guardados_de_canciones_a_la_vez_no_pierden_nada() {
+        let dir = carpeta_de_prueba("setlist_concurrente");
+        biblioteca_con_setlist(&dir);
+        let ids = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let mut handles = Vec::new();
+        for t in 0..4 {
+            let dir = dir.clone();
+            handles.push(std::thread::spawn(move || {
+                for i in 0..20 {
+                    // Lo que hace `library_save_song` al guardar una canción nueva.
+                    let _guard = lock_library();
+                    let mut lib = load_library_internal(&dir).expect("la biblioteca no debe corromperse");
+                    lib.songs.push(song(&format!("n{t}-{i}"), "Nueva"));
+                    save_library_internal(&dir, &lib).unwrap();
+                }
+            }));
+        }
+        for t in 0..4 {
+            let dir = dir.clone();
+            let orden = if t % 2 == 0 { ids(&["c", "b", "a"]) } else { ids(&["a", "c", "b"]) };
+            handles.push(std::thread::spawn(move || {
+                for _ in 0..20 {
+                    setlist_reorder(&dir, &orden).unwrap();
+                }
+            }));
+        }
+        for h in handles {
+            h.join().unwrap();
+        }
+        let lib = load_library_internal(&dir).expect("el archivo final debe ser válido");
+        assert_eq!(lib.songs.len(), 4 + 4 * 20, "reordenar no debe perder canciones guardadas a la vez");
+        let mut en_set = orden_del_setlist(&dir);
+        en_set.sort();
+        assert_eq!(en_set, ids(&["a", "b", "c"]));
         let _ = fs::remove_dir_all(&dir);
     }
 

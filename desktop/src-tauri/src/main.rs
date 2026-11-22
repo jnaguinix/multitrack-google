@@ -256,6 +256,9 @@ fn main() {
             omnitracks_desktop::library::library_save,
             omnitracks_desktop::library::library_save_song,
             omnitracks_desktop::library::library_delete_song,
+            omnitracks_desktop::library::library_setlist_remove,
+            omnitracks_desktop::library::library_setlist_clear,
+            omnitracks_desktop::library::library_setlist_reorder,
             omnitracks_desktop::library::library_update_song_folder,
             omnitracks_desktop::library::library_write_sidecar,
             omnitracks_desktop::library::library_read_sidecar
