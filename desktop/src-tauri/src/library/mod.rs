@@ -403,38 +403,98 @@ fn store_song_peaks(local_data: &Path, song: &LibrarySong) -> bool {
     }
 }
 
-/// Une a cada canción los picos guardados en `peaks/` (solo a las pistas que no los traen ya en `library.json`).
-fn attach_song_peaks(local_data: &Path, song: &mut LibrarySong) {
-    let Some(path) = peaks_file_path(local_data, &song.id) else { return };
-    let needs = song.tracks.iter().any(|t| t.peaks.as_ref().map_or(true, |p| p.is_empty()));
-    if !needs {
-        return;
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CachedTrackPeaks {
+    track_id: String,
+    #[serde(default)]
+    peaks: Vec<f32>,
+}
+
+/// Picos que guarda la caché PCM de una canción (`pcm/<canción>/<frecuencia>/<pista>.json`), por ID de pista. Es la
+/// fuente de respaldo cuando la canción aún no tiene `peaks/<canción>.json`: una canción recién importada y añadida
+/// al setlist tiene caché pero ningún archivo de picos (este solo se escribía cuando la interfaz guardaba picos, y la
+/// interfaz no los recibía al terminar la caché), así que su onda salía plana. Si hay varias frecuencias, manda la más
+/// reciente. Solo se lee lo que falta: son muchos archivos pequeños y el disco puede ser lento.
+fn peaks_from_pcm_cache(local_data: &Path, song_id: &str) -> HashMap<String, Vec<f32>> {
+    // El ID es un nombre de carpeta: sin separadores ni «..» no puede salir de `pcm`.
+    if song_id.is_empty() || song_id.chars().any(|c| !(c.is_ascii_alphanumeric() || matches!(c, '-' | '_'))) {
+        return HashMap::new();
     }
-    let content = match fs::read_to_string(&path) {
-        Ok(c) => c,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return,
-        Err(e) => {
-            tracing::warn!("[Library] No se pudo leer {}: {e}. Los picos se regenerarán con la caché.", path.display());
-            return;
-        }
-    };
-    let file: PeaksFileIn = match serde_json::from_str(&content) {
-        Ok(f) => f,
-        Err(e) => {
-            tracing::warn!("[Library] {} no es válido: {e}. Los picos se regenerarán con la caché.", path.display());
-            peaks_stored_lock().remove(&path);
-            return;
-        }
-    };
-    for track in &mut song.tracks {
-        if track.peaks.as_ref().map_or(true, |p| p.is_empty()) {
-            if let Some(peaks) = file.tracks.get(&track.id) {
-                track.peaks = Some(peaks.clone());
+    let song_dir = local_data.join("pcm").join(song_id);
+    let Ok(rates) = fs::read_dir(&song_dir) else { return HashMap::new() };
+    let mut rate_dirs: Vec<(std::time::SystemTime, PathBuf)> = rates
+        .flatten()
+        .filter(|e| e.path().is_dir())
+        .map(|e| (e.metadata().and_then(|m| m.modified()).unwrap_or(std::time::UNIX_EPOCH), e.path()))
+        .collect();
+    rate_dirs.sort_by(|a, b| b.0.cmp(&a.0));
+    let mut found: HashMap<String, Vec<f32>> = HashMap::new();
+    for (_, dir) in rate_dirs {
+        let Ok(files) = fs::read_dir(&dir) else { continue };
+        for entry in files.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|s| s.to_str()) != Some("json") {
+                continue;
+            }
+            let meta = match fs::read_to_string(&path).map_err(|e| e.to_string()).and_then(|c| {
+                serde_json::from_str::<CachedTrackPeaks>(&c).map_err(|e| e.to_string())
+            }) {
+                Ok(m) => m,
+                Err(e) => {
+                    tracing::warn!("[Library] No se pudieron leer los picos de {}: {e}", path.display());
+                    continue;
+                }
+            };
+            if !meta.peaks.is_empty() {
+                found.entry(meta.track_id).or_insert(meta.peaks);
             }
         }
     }
-    if let Some(hash) = peaks_hash(song) {
-        peaks_stored_lock().insert(path, hash);
+    found
+}
+
+/// Une a cada canción los picos guardados en `peaks/` (solo a las pistas que no los traen ya en `library.json`).
+fn attach_song_peaks(local_data: &Path, song: &mut LibrarySong) {
+    let Some(path) = peaks_file_path(local_data, &song.id) else { return };
+    let lacks = |song: &LibrarySong| song.tracks.iter().any(|t| t.peaks.as_ref().map_or(true, |p| p.is_empty()));
+    if !lacks(song) {
+        return;
+    }
+    match fs::read_to_string(&path) {
+        Ok(content) => match serde_json::from_str::<PeaksFileIn>(&content) {
+            Ok(file) => {
+                for track in &mut song.tracks {
+                    if track.peaks.as_ref().map_or(true, |p| p.is_empty()) {
+                        if let Some(peaks) = file.tracks.get(&track.id) {
+                            track.peaks = Some(peaks.clone());
+                        }
+                    }
+                }
+                if let Some(hash) = peaks_hash(song) {
+                    peaks_stored_lock().insert(path, hash);
+                }
+            }
+            Err(e) => {
+                tracing::warn!("[Library] {} no es válido: {e}. Los picos se regenerarán con la caché.", path.display());
+                peaks_stored_lock().remove(&path);
+            }
+        },
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => {
+            tracing::warn!("[Library] No se pudo leer {}: {e}. Los picos se regenerarán con la caché.", path.display());
+        }
+    }
+    // Lo que aún falta (canción nueva sin archivo de picos, o pistas añadidas después) sale de la caché PCM.
+    if lacks(song) {
+        let cached = peaks_from_pcm_cache(local_data, &song.id);
+        for track in &mut song.tracks {
+            if track.peaks.as_ref().map_or(true, |p| p.is_empty()) {
+                if let Some(peaks) = cached.get(&track.id) {
+                    track.peaks = Some(peaks.clone());
+                }
+            }
+        }
     }
 }
 
@@ -497,14 +557,18 @@ pub fn load_library_for_ui(local_data: &Path) -> Result<LibraryFile, String> {
 /// Picos guardados de una canción, por ID de pista. Vacío si la canción aún no tiene archivo de picos.
 pub fn read_song_peaks(local_data: &Path, song_id: &str) -> Result<HashMap<String, Vec<f32>>, String> {
     let Some(path) = peaks_file_path(local_data, song_id) else { return Ok(HashMap::new()) };
-    let content = match fs::read_to_string(&path) {
-        Ok(c) => c,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(HashMap::new()),
+    let mut peaks = match fs::read_to_string(&path) {
+        Ok(content) => serde_json::from_str::<PeaksFileIn>(&content)
+            .map(|f| f.tracks)
+            .map_err(|e| format!("{} no es válido: {e}", path.display()))?,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => HashMap::new(),
         Err(e) => return Err(format!("No se pudo leer {}: {e}", path.display())),
     };
-    serde_json::from_str::<PeaksFileIn>(&content)
-        .map(|f| f.tracks)
-        .map_err(|e| format!("{} no es válido: {e}", path.display()))
+    // Las pistas sin picos guardados salen de la caché PCM (canción recién importada o con pistas nuevas).
+    for (track_id, track_peaks) in peaks_from_pcm_cache(local_data, song_id) {
+        peaks.entry(track_id).or_insert(track_peaks);
+    }
+    Ok(peaks)
 }
 
 /// Loads library.json from the app local data dir, **sin** picos (los de las canciones se guardan en `peaks/`).
@@ -1322,6 +1386,48 @@ mod tests {
             t.peaks = None;
         }
         s
+    }
+
+    /// Meta de una pista en la caché PCM (`pcm/<canción>/<frecuencia>/<pista>.json`), con los campos que importan.
+    fn escribir_meta_de_cache(dir: &Path, song_id: &str, rate: u32, track_id: &str, peaks: &[f32]) {
+        let carpeta = dir.join("pcm").join(song_id).join(rate.to_string());
+        fs::create_dir_all(&carpeta).unwrap();
+        let meta = serde_json::json!({ "formatVersion": 1, "trackId": track_id, "targetSampleRate": rate, "peaks": peaks });
+        fs::write(carpeta.join(format!("{track_id}.json")), meta.to_string()).unwrap();
+    }
+
+    /// Una canción recién importada y añadida al setlist tiene caché PCM pero aún ningún `peaks/<id>.json` (los
+    /// picos solo llegaban a ese archivo cuando la interfaz los guardaba, y la interfaz no los recibía al terminar la
+    /// caché): su onda quedaba plana. La caché guarda los picos de cada pista y es la fuente de respaldo.
+    #[test]
+    fn test_los_picos_de_una_cancion_sin_archivo_de_picos_salen_de_la_cache_pcm() {
+        let dir = carpeta_de_prueba("picos_de_la_cache");
+        let mut nueva = cancion_con_picos("song-n", &["a", "b"], 0.0, true);
+        for t in &mut nueva.tracks {
+            t.peaks = None;
+        }
+        save_library_internal(&dir, &biblioteca_con(vec![nueva])).unwrap();
+        assert!(!dir.join(PEAKS_DIRNAME).join("song-n.json").exists(), "no hay archivo de picos");
+        assert!(read_song_peaks(&dir, "song-n").unwrap().is_empty(), "y tampoco caché todavía");
+
+        let pico_a: Vec<f32> = (0..320).map(|i| 0.2 + i as f32 / 1000.0).collect();
+        let pico_b: Vec<f32> = (0..320).map(|i| 0.5 + i as f32 / 2000.0).collect();
+        escribir_meta_de_cache(&dir, "song-n", 44100, "a", &pico_a);
+        escribir_meta_de_cache(&dir, "song-n", 44100, "b", &pico_b);
+
+        let leidos = read_song_peaks(&dir, "song-n").unwrap();
+        assert_eq!(leidos.get("a"), Some(&pico_a), "library_get_song_peaks devuelve los de la caché");
+        assert_eq!(leidos.get("b"), Some(&pico_b));
+
+        // Al abrir la app, la ficha de una canción del setlist ya sale con su onda.
+        let ui = load_library_for_ui(&dir).unwrap();
+        assert_eq!(ui.songs[0].tracks[0].peaks.as_ref(), Some(&pico_a));
+        assert_eq!(ui.songs[0].tracks[1].peaks.as_ref(), Some(&pico_b));
+
+        // Un nombre de canción con rutas no sale de la carpeta `pcm`.
+        assert!(read_song_peaks(&dir, "..").unwrap().is_empty());
+        assert!(read_song_peaks(&dir, "..\\x").unwrap().is_empty());
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

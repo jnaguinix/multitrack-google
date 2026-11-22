@@ -45,6 +45,20 @@ export function useSetlist({
       return;
     }
 
+    // Pide a Rust los picos de la canción (su archivo de picos o, si no existe, la caché PCM) y los une a la canción en
+    // la lista y, si es la montada, a la montada. Se llama al añadirla y otra vez cuando termina de generarse su caché:
+    // una canción recién importada no tiene archivo de picos hasta que la caché existe, y sin esto su onda salía plana.
+    const refreshPeaks = () => {
+      loadDesktopSongPeaks(projectId)
+        .then((peaks) => {
+          if (Object.keys(peaks).length === 0) return;
+          setProjects((prev) => prev.map((p) => (p.id === projectId ? withSongPeaks(p, peaks) : p)));
+          const mounted = currentProjectRef.current;
+          if (mounted?.id === projectId && songLacksPeaks(mounted)) setCurrentProject(withSongPeaks(mounted, peaks));
+        })
+        .catch(logAsyncError('leer los picos de la canción'));
+    };
+
     const doAdd = () => {
       // In desktop, ensure native PCM cache is generated for this song
       if (isDesktopApp) {
@@ -61,6 +75,7 @@ export function useSetlist({
               if (ok) {
                 if (currentProjectRef.current?.id === song.id) setMissingNativeCache(false);
                 showToast(`"${song.title}": lista para sonar.`);
+                refreshPeaks();
               } else {
                 showToast(`No se pudo generar la caché de "${song.title}". Revisa que los archivos originales existan.`);
               }
@@ -96,14 +111,7 @@ export function useSetlist({
 
       // La biblioteca solo trae los picos de las canciones que ya estaban en el setlist: la ficha de esta necesita
       // los suyos para dibujar su mini onda sin tener que abrirla.
-      if (isDesktopApp && songLacksPeaks(song)) {
-        loadDesktopSongPeaks(projectId)
-          .then((peaks) => {
-            if (Object.keys(peaks).length === 0) return;
-            setProjects((prev) => prev.map((p) => (p.id === projectId ? withSongPeaks(p, peaks) : p)));
-          })
-          .catch(logAsyncError('leer los picos de la canción'));
-      }
+      if (isDesktopApp && songLacksPeaks(song)) refreshPeaks();
     };
 
     if (isDesktopApp && song.folderPath) {
