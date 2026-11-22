@@ -1,4 +1,5 @@
 pub mod audio;
+pub mod close_gate;
 pub mod lan;
 pub mod library;
 pub mod protocol;

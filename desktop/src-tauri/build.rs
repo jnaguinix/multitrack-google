@@ -10,6 +10,7 @@ fn main() {
             "desktop_update_check",
             "desktop_update_download",
             "desktop_update_install",
+            "app_confirm_close",
             "audio_list_hosts",
             "audio_list_devices",
             "audio_get_config",

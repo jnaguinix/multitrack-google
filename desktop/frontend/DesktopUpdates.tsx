@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { projectSaves } from '../../src/storage/projectSaves';
 
 type Props = {
   invoke: <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
@@ -31,6 +32,8 @@ export default function DesktopUpdates({ invoke, canUpdate }: Props) {
         setMessage(`Versión ${version} verificada. OmniTracks se cerrará al instalar.`);
       } else {
         setMessage('Abriendo el instalador…');
+        // Instalar cierra la app: antes se guarda lo pendiente (un fader movido hace un instante).
+        await projectSaves.flushAll();
         await invoke('desktop_update_install', { version });
       }
     } catch (error) {
