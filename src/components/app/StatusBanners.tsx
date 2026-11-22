@@ -4,6 +4,35 @@ import { nativeAudioEngine } from '../../audio/nativeAudioEngine';
 import type { NativeCacheProgress } from '../../hooks/useNativeCacheBanner';
 import type { SongProject } from '../../types/project';
 
+/**
+ * Aviso persistente: no se pudo leer la biblioteca. Las canciones no se han borrado (siguen en el disco); la lista que
+ * se ve puede estar incompleta o vacía hasta que la lectura funcione. Se quita solo cuando el reintento sale bien.
+ */
+export const LibraryLoadErrorBanner: React.FC<{ message: string; isRetrying: boolean; onRetry: () => void }> = ({
+  message,
+  isRetrying,
+  onRetry,
+}) => (
+  <div role="alert" className="bg-rose-950/95 border-b border-rose-800 text-rose-200 px-4 py-2 flex items-center justify-between gap-3 text-xs z-50 shadow-lg">
+    <div className="flex items-center gap-2 min-w-0">
+      <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0" />
+      <span className="min-w-0">
+        <strong>No se pudo leer la biblioteca.</strong> Tus canciones no se han borrado: siguen en el disco. Lo que ves puede
+        estar incompleto hasta que se lea bien.{' '}
+        <span className="text-rose-300/80 break-words">Detalle: {message}</span>
+      </span>
+    </div>
+    <button
+      type="button"
+      disabled={isRetrying}
+      onClick={onRetry}
+      className="px-3 py-1 bg-rose-600 hover:bg-rose-500 text-white rounded font-medium cursor-pointer transition-colors shrink-0 disabled:opacity-50"
+    >
+      {isRetrying ? 'Leyendo…' : 'Reintentar'}
+    </button>
+  </div>
+);
+
 /** Aviso: la interfaz de audio se desconectó en caliente (la posición se conserva). */
 export const DeviceDisconnectedBanner: React.FC<{ currentTimeSec: number }> = ({ currentTimeSec }) => (
   <div className="bg-rose-950/95 border-b border-rose-800 text-rose-200 px-4 py-2 flex items-center justify-between text-xs z-50 shadow-lg">

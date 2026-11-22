@@ -210,9 +210,18 @@ export function createPreviewBackend() {
     return { targetSectionId: target.id, targetSec: target.startSec };
   };
 
+  let loadFailures = typeof window !== 'undefined' && window.location.search.includes('errorbiblioteca') ? 2 : 0;
+
   const handlers: Record<string, (args: Args) => unknown> = {
     // ---- Biblioteca
-    library_load: () => ({ ...library, updatedAt: Date.now(), songs: [...songsById.values()] }),
+    library_load: () => {
+      // `?errorbiblioteca` simula un library.json ilegible en las dos primeras lecturas (para ver el aviso y «Reintentar»).
+      if (loadFailures > 0) {
+        loadFailures -= 1;
+        throw 'Archivo library.json corrupto y sin backup válido (simulado en la vista previa)';
+      }
+      return { ...library, updatedAt: Date.now(), songs: [...songsById.values()] };
+    },
     library_save: (a) => {
       for (const s of a?.library?.songs ?? []) songsById.set(s.id, s);
       return null;
