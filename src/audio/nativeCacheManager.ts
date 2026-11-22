@@ -236,10 +236,16 @@ export class NativeCacheManager {
    * Genera la caché PCM nativa de un proyecto. Nunca lanza dos decodificaciones a la vez
    * para el mismo proyecto: si ya hay una en curso (propia o iniciada por otro camino,
    * `isProjectImporting`), espera a esa y devuelve si la caché quedó lista.
+   *
+   * Si los archivos originales ya no están, NO abre el selector de carpetas por su cuenta: esta función la llama
+   * también `loadProject` al montar una canción (p. ej. al abrir la app), y una ventana del sistema sin que nadie
+   * la pida es un problema en directo. Solo con `askForFolder` (botones «Generar caché nativa» y «Optimizar»,
+   * que son una orden del usuario) se le pide la carpeta; sin ella falla con un mensaje que dice qué hacer.
    */
   public async generateNativeCacheForProject(
     project: SongProject,
-    onProgress?: (percent: number, text: string) => void
+    onProgress?: (percent: number, text: string) => void,
+    options: { askForFolder?: boolean } = {}
   ): Promise<boolean> {
     const inFlight = this.generatingCachePromises.get(project.id);
     if (inFlight) {
@@ -264,7 +270,7 @@ export class NativeCacheManager {
     this.trackIdsByProject.set(project.id, project.tracks.map((t) => t.id));
     this.markImportStarted(project.id, 'Preparando decodificación...', project.tracks.length);
     const unsubscribe = this.forwardRealProgress(project.id, onProgress);
-    const task = this.runGenerateNativeCache(project, onProgress).finally(() => {
+    const task = this.runGenerateNativeCache(project, onProgress, options.askForFolder === true).finally(() => {
       // Si el backend no llegó a emitir `completed` (error/cancelación), no dejar el proyecto
       // marcado como "importando" para siempre.
       if (this.isProjectImporting(project.id)) this.markImportCompleted(project.id);
@@ -303,7 +309,8 @@ export class NativeCacheManager {
 
   private async runGenerateNativeCache(
     project: SongProject,
-    onProgress?: (percent: number, text: string) => void
+    onProgress?: (percent: number, text: string) => void,
+    askForFolder = false
   ): Promise<boolean> {
     const invoke = this.deps.getInvoke();
     if (!invoke) return false;
@@ -386,7 +393,12 @@ export class NativeCacheManager {
         }
       }
 
-      // 3. INTENTO 3: Solicitar carpeta con selector nativo de Windows
+      // 3. INTENTO 3: Solicitar carpeta con selector nativo de Windows (solo si el usuario lo pidió)
+      if (!askForFolder) {
+        throw new Error(
+          `No se encuentran los archivos originales de "${project.title}". Usa «Generar caché nativa» o «Reubicar carpeta» para elegir su carpeta.`
+        );
+      }
       onProgress?.(30, `Solicitando carpeta original para "${project.title}"...`);
       const selectedFolder = await pickNativeFolder();
       if (!selectedFolder) {

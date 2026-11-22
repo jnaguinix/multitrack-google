@@ -15,6 +15,9 @@ let progressHandler: Handler | null = null;
 let cacheReady = false;
 let importCalls = 0;
 let failNextImport = false;
+let filesMissing = false;
+let dialogCalls = 0;
+let dialogAnswer: string | null = null;
 const statusArgs: any[] = [];
 
 const emit = (payload: any) => progressHandler?.({ payload });
@@ -28,7 +31,10 @@ const fakeInvoke = async (cmd: string, args: any = {}) => {
       return { isReady: cacheReady, cachedTracksCount: cacheReady ? 3 : 0, totalTracksCount: 3 };
     }
     case 'audio_check_files_exist':
-      return (args.paths || []).map(() => true);
+      return (args.paths || []).map(() => !filesMissing);
+    case 'plugin:dialog|open':
+      dialogCalls++;
+      return dialogAnswer;
     case 'audio_import_tracks': {
       importCalls++;
       const total = args.files.length;
@@ -64,6 +70,22 @@ const fakeInvoke = async (cmd: string, args: any = {}) => {
   },
   setInterval: () => 0,
   clearInterval: () => {},
+};
+
+// IndexedDB mínimo y vacío (la canción no tiene audio copiado ahí): el flujo llega al "intento 3" de la caché.
+const fakeIdbRequest = (result: unknown) => {
+  const req: any = { result };
+  setTimeout(() => req.onsuccess?.(), 0);
+  return req;
+};
+(globalThis as any).IDBKeyRange = { only: (v: unknown) => v };
+(globalThis as any).indexedDB = {
+  open: () =>
+    fakeIdbRequest({
+      onclose: null,
+      objectStoreNames: { contains: () => true },
+      transaction: () => ({ objectStore: () => ({ index: () => ({ getAll: () => fakeIdbRequest([]) }) }) }),
+    }),
 };
 
 const project: any = {
@@ -190,6 +212,31 @@ async function main() {
   assert(engine.getImportProgress(project.id)?.percent === 10, 'tras reiniciar, el avance vuelve a contar desde 0');
   unsub8();
   console.log('OK 8: porcentaje y pista no retroceden con eventos cruzados; reinicio vuelve a 0');
+
+  // 9. Archivos originales ausentes (plan 5.2): montar la canción NO abre el selector de carpetas por su cuenta.
+  engine.markImportCompleted(project.id); // el test 8 la dejó marcada como importando
+  filesMissing = true;
+  cacheReady = false;
+  importCalls = 0;
+  dialogCalls = 0;
+  notices.length = 0;
+  assert((await engine.generateNativeCacheForProject(project)) === false, 'sin archivos y sin pedir carpeta, falla');
+  assert(dialogCalls === 0, `no se abre el selector de carpetas sin que el usuario lo pida (se abrió ${dialogCalls} vez/veces)`);
+  assert(notices.some((n) => n.includes('Generar caché nativa') || n.includes('Reubicar')), 'el aviso dice qué hacer: ' + JSON.stringify(notices));
+  assert(importCalls === 0, 'no decodifica nada');
+  assert(engine.isProjectImporting(project.id) === false, 'no queda importando');
+  // loadProject (lo que hace montar la canción al abrir la app) tampoco lo abre.
+  await engine.loadProject(project);
+  assert(dialogCalls === 0, 'loadProject con archivos ausentes no abre el selector');
+  console.log('OK 9: archivos ausentes -> sin selector automático, con aviso');
+
+  // 10. Con la orden explícita del usuario (botón), sí se pide la carpeta; cancelar es un fallo avisado, no un cuelgue.
+  dialogAnswer = null;
+  notices.length = 0;
+  assert((await engine.generateNativeCacheForProject(project, undefined, { askForFolder: true })) === false, 'cancelar el selector da false');
+  assert(dialogCalls === 1, `con askForFolder se abre el selector una vez (fueron ${dialogCalls})`);
+  assert(notices.some((n) => n.includes('cancelada')), 'cancelar se avisa');
+  console.log('OK 10: con askForFolder el selector se abre una vez');
 
   console.log('\nTODAS LAS PRUEBAS PASARON');
   process.exit(0);
