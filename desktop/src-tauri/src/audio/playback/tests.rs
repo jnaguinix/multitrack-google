@@ -690,6 +690,63 @@
         assert_eq!(state_reopened.position_sec, 25.0, "Position was not preserved after reopen!");
     }
 
+    /// Estado de motor con un dispositivo de salida que NO existe, para forzar que abrir la salida falle sin depender
+    /// del hardware del equipo (con o sin tarjeta de sonido, buscar ese nombre no encuentra nada).
+    fn estado_con_dispositivo_ausente(nombre: &str) -> crate::audio::output::AudioEngineState {
+        let dir = std::env::temp_dir().join(format!("omnitracks_dispositivo_{nombre}"));
+        std::fs::create_dir_all(&dir).unwrap();
+        let state = crate::audio::output::AudioEngineState::new(dir.join("audio_settings.json"));
+        state.current_settings.try_lock().unwrap().device_name = Some("OmniTracks-dispositivo-que-no-existe".to_string());
+        state
+    }
+
+    /// Plan 5.3: reabrir la salida con el dispositivo todavía ausente falla y el aviso de «dispositivo desconectado»
+    /// SIGUE puesto. Antes `reopen_stream` bajaba la marca antes de intentarlo: al fallar, el siguiente sondeo veía
+    /// «conectado» y el aviso desaparecía aunque no hubiera salida.
+    #[tokio::test]
+    async fn test_53_reabrir_sin_dispositivo_mantiene_el_aviso_de_desconexion() {
+        let state = estado_con_dispositivo_ausente("reabrir");
+        let engine = &state.playback;
+        engine.sample_rate.store(48000, Ordering::SeqCst);
+        engine.device_disconnected.store(true, Ordering::SeqCst);
+
+        let result = engine.reopen_stream(&state).await;
+
+        assert!(result.is_err(), "con el dispositivo ausente reabrir debe fallar: {result:?}");
+        assert!(
+            engine.get_playback_state().device_disconnected,
+            "el aviso de desconexión debe seguir hasta que reabrir tenga éxito"
+        );
+        // Un segundo intento fallido tampoco lo apaga.
+        assert!(engine.reopen_stream(&state).await.is_err());
+        assert!(engine.get_playback_state().device_disconnected);
+    }
+
+    /// Plan 5.3: abrir la salida (`ensure_stream`, lo que hace Play) con el dispositivo ausente falla sin bajar la marca.
+    /// El caso real, un stream ya abierto que se desconecta, necesita hardware: no medido.
+    #[tokio::test]
+    async fn test_53_abrir_la_salida_con_dispositivo_ausente_mantiene_el_aviso() {
+        let state = estado_con_dispositivo_ausente("abrir");
+        let engine = &state.playback;
+        engine.sample_rate.store(48000, Ordering::SeqCst);
+        engine.device_disconnected.store(true, Ordering::SeqCst);
+
+        assert!(engine.ensure_stream(&state).await.is_err());
+        assert!(engine.get_playback_state().device_disconnected, "Play con el dispositivo ausente no apaga el aviso");
+    }
+
+    /// Un fallo al abrir la salida que NO viene de una desconexión no inventa el aviso de desconexión.
+    #[tokio::test]
+    async fn test_53_un_fallo_sin_desconexion_previa_no_levanta_el_aviso() {
+        let state = estado_con_dispositivo_ausente("sin_aviso");
+        let engine = &state.playback;
+        engine.sample_rate.store(48000, Ordering::SeqCst);
+        assert!(!engine.get_playback_state().device_disconnected);
+
+        assert!(engine.ensure_stream(&state).await.is_err());
+        assert!(!engine.get_playback_state().device_disconnected, "sin desconexión previa el aviso no aparece");
+    }
+
     #[test]
     fn test_callback_10min_preallocation_benchmark() {
         // 10 minutes at 48 kHz with 256-frame blocks

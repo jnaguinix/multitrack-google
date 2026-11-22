@@ -18,6 +18,7 @@ let failNextImport = false;
 let filesMissing = false;
 let dialogCalls = 0;
 let dialogAnswer: string | null = null;
+let reopenFails = false;
 const statusArgs: any[] = [];
 
 const emit = (payload: any) => progressHandler?.({ payload });
@@ -58,6 +59,9 @@ const fakeInvoke = async (cmd: string, args: any = {}) => {
       cacheReady = true;
       return { tracks: args.files.map((f: any) => ({ trackId: f.trackId })), errors: [] };
     }
+    case 'audio_reopen_stream':
+      if (reopenFails) throw new Error('el dispositivo sigue ausente');
+      return null;
     default:
       return null;
   }
@@ -237,6 +241,19 @@ async function main() {
   assert(dialogCalls === 1, `con askForFolder se abre el selector una vez (fueron ${dialogCalls})`);
   assert(notices.some((n) => n.includes('cancelada')), 'cancelar se avisa');
   console.log('OK 10: con askForFolder el selector se abre una vez');
+
+  // 11. Reabrir el dispositivo (plan 5.3): si falla, el aviso de desconexión NO se apaga; si funciona, sí.
+  const disconnectedEvents: boolean[] = [];
+  engine.setOnDeviceDisconnected((d) => disconnectedEvents.push(d));
+  notices.length = 0;
+  reopenFails = true;
+  await engine.reopenDevice();
+  assert(disconnectedEvents.length === 0, 'reabrir con fallo no apaga el aviso de desconexión');
+  assert(notices.some((n) => n.includes('sigue ausente')), 'el fallo al reabrir se muestra al usuario');
+  reopenFails = false;
+  await engine.reopenDevice();
+  assert(disconnectedEvents.join() === 'false', 'reabrir con éxito apaga el aviso');
+  console.log('OK 11: reabrir con fallo mantiene el aviso; con éxito lo quita');
 
   console.log('\nTODAS LAS PRUEBAS PASARON');
   process.exit(0);
