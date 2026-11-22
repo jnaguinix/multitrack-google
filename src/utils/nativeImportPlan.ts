@@ -232,6 +232,18 @@ export function mergeReimportedTracks(initialTracks: TrackChannel[], existing: S
   return planReimportedTracks(initialTracks, existing).tracks;
 }
 
+/**
+ * ¿La canción recién importada pasa a ser la de la consola? Solo si ya era la montada (reimportación de la que se está
+ * viendo) o si no hay ninguna montada y está en el setlist. Importar otra canción a la biblioteca mientras suena una no
+ * puede tocar la montada ni su audio: `prepareProjectShell` cambia la canción del motor y detiene el audio si es otra.
+ */
+export function importedSongBecomesMounted(
+  imported: { id: string; inSetlist?: boolean },
+  mountedId: string | null | undefined
+): boolean {
+  return mountedId ? mountedId === imported.id : Boolean(imported.inSetlist);
+}
+
 /** Valores iniciales de una canción importada desde una carpeta nueva. */
 export function newImportedSong(args: {
   id: string;

@@ -4,6 +4,7 @@ import {
   buildImportedTracks,
   buildWizardFiles,
   buildWizardMeta,
+  importedSongBecomesMounted,
   mergeReimportedTracks,
   planReimportedTracks,
   newImportedSong,
@@ -156,6 +157,16 @@ const track = (over: Partial<TrackChannel>): TrackChannel => ({
   // 6. Sin parejas: cada pista conserva su ID y todo sigue igual.
   const sin = planReimportedTracks([track({ id: 'q', name: 'Voz', fileName: 'voz.wav' })], existing([]));
   assert(sin.tracks[0].id === 'q' && sin.idByScanId.get('q') === 'q', 'sin pista anterior no cambia nada');
+}
+
+// ---- Importar a la biblioteca no toca la canción montada ni su audio (plan 4.6)
+{
+  assert(importedSongBecomesMounted({ id: 'nueva', inSetlist: false }, 'sonando') === false, 'una canción nueva de la biblioteca no reemplaza a la que suena');
+  assert(importedSongBecomesMounted({ id: 'nueva', inSetlist: true }, 'sonando') === false, 'tampoco una del setlist si ya hay otra montada');
+  assert(importedSongBecomesMounted({ id: 'sonando', inSetlist: false }, 'sonando') === true, 'reimportar la montada sí la actualiza (aunque no esté en el setlist)');
+  assert(importedSongBecomesMounted({ id: 'a', inSetlist: true }, null) === true, 'sin nada montado, una del setlist se monta');
+  assert(importedSongBecomesMounted({ id: 'a', inSetlist: false }, null) === false, 'sin nada montado, una de la biblioteca no se monta sola');
+  assert(importedSongBecomesMounted({ id: 'a' }, undefined) === false, 'sin marca de setlist cuenta como biblioteca');
 }
 
 console.log('nativeImportPlan: OK');
