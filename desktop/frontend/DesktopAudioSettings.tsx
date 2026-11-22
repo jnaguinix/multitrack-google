@@ -1,9 +1,10 @@
-import React, { memo, useEffect, useRef, useState } from 'react';
+import React, { memo, useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { logAsyncError } from '../../src/utils/asyncErrors';
 import { AudioRoutingPanel } from './AudioRoutingPanel';
 import { AudioDiagnostics, type AudioStreamStatsSnapshot } from './AudioDiagnostics';
-import { Sliders, Volume2, RefreshCw, X, Play } from 'lucide-react';
+import { Sliders, Volume2, RefreshCw, Play } from 'lucide-react';
+import { Dialog, DialogBody, DialogFooter, DialogHeader } from '../../src/components/ui/Dialog';
 import { loadAllProjectsFromDb } from '../../src/storage/projectDb';
 import { SongProject } from '../../src/types/project';
 import './connection.css';
@@ -78,7 +79,6 @@ const host = window as Window & { __TAURI__?: { core: { invoke: Invoke } } };
 const invoke = host.__TAURI__?.core.invoke;
 
 export default memo(function DesktopAudioSettings({ triggerHost }: Props) {
-  const dialogRef = useRef<HTMLDialogElement>(null);
   // El sondeo del estado solo corre con el diálogo abierto: consultar el motor también pone a cero los picos de los medidores.
   const [isOpen, setIsOpen] = useState(false);
   const [hosts, setHosts] = useState<string[]>(['WASAPI']);
@@ -282,7 +282,6 @@ export default memo(function DesktopAudioSettings({ triggerHost }: Props) {
             aria-label="Audio"
             title="Audio"
             onClick={() => {
-              dialogRef.current?.showModal();
               setIsOpen(true);
               void loadAudioConfig();
             }}
@@ -292,32 +291,10 @@ export default memo(function DesktopAudioSettings({ triggerHost }: Props) {
           triggerHost
         )}
 
-      <dialog
-        ref={dialogRef}
-        id="desktop-audio-dialog"
-        className="fixed inset-0 m-auto z-50 bg-studio-panel border border-neutral-800 rounded-2xl w-full max-w-xl p-5 space-y-3 shadow-2xl backdrop:bg-black/70 text-neutral-100 max-h-[92dvh] overflow-y-auto"
-        aria-labelledby="desktop-audio-title"
-        onClose={() => setIsOpen(false)}
-        onKeyDown={(e) => e.stopPropagation()}
-      >
-        {/* 1. Cabecera: título «Audio» y botón de cerrar */}
-        <div className="flex items-center justify-between pb-2.5 border-b border-neutral-800">
-          <div className="flex items-center gap-2">
-            <Volume2 className="w-4 h-4 text-studio-ink" />
-            <h2 id="desktop-audio-title" className="text-base font-bold text-neutral-100">
-              Audio
-            </h2>
-          </div>
-          <button
-            type="button"
-            onClick={() => dialogRef.current?.close()}
-            className="text-neutral-400 hover:text-white p-1 cursor-pointer rounded-lg hover:bg-neutral-800 transition-colors"
-            aria-label="Cerrar modal"
-          >
-            <X className="w-4 h-4" />
-          </button>
-        </div>
-
+      {isOpen && (
+        <Dialog label="Audio" size="lg" onClose={() => setIsOpen(false)}>
+          <DialogHeader title="Audio" icon={Volume2} onClose={() => setIsOpen(false)} />
+          <DialogBody className="space-y-3">
         {/* 2. Dispositivo, en una sola fila: driver (estrecho), dispositivo (ancho) y refrescar */}
         <div className="flex items-center gap-2">
           <div className="w-24 shrink-0">
@@ -433,27 +410,22 @@ export default memo(function DesktopAudioSettings({ triggerHost }: Props) {
           onResetStats={() => void handleResetStats()}
         />
 
-        {/* 7. Pie: «Cancelar» y «Guardar», alineados a la derecha */}
-        <div className="flex items-center justify-between pt-2.5 border-t border-neutral-800">
-          <span className="text-xs text-neutral-400">{savingNotice}</span>
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={() => dialogRef.current?.close()}
-              className="px-4 py-2 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-xs font-medium text-neutral-300 cursor-pointer transition-colors"
-            >
+          </DialogBody>
+
+          {/* 7. Pie: aviso de guardado a la izquierda; «Cancelar» y «Guardar» a la derecha */}
+          <DialogFooter>
+            <span className="mr-auto self-center text-xs text-neutral-400" role="status">
+              {savingNotice}
+            </span>
+            <button type="button" onClick={() => setIsOpen(false)} className="lt-control">
               Cancelar
             </button>
-            <button
-              type="button"
-              onClick={() => void handleSaveConfig()}
-              className="px-4 py-2 rounded-lg bg-studio-ink hover:bg-neutral-200 text-studio-ground text-xs font-semibold cursor-pointer transition-colors"
-            >
+            <button type="button" onClick={() => void handleSaveConfig()} className="lt-control lt-btn-primary">
               Guardar
             </button>
-          </div>
-        </div>
-      </dialog>
+          </DialogFooter>
+        </Dialog>
+      )}
     </>
   );
 });
