@@ -119,7 +119,7 @@ src/components/app/
 
 La parte de la importación nativa que no depende de React (filas y datos del asistente, pistas numeradas, secciones, reimportación, resultado de la decodificación) está en `src/utils/nativeImportPlan.ts`. En el adaptador del motor, `nativeAudioEngine.ts` delega la caché PCM en `nativeCacheManager.ts` y el cálculo de compás y pulso en `nativeTransport.ts`.
 
-Páginas (`WorkspaceView` en `TopBar.tsx`): Setlist (`SetlistPageView.tsx`, `SetlistStrip.tsx`, `SongPickerModal.tsx`), En vivo (`LiveSetView.tsx`), Arreglo (`TimelineArranger.tsx`), Mezcla (`MultitrackMixer.tsx`) y Biblioteca (`LibraryView.tsx`; modales en `components/modals/`). La búsqueda de canciones está en `src/utils/songSearch.ts`.
+Páginas (`WorkspaceView` en `TopBar.tsx`): Setlist (`SetlistPageView.tsx`, `SetlistStrip.tsx`, `SongPickerModal.tsx`), En vivo (`LiveSetView.tsx`), Mezcla (`MultitrackMixer.tsx` con el mapa compacto `SongMapStrip.tsx`: clic mueve el cursor), Arreglo (`TimelineArranger.tsx`), Mezcla (`MultitrackMixer.tsx`) y Biblioteca (`LibraryView.tsx`; modales en `components/modals/`). La búsqueda de canciones está en `src/utils/songSearch.ts`.
 
 **Modo diagnóstico** (`src/utils/debugMode.ts`, `invokeTrace.ts`, `debugExport.ts`, `DebugBadge.tsx`): interruptor en Ajustes de audio → Diagnóstico o Ctrl+Mayús+D. Encendido registra con categoría cada comando a Tauri (`invokeTraceInstall` envuelve `core.invoke`, importado antes que `App`), los cambios de canción, el control remoto y los errores globales; las alarmas (comando lento, Play con la cola de controles sin vaciar, carga que termina tras cambiar de canción, puente remoto caído) quedan siempre, también en la caja negra. Solo interfaz: nada corre en el callback de Rust.
 

@@ -603,6 +603,8 @@ export default function App() {
                 docked={false}
                 {...mixerHandlers}
                 onEditTracks={() => setIsEditTracksOpen(true)}
+                onSeekSeconds={handleSeekSeconds}
+                onJumpSection={handleJumpSection}
               />
             ) : (
               <MixerEmpty onGoToSetlist={() => handleSelectView('setlist')} />
