@@ -87,7 +87,7 @@ El mecanismo de control de transporte se diseña con una separación estricta de
   1. La interfaz solicita el salto con anterioridad.
   2. El feeder calcula la muestra de transición exacta en tiempo de canción (`transition_song_sample = target_bar * samples_per_bar`).
   3. **Caso A (El límite está en el futuro respecto a lo ya encolado):** Al llegar a dicha muestra en el flujo de lectura, el feeder empalma con el inicio de la sección destino aplicando un micro-crossfade de 8 ms. El búfer circular se llena de forma continua. Cero silencio, cero retardo.
-  4. **Caso B (El límite ya cayó dentro de los ~500 ms de audio ya encolado en el búfer circular):** Si el usuario solicita un salto cuantizado justo antes del compás pero el audio de ese compás ya fue pre-renderizado y encolado en el búfer de 500 ms, **se adopta la ruta de descarte del salto inmediato**:
+  4. **Caso B (El límite ya cayó dentro de los ~500 ms de audio ya encolado en el búfer circular) — DISEÑO NO IMPLEMENTADO (nota 2026-11-22): `queue_jump` (`playback/jumps.rs`) exige 0,6 s de margen y, si el límite cae dentro, pospone el salto al primer compás que lo cumpla (en «1-bar», nunca antes del compás siguiente al siguiente); no descarta el audio encolado.** Si el usuario solicita un salto cuantizado justo antes del compás pero el audio de ese compás ya fue pre-renderizado y encolado en el búfer de 500 ms, **se adopta la ruta de descarte del salto inmediato**:
      - Se genera un nuevo `stream_epoch`.
      - El callback descarta el audio posterior al límite exacto con micro-fade de 8 ms.
      - El feeder reposiciona su lectura y remuestreo exactamente al inicio de la sección destino solicitada.
@@ -143,7 +143,7 @@ Se examinaron todos los accesos `audioEngine.*` en `src/` y `desktop/frontend/`.
 | 1 | `cancelQueuedJump` | `src/App.tsx` | En la interfaz | Llama al comando IPC `audio_cancel_jump`. |
 | 2 | `clearProjectFallback` | `src/App.tsx` | En la interfaz | No-op. En nativo no existe degradación por fallback a Web Audio. |
 | 3 | `decodeStemBuffer` | `src/App.tsx` | Opcional | Exclusivo de Web Audio en navegador. En escritorio no se llama (ver flujo de importación abajo). Retorna Promise rechazada si se invoca por error. |
-| 4 | `evictSongFromRamCache` | `src/App.tsx` | En la interfaz | En nativo, libera la memoria intermedia de precarga del feeder para dicha canción. |
+| 4 | `evictSongFromRamCache` | `src/hooks/useSetlist.ts`, `useLibraryDeletion.ts` | En la interfaz | No-op en nativo (cuerpo vacío): no libera nada. Se conserva solo porque la interfaz la sigue llamando. |
 | 5 | `getCachedProjectBuffers` | `src/App.tsx` | En la interfaz | Devuelve `undefined`. En escritorio el audio no se almacena en `Map<string, AudioBuffer>`. |
 | 6 | `getEffectiveEngineModeForProject` | `src/components/SetlistPageView.tsx` | En la interfaz | Devuelve `'stream'` (la UI muestra el distintivo de reproducción desde disco). |
 | 7 | `getEngineMode` | `src/App.tsx` | En la interfaz | Devuelve `'stream'`. |
@@ -162,7 +162,7 @@ Se examinaron todos los accesos `audioEngine.*` en `src/` y `desktop/frontend/`.
 | 20 | `logStreamMetrics` | `src/audio/audioEngine.ts` | Opcional | Registra en consola las estadísticas del motor nativo. |
 | 21 | `mountDecodedTrack` | `src/App.tsx` | Opcional | Exclusivo de decodificación Web Audio. En escritorio la carga la hace el feeder directamente desde el archivo `.pcm`. |
 | 22 | `play` | `src/App.tsx` | En la interfaz | Llama a `audio_play`. |
-| 23 | `preloadProject` | `src/App.tsx` | En la interfaz | Llama a `audio_preload_project` para pre-abrir y llenar buffers de la siguiente canción. |
+| 23 | `preloadProject` | `src/hooks/useSetlistCaching.ts` | En la interfaz | Si la caché PCM de la siguiente canción está lista, llama a `audio_preload_project`, que comprueba que exista su carpeta de caché y apunta su ID en `preloaded_project_id` (para `audio_switch_to_preloaded`). No abre archivos ni llena buffers, y no expulsa nada de memoria. |
 | 24 | `prepareProjectShell` | `src/App.tsx` | En la interfaz | Prepara el estado interno local de la canción inmediatamente en `nativeEngine.ts`. |
 | 25 | `queueSectionJump` | `src/App.tsx` | En la interfaz | Llama a `audio_queue_jump(sectionId, quantizeMode)`. |
 | 26 | `removeTrack` | `src/App.tsx` | En la interfaz | Llama a `audio_remove_track(trackId)` para cerrar feeder de dicha pista. |

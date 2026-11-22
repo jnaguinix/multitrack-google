@@ -32,7 +32,7 @@ Pila: escritorio Windows con Tauri v2; motor de audio en Rust (CPAL/WASAPI, Symp
 ## 4. Lo ya conocido (no lo reportes como hallazgo nuevo; sí puedes dar su gravedad real)
 - Los medidores de nivel (`PeakMeter`) añaden operaciones atómicas al callback de audio y **no se midieron** underruns ni tiempo de callback antes y después.
 - `verify.ps1 -Completo` no se ha completado sobre `main` tras la migración (faltan `verify_manual_flow` y `build:portable`).
-- Saltos cuantizados: si el compás destino cae dentro del audio ya encolado en el buffer, el salto se pospone al siguiente compás. El ring buffer tiene 500 ms de capacidad, el feeder apunta a ~350 ms y la salida de buffering exige 150 ms por pista.
+- Saltos cuantizados: si el compás destino cae dentro de los 0,6 s de margen sobre la posición actual (`min_safe_ahead`, `playback/jumps.rs`), el salto se pospone al primer límite de compás que cumpla el margen (en «1-bar», nunca antes del compás siguiente al siguiente). El ring buffer tiene 500 ms de capacidad, el feeder apunta a ~350 ms y la salida de buffering exige 150 ms por pista.
 - Riesgo de contención: si `try_lock()` falla en el callback, se emite silencio en ese bloque.
 - Fase 5 (ruteo a más de 2 salidas) y Fase 7 (ASIO) están diferidas a propósito.
 - La importación por selector HTML o arrastre sigue decodificando al importar; solo la ruta nativa de carpeta no decodifica.
