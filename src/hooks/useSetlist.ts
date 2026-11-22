@@ -3,6 +3,7 @@ import { SongProject, TransportState } from '../types/project';
 import { nativeAudioEngine } from '../audio/nativeAudioEngine';
 import { audioEngine } from '../audio/audioEngine';
 import { saveProjectToDb } from '../storage/projectDb';
+import { projectSaves } from '../storage/projectSaves';
 import { deleteProjectNativeCache } from '../utils/nativeDialog';
 import {
   clearDesktopSetlist,
@@ -174,7 +175,12 @@ export function useSetlist({
       })
     );
     if (isDesktopApp) {
-      removeSongFromDesktopSetlist(projectId).catch(warnSetlistNotSaved('quitar la canción del setlist en la biblioteca'));
+      // Antes se guarda lo pendiente de esa canción (un fader movido hace un instante): un guardado diferido que llegara
+      // después la volvería a marcar como parte del setlist.
+      projectSaves
+        .flush(projectId)
+        .then(() => removeSongFromDesktopSetlist(projectId))
+        .catch(warnSetlistNotSaved('quitar la canción del setlist en la biblioteca'));
     }
 
     if (currentProjectRef.current?.id === projectId) {
@@ -226,6 +232,8 @@ export function useSetlist({
     // 4. En escritorio, Rust vacía el setlist en la biblioteca del disco (solo pertenencia y orden).
     if (isDesktopApp) {
       try {
+        // Lo pendiente de esas canciones se guarda antes: un guardado diferido posterior las volvería a marcar.
+        await Promise.all(queue.map((s) => projectSaves.flush(s.id)));
         await clearDesktopSetlist();
       } catch (err) {
         warnSetlistNotSaved('vaciar el setlist en la biblioteca')(err);
@@ -254,6 +262,13 @@ export function useSetlist({
         return updated;
       })
     );
+    // La canción montada tiene su propia copia (`currentProject`): si conserva el número de orden viejo, el siguiente
+    // cambio de mezcla la guardaría con él y desordenaría el setlist.
+    const mounted = currentProjectRef.current;
+    const mountedOrder = mounted ? orderMap.get(mounted.id) : undefined;
+    if (mounted && mountedOrder !== undefined && mounted.setlistOrder !== mountedOrder) {
+      setCurrentProject({ ...mounted, setlistOrder: mountedOrder });
+    }
     // En escritorio, una sola orden a Rust con el orden nuevo (antes se reescribía la biblioteca una vez por canción).
     if (isDesktopApp) {
       reorderDesktopSetlist(queue.map((item) => item.id)).catch(warnSetlistNotSaved('reordenar el setlist en la biblioteca'));
