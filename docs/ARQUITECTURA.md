@@ -46,7 +46,7 @@ desktop/src-tauri/src/audio/playback/
 ├── bus.rs          # TrackBus: tipos y conversión de buses de salida (main, cue, both)
 ├── clock.rs        # ClockJumps y advance_clock: saltos de sección y vueltas de vamp aplicados al reloj current_frame desde el callback
 ├── fade.rs         # FadeEnvelope, FadeType y constantes (FADE_MS = 8.0): micro-fundidos
-├── feeder_io.rs    # Lectura de frames PCM desde disco, staging, drenaje con remuestreo, begin_new_segment (tras empalmes) y FeederAliveGuard
+├── feeder_io.rs    # Lectura de frames PCM desde disco, staging, drenaje con remuestreo, begin_new_segment (hoy solo lo usa una prueba) y FeederAliveGuard
 ├── jumps.rs        # queue_section_jump, cancel_queued_jump, toggle_vamp (impl PlaybackEngine)
 ├── transport.rs    # play, pause, stop, seek (con rewind_tracks: handshake con los feeders), get_playback_state, reopen_stream (impl PlaybackEngine)
 ├── types.rs        # NativeSongSection, QueuedJumpInfo, ActiveTrack, PlaybackStateSnapshot, PeakMeter/BusMeters (medidores), etc.
@@ -59,7 +59,7 @@ desktop/src-tauri/src/audio/playback/
 - **Seek con handshake por generación** (`rewind_tracks`): el transporte sube `seek_generation`, activa buffering, pide el seek a cada feeder, espera su `seek_ack`, vacía el anillo y publica `flush_done`. El feeder no empuja audio nuevo hasta ese momento y el callback no sale de buffering sin `flush_done` de la generación vigente. Si un feeder murió o no responde en 5 s, la pista se da por terminada y se registra un aviso.
 - **Fin de pista**: una pista más corta que la canción no se da por terminada: su feeder sigue empujando silencio pasado el final del archivo, para que su posición siga al reloj y vuelva a sonar tras un salto o un vamp hacia atrás. `eof` solo lo marca el transporte cuando un feeder no confirma un seek (hilo caído); esa pista no cuenta para salir de buffering ni para el contador de underruns.
 - **Underrun**: `consume_track_block` lee solo fotogramas completos, anota los que faltaron en `skip_frames` y descarta esa cantidad cuando el audio vuelve, para que la pista siga alineada con el reloj.
-- **Empalmes**: el tramo parcial previo a un salto o vuelta de vamp se completa con ceros y solo se emiten los fotogramas con señal (no el bloque entero que devuelve `process_partial` de rubato); tras el empalme el remuestreador empieza un tramo nuevo (`begin_new_segment`).
+- **Empalmes**: el tramo parcial previo a un salto o vuelta de vamp se completa con ceros y solo se emiten los fotogramas con señal (no el bloque entero que devuelve `process_partial` de rubato); el empalme entra al remuestreador como una sola señal continua (lo que queda antes de la transición, el cruce de 8 ms y el audio nuevo), sin vaciarlo ni reiniciarlo: reiniciar el filtro dejaba el audio nuevo desplazado respecto al cruce y se oía un clic. `begin_new_segment` (reinicio de tramo, como tras un seek) NO se llama en los empalmes.
 
 ---
 
@@ -95,7 +95,7 @@ Servidor HTTP y WebSocket local embebido (basado en Axum y Tokio, puerto 8765):
 src/hooks/
 ├── useProjectPersistence.ts # Carga inicial, updateCurrentProject (motor + guardado en orden), guardar al ocultar, IDs repetidos
 ├── useProjectActivation.ts  # Montar una canción en el motor, anterior/siguiente del setlist, qué hacer al terminar
-├── useSetlistCaching.ts     # Estado real de la caché de cada canción del setlist, precarga y prioridad
+├── useSetlistCaching.ts     # Estado real de la caché de cada canción del setlist; marca la siguiente como precargada (solo apunta su ID en el motor) y prioridad
 ├── useNativeCacheBanner.ts  # Avisos: dispositivo desconectado y canción sin caché («Generar caché nativa»)
 ├── useTrackInstruments.ts   # «Editar pistas» y «Cambiar instrumento» (renumera las demás)
 ├── useSongEditing.ts        # Notas, transición por canción, plantilla de sección y marcador en el cursor
@@ -108,7 +108,7 @@ src/hooks/
 │   └── useHtmlImport.ts     #   selector HTML o arrastre: decodifica al importar
 ├── useOptimization.ts       # Generación de la caché PCM nativa de una canción (botón «Generar caché»)
 ├── useProjectActions.ts     # Carga inmediata, creación, edición de metadatos, borrado y JSON export/import
-├── useSetlist.ts            # Gestión de lista de canciones (setlist), reorden, precarga y expulsión de RAM
+├── useSetlist.ts            # Gestión del setlist: añadir (con generación de caché), quitar, vaciar y reordenar (comandos de Rust); no precarga ni expulsa RAM (`evictSongFromRamCache` es un no-op)
 ├── useSetlistMeta.ts        # Nombre y fecha del servicio (almacenamiento local)
 ├── useProgressiveList.ts    # Render por tandas de listas largas (Biblioteca y explorador del Setlist)
 ├── useMixerActions.ts       # Control de transporte, volumen, mute, solo, paneo, bus y secciones

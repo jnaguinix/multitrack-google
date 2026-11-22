@@ -47,7 +47,7 @@ export function useSetlistCaching({ setlistQueue, currentProjectId, isActivating
 
   // CACHÉ Y PRECARGA DE LA SIGUIENTE CANCIÓN:
   // Cuando una canción del setlist queda activa o el setlist cambia, recalcula cuál es la siguiente
-  // y llama a preloadProject(nextSong) en segundo plano (manteniendo máx. 2 canciones en caché: actual + siguiente).
+  // y llama a preloadProject(nextSong) en segundo plano. Precargar solo apunta en el motor cuál es la siguiente (no abre archivos ni expulsa otras canciones de memoria).
   useEffect(() => {
     if (setlistQueue.length === 0) return;
     // Wait until loadProject() has finished: avoids competing for decodeAudioData / eviction
