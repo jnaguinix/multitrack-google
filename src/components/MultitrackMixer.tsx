@@ -7,6 +7,7 @@ import {
 } from '../types/project';
 import { useLiveMeters } from '../audio/liveMeters';
 import { isClickTrack, isGuideTrack, sortInstrumentTracks } from '../utils/instrumentCatalog';
+import { groupToggleTargets } from '../utils/trackGroups';
 import { computeMixerLevels, trackLevels } from '../utils/mixerLevels';
 import { SongMapStrip } from './SongMapStrip';
 
@@ -403,8 +404,11 @@ export const MultitrackMixer: React.FC<MultitrackMixerProps> = ({
 
   // Instrumentos en orden alfabético. Click y Guía no van en la lista: quedan fijos a la derecha, con Main.
   const instrumentTracks = sortInstrumentTracks(project.tracks);
-  const clickTrack = project.tracks.find(isClickTrack) ?? null;
-  const guideTrack = project.tracks.find(isGuideTrack) ?? null;
+  // Un solo fader de Click y uno de Guía, pero gobiernan TODAS las pistas de ese tipo (ver `groupToggleTargets`).
+  const clickTracks = project.tracks.filter(isClickTrack);
+  const guideTracks = project.tracks.filter(isGuideTrack);
+  const clickTrack = clickTracks[0] ?? null;
+  const guideTrack = guideTracks[0] ?? null;
   // Sin pista de click propia, el fader Click controla el click y la guía de una secuencia dividida.
   const splitTrack =
     !clickTrack && onChangeTrackCueGain && onToggleTrackCueMute ? project.tracks.find((tr) => tr.splitSequence) ?? null : null;
@@ -589,9 +593,9 @@ export const MultitrackMixer: React.FC<MultitrackMixerProps> = ({
               dim={clickTrack ? trackIsDimmed(clickTrack) : !project.clickEnabled}
               soloed={clickTrack ? clickTrack.soloed : undefined}
               levelsOf={clickTrack ? trackLevelsOf(clickTrack.id) : busLevelsOf('click')}
-              onChangeGain={(g) => (clickTrack ? onChangeTrackGain(clickTrack.id, g) : onChangeClickGain(g))}
-              onToggleMute={() => (clickTrack ? onToggleTrackMute(clickTrack.id) : onToggleClick())}
-              onToggleSolo={clickTrack ? () => onToggleTrackSolo(clickTrack.id) : undefined}
+              onChangeGain={(g) => (clickTrack ? clickTracks.forEach((t) => onChangeTrackGain(t.id, g)) : onChangeClickGain(g))}
+              onToggleMute={() => (clickTrack ? groupToggleTargets(clickTracks, 'muted').forEach(onToggleTrackMute) : onToggleClick())}
+              onToggleSolo={clickTrack ? () => groupToggleTargets(clickTracks, 'soloed').forEach(onToggleTrackSolo) : undefined}
               onRename={clickTrack && onPickInstrument ? () => onPickInstrument(clickTrack.id) : undefined}
             />
           )}
@@ -606,9 +610,9 @@ export const MultitrackMixer: React.FC<MultitrackMixerProps> = ({
             dim={guideTrack ? trackIsDimmed(guideTrack) : true}
             soloed={guideTrack?.soloed}
             levelsOf={guideTrack ? trackLevelsOf(guideTrack.id) : undefined}
-            onChangeGain={(g) => guideTrack && onChangeTrackGain(guideTrack.id, g)}
-            onToggleMute={() => guideTrack && onToggleTrackMute(guideTrack.id)}
-            onToggleSolo={guideTrack ? () => onToggleTrackSolo(guideTrack.id) : undefined}
+            onChangeGain={(g) => guideTracks.forEach((t) => onChangeTrackGain(t.id, g))}
+            onToggleMute={() => groupToggleTargets(guideTracks, 'muted').forEach(onToggleTrackMute)}
+            onToggleSolo={guideTrack ? () => groupToggleTargets(guideTracks, 'soloed').forEach(onToggleTrackSolo) : undefined}
             onRename={guideTrack && onPickInstrument ? () => onPickInstrument(guideTrack.id) : undefined}
           />
           {onChangeMonitorGain && (

@@ -42,3 +42,17 @@ assert(/closeAction\(\{ code: event\.code/.test(source), 'onclose decide con clo
 assert(!/event\.code === 4403 \|\| event\.code === 1008/.test(source), 'ya no se juntan 4403 y 1008 como fin de sesión');
 
 console.log('remoteClose: OK');
+
+// Plan 6.9 (AG2 H15): al volver a la pantalla o a la red el cliente reconecta sin esperar al reintento.
+{
+  type Resume = (input: { event: string; socketState: number; silentMs: number; stopped: boolean }) => 'reconnect' | 'none';
+  const resume = source.match(/\/\/ <resumeAction>([\s\S]*?)\/\/ <\/resumeAction>/);
+  assert(resume !== null, 'remote.js marca la función con <resumeAction>…</resumeAction>');
+  const resumeAction = new Function(`${resume![1]}\nreturn resumeAction;`)() as Resume;
+  assert(resumeAction({ event: 'visible', socketState: 3, silentMs: 0, stopped: false }) === 'reconnect', 'socket cerrado: reconecta');
+  assert(resumeAction({ event: 'visible', socketState: 1, silentMs: 10_000, stopped: false }) === 'reconnect', 'abierto pero mudo: reconecta');
+  assert(resumeAction({ event: 'visible', socketState: 1, silentMs: 500, stopped: false }) === 'none', 'abierto y con tráfico: no toca');
+  assert(resumeAction({ event: 'online', socketState: 1, silentMs: 100, stopped: false }) === 'reconnect', 'volvió la red: reconecta');
+  assert(resumeAction({ event: 'visible', socketState: 3, silentMs: 0, stopped: true }) === 'none', 'sesión terminada: no reconecta');
+  assert(/addEventListener\('visibilitychange'/.test(source) && /addEventListener\('online'/.test(source), 'remote.js escucha visibilitychange y online');
+}

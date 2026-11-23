@@ -109,12 +109,16 @@ export function useMixerActions({
       clickPan: 0,
       masterGain: 1.0,
       cueMasterGain: 1.0,
+      // El envío a auriculares y el canal de click de una secuencia dividida también vuelven a 0 dB (antes no se tocaban).
+      monitorGain: 1.0,
       tracks: p.tracks.map((t) => ({
         ...t,
         gain: 1.0,
         pan: 0,
         muted: false,
         soloed: false,
+        ...(t.cueGain !== undefined ? { cueGain: 1.0 } : {}),
+        ...(t.cueMuted !== undefined ? { cueMuted: false } : {}),
       })),
     }));
     showToast('Mezcla restablecida a 0.0 dB');
