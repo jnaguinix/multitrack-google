@@ -933,6 +933,10 @@ pub async fn library_delete_song(
         .app_local_data_dir()
         .map_err(|e| format!("Error resolviendo app_local_data_dir: {e}"))?;
 
+    crate::audio::cache::validate_path_id(&song_id)?;
+    // La caché va a desaparecer: lo que se estuviera midiendo ya no vale.
+    state.loudness.cancel(&song_id);
+
     // 1. Remove from library.json
     {
         let _guard = lock_library();
@@ -950,7 +954,10 @@ pub async fn library_delete_song(
     // 3. Delete native PCM cache folder pcm/<song_id>
     let pcm_dir = local_data.join("pcm").join(&song_id);
     if pcm_dir.exists() {
-        let _ = fs::remove_dir_all(&pcm_dir);
+        // La canción ya no está en la biblioteca: si la caché no se puede borrar (archivo abierto, antivirus) se
+        // devuelve el error para que la interfaz avise, en lugar de dejar la carpeta huérfana sin decir nada.
+        fs::remove_dir_all(&pcm_dir)
+            .map_err(|e| format!("La canción se quitó de la biblioteca, pero no se pudo borrar su caché ({}): {e}", pcm_dir.display()))?;
         tracing::info!("[Library] Caché PCM eliminada para '{}'", song_id);
     }
 

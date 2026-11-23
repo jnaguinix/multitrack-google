@@ -106,6 +106,21 @@ pub fn extract_waveform_peaks(channel_data: &[f32], num_buckets: usize) -> Vec<f
     peaks
 }
 
+/// Un ID de canción o de pista que se va a unir a una ruta (`pcm/<id>`, `peaks/<id>`) no puede salir de su carpeta:
+/// sin vacío, `.`, `..`, separadores de ruta, unidad (`:`) ni caracteres de control. Un sidecar ajeno con un ID como
+/// `..` borraría fuera de `pcm/` al eliminar la canción. No restringe el resto de caracteres (los IDs viejos pueden
+/// llevar acentos o espacios).
+pub fn validate_path_id(id: &str) -> Result<(), String> {
+    let invalid = id.is_empty()
+        || id == "."
+        || id == ".."
+        || id.chars().any(|c| matches!(c, '/' | '\\' | ':') || c.is_control());
+    if invalid {
+        return Err(format!("Identificador no válido para usarlo en una ruta: {id:?}"));
+    }
+    Ok(())
+}
+
 /// Returns the cache directory for a given project and sample rate:
 /// `{base_dir}/pcm/{project_id}/{sample_rate}`
 pub fn get_project_cache_dir(base_dir: &Path, project_id: &str, sample_rate: u32) -> PathBuf {
@@ -157,6 +172,14 @@ pub fn should_reconvert_track(
         .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0);
+
+    // Un PCM truncado (copia interrumpida, disco lleno) tiene metadatos válidos pero no es una caché: dejarlo pasar
+    // haría que "Generar caché nativa" lo diera por bueno mientras la carga de la canción lo rechaza.
+    let bytes_per_frame: u64 = if meta.channels == 1 { 2 } else { 4 };
+    let pcm_len = fs::metadata(&pcm_path).map(|m| m.len()).unwrap_or(0);
+    if pcm_len < meta.frame_count * bytes_per_frame {
+        return true;
+    }
 
     file_size != meta.original_file_size
         || mod_ms != meta.original_modified_ms
@@ -388,6 +411,56 @@ mod tests {
         assert_eq!(pcm_path.metadata().unwrap().len(), (4800 * 2) as u64);
 
         let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    /// Plan 6.2 (AG2 H5): un PCM truncado con metadatos válidos y el original sin cambios debe regenerarse.
+    #[test]
+    fn test_un_pcm_truncado_se_regenera() {
+        let temp_dir = std::env::temp_dir().join(format!("omnitracks_cache_trunc_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        fs::create_dir_all(&temp_dir).unwrap();
+        let original = temp_dir.join("original.wav");
+        fs::write(&original, vec![0u8; 2048]).unwrap();
+        let fs_meta = fs::metadata(&original).unwrap();
+        let mod_ms = fs_meta.modified().unwrap().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64;
+        let meta = TrackPcmMetadata {
+            format_version: CACHE_FORMAT_VERSION,
+            track_id: "t1".to_string(),
+            target_sample_rate: 48000,
+            original_sample_rate: 48000,
+            original_channels: 1,
+            original_path: original.to_string_lossy().to_string(),
+            original_file_size: fs_meta.len(),
+            original_modified_ms: mod_ms,
+            channels: 1,
+            is_effectively_mono: true,
+            frame_count: 4800,
+            duration_sec: 0.1,
+            peaks: vec![0.5; 320],
+            created_at: "2026-11-23T00:00:00Z".to_string(),
+        };
+        let samples: Vec<i16> = (0..4800).map(|i| (i % 3000) as i16).collect();
+        write_track_pcm_and_metadata(&temp_dir, "p", &meta, &samples).unwrap();
+        assert!(!should_reconvert_track(&temp_dir, "p", 48000, "t1", &original), "una caché completa no debe regenerarse");
+
+        // Se corta el PCM a la mitad: los metadatos siguen siendo válidos.
+        let pcm = get_track_pcm_path(&temp_dir, "p", 48000, "t1");
+        let file = fs::OpenOptions::new().write(true).open(&pcm).unwrap();
+        file.set_len(4800).unwrap();
+        drop(file);
+        assert!(should_reconvert_track(&temp_dir, "p", 48000, "t1", &original), "un PCM truncado debe regenerarse");
+
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    /// Plan 6.10 (AG2 H16): un ID no puede salir de la carpeta de caché.
+    #[test]
+    fn test_un_id_con_ruta_no_es_valido() {
+        for malo in ["", ".", "..", "../x", "a/b", "a\\b", "C:\\x", "a\u{0}b"] {
+            assert!(validate_path_id(malo).is_err(), "{malo:?} debería rechazarse");
+        }
+        for bueno in ["song-1", "abc_123", "Canción nueva", "a.b", "1f2e3d4c-aaaa"] {
+            assert!(validate_path_id(bueno).is_ok(), "{bueno:?} debería aceptarse");
+        }
     }
 
     #[test]
