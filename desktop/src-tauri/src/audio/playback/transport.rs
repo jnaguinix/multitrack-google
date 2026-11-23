@@ -136,6 +136,12 @@ impl PlaybackEngine {
             self.is_playing.store(false, Ordering::SeqCst);
         }
 
+        // Parar vuelve al inicio: el bucle del vamp (de otra sección) ya no tiene sentido y, con él activo, tras
+        // Stop y Play el reloj daría la vuelta al llegar al final de aquella sección (plan 6.6).
+        if self.is_vamping.load(Ordering::SeqCst) {
+            self.set_vamp_state(Some(false)).await;
+        }
+
         self.is_buffering.store(false, Ordering::SeqCst);
         *self.buffering_start_time.lock().unwrap() = None;
         self.current_frame.store(0, Ordering::SeqCst);

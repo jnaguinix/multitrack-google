@@ -3221,6 +3221,41 @@
         assert!(resumen.iter().all(|(_, m, _)| *m <= 4), "entrada al vamp con anillo lleno: bloques desalineados por (pistas, malos, ejemplos) {resumen:?}");
     }
 
+    /// Plan 6.6 (AG2 H7): parar desactiva el vamp (si no, tras Stop y Play el reloj repetiría la sección vieja).
+    #[tokio::test]
+    async fn test_ola6_stop_desactiva_el_vamp() {
+        let engine = motor_real("ola6_stop_vamp", &[("pista", 288_000)], vec![seccion("a", 0.0, 3.0), seccion("b", 3.0, 6.0)]).await;
+        engine.seek(4.0).await;
+        assert!(engine.toggle_vamp(Some(true)).await);
+        assert!(engine.is_vamping.load(Ordering::SeqCst));
+        engine.stop().await;
+        assert!(!engine.is_vamping.load(Ordering::SeqCst), "Stop dejó el vamp activo");
+        assert!(engine.clock_jumps.loop_range().is_none(), "Stop dejó el bucle en el reloj");
+        assert!(!engine.get_playback_state().is_vamping, "el estado informado sigue en vamp");
+    }
+
+    /// Plan 6.12 (AG2 H8a): una carga que falla (caché ausente) no toca la canción montada: sigue sonando y conserva
+    /// su BPM y sus secciones (antes se paraba y se sobrescribían ANTES de validar).
+    #[tokio::test]
+    async fn test_ola6_una_carga_que_falla_no_toca_la_cancion_montada() {
+        let engine = motor_real("ola6_carga_ok", &[("pista", 288_000)], vec![seccion("a", 0.0, 3.0), seccion("b", 3.0, 6.0)]).await;
+        reproducir(&engine).await;
+        for _ in 0..40 {
+            bloque(&engine);
+        }
+        let bpm_antes = engine.bpm.load(Ordering::SeqCst);
+        let buffering_antes = engine.is_buffering.load(Ordering::SeqCst);
+        let dir = std::env::temp_dir().join("omnitracks_ola6_sin_cache");
+        let r = engine
+            .load_project(&dir, "no_existe", SR_PRUEBA, Some(90.0), Some(3), Some(vec![seccion("x", 0.0, 1.0)]), None)
+            .await;
+        assert!(r.is_err(), "la carga sin caché debía fallar");
+        assert!(engine.is_playing.load(Ordering::SeqCst), "la carga fallida paró la canción montada");
+        assert_eq!(engine.is_buffering.load(Ordering::SeqCst), buffering_antes, "la carga fallida cambió el estado de buffering");
+        assert_eq!(engine.bpm.load(Ordering::SeqCst), bpm_antes, "la carga fallida cambió el BPM");
+        assert_eq!(engine.sections.lock().unwrap().len(), 2, "la carga fallida cambió las secciones");
+    }
+
     /// Plan 6.1 (AG2 H2): una sección de menos de ~0,5 s no admite vamp (los feeders girarían sin drenar el anillo).
     #[tokio::test]
     async fn test_ola6_vamp_rechazado_en_una_seccion_demasiado_corta() {
