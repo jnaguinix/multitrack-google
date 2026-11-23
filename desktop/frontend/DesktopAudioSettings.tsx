@@ -1,6 +1,7 @@
 import { memo, useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { logAsyncError } from '../../src/utils/asyncErrors';
+import { chooseSelectedDevice, resolveActiveDevice } from './deviceSelection';
 import { AudioRoutingPanel } from './AudioRoutingPanel';
 import { AudioDiagnostics, type AudioStreamStatsSnapshot } from './AudioDiagnostics';
 import { Sliders, Volume2, RefreshCw, Play } from 'lucide-react';
@@ -130,7 +131,9 @@ export default memo(function DesktopAudioSettings({ triggerHost }: Props) {
     callbacks: 0,
     maxCallbackDurationUs: 0,
   });
-  const activeDevice = devices.find((d) => d.name === selectedDeviceName) || devices.find((d) => d.isDefault) || devices[0];
+  const activeDevice = resolveActiveDevice(selectedDeviceName, devices);
+  // El dispositivo guardado no está conectado: se conserva (no se sustituye por el predeterminado) y se avisa.
+  const savedDeviceMissing = Boolean(selectedDeviceName) && !devices.some((d) => d.name === selectedDeviceName);
 
   const loadAudioConfig = async () => {
     if (!invoke) return;
@@ -159,14 +162,7 @@ export default memo(function DesktopAudioSettings({ triggerHost }: Props) {
         logAsyncError('leer la biblioteca en Ajustes de audio')(err);
       }
 
-      if (savedConfig.deviceName && availableDevices.some((d) => d.name === savedConfig.deviceName)) {
-        setSelectedDeviceName(savedConfig.deviceName);
-      } else {
-        const defaultDev = availableDevices.find((d) => d.isDefault) || availableDevices[0];
-        if (defaultDev) {
-          setSelectedDeviceName(defaultDev.name);
-        }
-      }
+      setSelectedDeviceName(chooseSelectedDevice(savedConfig.deviceName, availableDevices).name);
 
       if (typeof savedConfig.testChannel === 'number') {
         setSelectedChannel(savedConfig.testChannel);
@@ -256,7 +252,8 @@ export default memo(function DesktopAudioSettings({ triggerHost }: Props) {
     try {
       const settingsToSave: AudioSettings = {
         host: selectedHost,
-        deviceName: activeDevice ? activeDevice.name : null,
+        // El guardado ausente se conserva tal cual: sustituirlo mandaría el click y la guía a otra salida.
+        deviceName: activeDevice ? activeDevice.name : selectedDeviceName || null,
         // Una salida a menos de 44,1 kHz (formato de teléfono de unos auriculares con micrófono) no es una frecuencia
         // de trabajo: se deja vacío y el motor usa 48 kHz.
         sampleRate: activeDevice && activeDevice.defaultSampleRate >= MIN_WORK_SAMPLE_RATE ? activeDevice.defaultSampleRate : null,
@@ -316,6 +313,9 @@ export default memo(function DesktopAudioSettings({ triggerHost }: Props) {
               onChange={(e) => handleDeviceChange(e.target.value)}
               className="w-full bg-studio-strip border border-studio-line rounded-lg px-2.5 py-1.5 text-xs text-neutral-200 focus:outline-none focus:border-neutral-500 truncate cursor-pointer"
             >
+              {savedDeviceMissing && (
+                <option value={selectedDeviceName}>{selectedDeviceName} (desconectado)</option>
+              )}
               {devices.map((d) => (
                 <option key={d.name} value={d.name}>
                   {d.name} {d.isDefault ? '(Predeterminado)' : ''}
@@ -334,6 +334,12 @@ export default memo(function DesktopAudioSettings({ triggerHost }: Props) {
         </div>
 
         {/* 3. Resumen del dispositivo, en una sola línea de texto pequeño */}
+        {savedDeviceMissing && (
+          <p className="text-xs text-amber-400">
+            «{selectedDeviceName}» no está conectado. Se conserva como dispositivo guardado: conéctalo y pulsa «Refrescar», o
+            elige otro dispositivo para cambiarlo.
+          </p>
+        )}
         {activeDevice && (
           <div className="text-[11px] text-neutral-400 font-mono">
             {activeDevice.channels} salidas · {activeDevice.defaultSampleRate.toLocaleString('es-ES')} Hz · búfer {activeDevice.minBufferSize ?? 480} ({Math.round(((activeDevice.minBufferSize ?? 480) / (activeDevice.defaultSampleRate || 48000)) * 1000)} ms) · {activeDevice.sampleFormat || 'f32'}

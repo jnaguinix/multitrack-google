@@ -5,6 +5,7 @@ import {
   buildWizardFiles,
   buildWizardMeta,
   importedSongBecomesMounted,
+  matchScannedFilesToTracks,
   mergeReimportedTracks,
   planReimportedTracks,
   newImportedSong,
@@ -170,3 +171,19 @@ const track = (over: Partial<TrackChannel>): TrackChannel => ({
 }
 
 console.log('nativeImportPlan: OK');
+
+// Plan 6.4 (AG2 H14): regenerar la caché con otra carpeta no cruza el audio entre pistas.
+{
+  const tr = (id: string, name: string, fileName?: string) => ({ id, name, fileName }) as unknown as TrackChannel;
+  const tracks = [tr('t-bajo', 'Bajo', 'bajo.wav'), tr('t-voz', 'Voz', 'voz.wav'), tr('t-pad', 'Pad', 'pad.wav')];
+  const file = (fileName: string, trackName: string) => ({ filePath: `C:/x/${fileName}`, fileName, trackName, trackId: `scan-${fileName}` });
+  // Por nombre de archivo, aunque el orden del escaneo sea otro.
+  let m = matchScannedFilesToTracks([file('pad.wav', 'Pad'), file('bajo.wav', 'Bajo')], tracks);
+  assert(m.length === 2 && m[0].track.id === 't-pad' && m[1].track.id === 't-bajo', 'empareja por archivo, no por posición');
+  // Un archivo desconocido no hereda el ID de la pista que ocupe su posición.
+  m = matchScannedFilesToTracks([file('otro.wav', 'Otro'), file('voz.wav', 'Voz')], tracks);
+  assert(m.length === 1 && m[0].track.id === 't-voz', 'un archivo sin pareja no se importa con el ID de otra pista');
+  // Dos archivos con el mismo nombre de pista no usan la misma pista dos veces.
+  m = matchScannedFilesToTracks([file('a.wav', 'Voz'), file('b.wav', 'Voz')], tracks);
+  assert(m.length === 1 && m[0].track.id === 't-voz', 'cada pista se usa una sola vez');
+}

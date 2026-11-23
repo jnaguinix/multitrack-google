@@ -5,6 +5,7 @@
 import type { SongProject } from '../types/project';
 import { loadProjectStemsFromDb, extractStemArrayBuffer } from '../storage/projectDb';
 import { pickNativeFolder, scanNativeFolder, checkFilesExist, importTrackBytesRaw } from '../utils/nativeDialog';
+import { matchScannedFilesToTracks } from '../utils/nativeImportPlan';
 
 type Invoke = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
 
@@ -411,16 +412,15 @@ export class NativeCacheManager {
         throw new Error('No se encontraron archivos de audio compatibles en la carpeta seleccionada.');
       }
 
-      const filesToImport = scanned.files.map((file, idx) => {
-        const matchedTrack = project.tracks.find(
-          (t) => t.name.toLowerCase() === file.trackName.toLowerCase() || t.fileName === file.fileName
-        );
-        const trackId = matchedTrack ? matchedTrack.id : project.tracks[idx]?.id || file.trackId;
-        if (matchedTrack) matchedTrack.filePath = file.filePath;
-        return {
-          filePath: file.filePath,
-          trackId,
-        };
+      // Cada archivo va a SU pista (por nombre de archivo y luego de pista, una sola vez cada una). Un archivo sin
+      // pareja no se importa: la comprobación de pistas completas de abajo avisa de las que falten.
+      const matches = matchScannedFilesToTracks(scanned.files, project.tracks);
+      if (matches.length === 0) {
+        throw new Error('Ningún archivo de la carpeta coincide con las pistas de la canción. Elige la carpeta correcta o reimporta la canción.');
+      }
+      const filesToImport = matches.map(({ file, track }) => {
+        track.filePath = file.filePath;
+        return { filePath: file.filePath, trackId: track.id };
       });
 
       onProgress?.(60, `Decodificando ${filesToImport.length} pistas...`);

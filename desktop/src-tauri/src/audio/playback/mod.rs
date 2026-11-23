@@ -178,25 +178,9 @@ impl PlaybackEngine {
         quantize_mode: Option<String>,
         track_controls: Option<Vec<InitialTrackControl>>,
     ) -> Result<ProjectLoadInfo, String> {
-        self.stop().await;
-        self.is_buffering.store(true, Ordering::SeqCst);
-        *self.buffering_start_time.lock().unwrap() = Some(Instant::now());
-
-        if let Some(b) = bpm {
-            self.bpm.store(b.to_bits(), Ordering::SeqCst);
-            self.metronome.lock().unwrap().config.bpm = b;
-        }
-        if let Some(bpb) = beats_per_bar {
-            self.beats_per_bar.store(bpb, Ordering::SeqCst);
-            self.metronome.lock().unwrap().config.beats_per_bar = bpb;
-        }
-        if let Some(secs) = sections {
-            *self.sections.lock().unwrap() = secs;
-        }
-        if let Some(qm) = quantize_mode {
-            *self.quantize_mode.lock().unwrap() = qm;
-        }
-
+        // Plan 6.12: primero se valida la caché nueva (solo lectura) y recién después se para la canción montada y se
+        // cambian BPM, secciones y metrónomo. Antes se mutaba todo y luego se validaba: con una caché que faltaba, la
+        // canción anterior quedaba parada, en buffering y con los datos de la nueva.
         let proj_dir = get_project_cache_dir(base_dir, project_id, device_sample_rate);
         if !proj_dir.exists() {
             let pcm_root = base_dir.join("pcm").join(project_id);
@@ -292,6 +276,26 @@ impl PlaybackEngine {
                     meta.track_id
                 ));
             }
+        }
+
+        // La caché es válida: ahora sí se detiene lo que sonaba y se aplican los datos de la canción nueva.
+        self.stop().await;
+        self.is_buffering.store(true, Ordering::SeqCst);
+        *self.buffering_start_time.lock().unwrap() = Some(Instant::now());
+
+        if let Some(b) = bpm {
+            self.bpm.store(b.to_bits(), Ordering::SeqCst);
+            self.metronome.lock().unwrap().config.bpm = b;
+        }
+        if let Some(bpb) = beats_per_bar {
+            self.beats_per_bar.store(bpb, Ordering::SeqCst);
+            self.metronome.lock().unwrap().config.beats_per_bar = bpb;
+        }
+        if let Some(secs) = sections {
+            *self.sections.lock().unwrap() = secs;
+        }
+        if let Some(qm) = quantize_mode {
+            *self.quantize_mode.lock().unwrap() = qm;
         }
 
         let mut max_frames = 0u64;

@@ -68,17 +68,21 @@ const saveFailures = new FailureTracker();
 const sidecarFailures = new FailureTracker();
 
 /**
- * Permanently removes a song from library.json and deletes its native PCM cache (pcm/<id>).
+ * Permanently removes a song from library.json and deletes its native PCM cache (pcm/<id>). Si la biblioteca falla,
+ * lanza; si solo falla el borrado de la caché, lo devuelve en `cacheError`.
  * Original audio files are NEVER touched or removed.
  */
-export async function deleteDesktopSong(songId: string): Promise<void> {
-  if (!isDesktopApp()) return;
+export async function deleteDesktopSong(songId: string): Promise<{ cacheError: string | null }> {
+  if (!isDesktopApp()) return { cacheError: null };
   const invoke = (window as any).__TAURI__?.core?.invoke;
-  if (!invoke) return;
+  if (!invoke) return { cacheError: null };
   try {
-    await invoke('library_delete_song', { songId });
+    const outcome = await invoke('library_delete_song', { songId });
+    return { cacheError: typeof outcome?.cacheError === 'string' ? outcome.cacheError : null };
   } catch (err) {
+    // El error sube: si la biblioteca no pudo borrarla, quitarla de la pantalla la haría reaparecer al reabrir.
     console.error(`[Library] Error eliminando canción '${songId}' de la biblioteca:`, err);
+    throw err;
   }
 }
 

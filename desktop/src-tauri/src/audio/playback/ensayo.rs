@@ -509,6 +509,25 @@ async fn ensayo_de_una_sesion_completa_sin_hardware() {
     assert!(!e.engine.toggle_vamp(Some(false)).await);
     e.correr_alineado(60, 4);
 
+    // --- 8b. Entrar en vamp en la última parte de la sección (plan 6.1) ------------------------------------
+    // Con los feeders ya por delante del reloj, activarlo a menos de ~0,55 s del final dejaba el audio siguiendo hacia
+    // la sección siguiente mientras el reloj volvía al inicio del bucle.
+    e.paso("seek a 11,6 s (sección c, cerca de su final)");
+    e.engine.seek(11.6).await;
+    e.corte();
+    e.esperar_listo();
+    e.correr(5);
+    std::thread::sleep(std::time::Duration::from_millis(400)); // los feeders llenan el anillo
+    e.paso("vamp a 0,4 s del final de la sección");
+    assert!(e.engine.toggle_vamp(Some(true)).await, "el vamp no se activó cerca del final de la sección c");
+    e.corte();
+    e.esperar_listo();
+    e.correr_alineado(100, 4);
+    assert!(e.reloj() < 12 * SR as u64, "[vamp 6.1] el reloj salió de la sección c: {}", e.reloj());
+    e.paso("quitar el vamp (entrada tardía)");
+    assert!(!e.engine.toggle_vamp(Some(false)).await); // el reloj ya dio la vuelta: no reposiciona, sin corte
+    e.correr_alineado(60, 4);
+
     // --- 9. Cambio de tono sin cambiar la velocidad --------------------------------------------------------
     e.paso("volver a 1 s");
     e.engine.seek(1.0).await;

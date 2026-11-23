@@ -1,9 +1,9 @@
 import { logAsyncError } from '../utils/asyncErrors';
+import { projectSaves } from '../storage/projectSaves';
 import { SongProject } from '../types/project';
 import { WorkspaceView } from '../components/TopBar';
 import { audioEngine } from '../audio/audioEngine';
 import type { ActivationResult } from './useProjectActivation';
-import { saveProjectToDb } from '../storage/projectDb';
 
 interface UseProjectActionsDeps {
   projects: SongProject[];
@@ -60,7 +60,7 @@ export function useProjectActions({
       setCurrentProject(next);
       audioEngine.updateProjectConfig(next);
     }
-    saveProjectToDb(next).catch(logAsyncError('guardar la canción'));
+    void projectSaves.saveNow(next);
     showToast(`Metadatos actualizados: "${next.title}"`);
   };
 

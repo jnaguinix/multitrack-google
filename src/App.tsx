@@ -173,6 +173,7 @@ export default function App() {
   const { activateProject, activationCountRef, isActivatingProject, handleNextSetlistSong, handlePrevSetlistSong } =
     useProjectActivation({
       currentProjectRef,
+      projectsRef,
       setCurrentProject,
       setProjects,
       setlistQueue,

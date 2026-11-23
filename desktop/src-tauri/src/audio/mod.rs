@@ -166,6 +166,7 @@ pub async fn audio_import_tracks(
         settings.cache_rate()
     };
 
+    cache::validate_path_id(&project_id)?;
     // La caché de esta canción va a cambiar: lo que se estuviera midiendo ya no vale.
     state.loudness.cancel(&project_id);
 
@@ -1074,7 +1075,11 @@ pub async fn audio_delete_project_cache(
         .app_local_data_dir()
         .map_err(|e| format!("Error resolviendo app_local_data_dir: {e}"))?;
 
+    cache::validate_path_id(&project_id)?;
     state.loudness.cancel(&project_id);
+    // Primero se descarga la canción (si es la montada): en Windows no se puede borrar un PCM que el motor tiene
+    // abierto, y con el borrado fallido la canción seguiría montada sobre una caché a medias.
+    state.playback.unload_project_if_matches(&project_id).await;
     let pcm_base = local_data.join("pcm");
     let proj_dir = pcm_base.join(&project_id);
     if proj_dir.exists() {
@@ -1082,8 +1087,6 @@ pub async fn audio_delete_project_cache(
             .map_err(|e| format!("Error eliminando carpeta de caché para '{project_id}': {e}"))?;
         tracing::info!("[Cache] Carpeta de caché eliminada para '{}'", project_id);
     }
-
-    state.playback.unload_project_if_matches(&project_id).await;
     Ok(())
 }
 

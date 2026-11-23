@@ -1,5 +1,6 @@
 import { formatTimecode } from '../components/TransportDeck';
-import { saveProjectToDb, syncProjectSidecarNow } from '../storage/projectDb';
+import { projectSaves } from '../storage/projectSaves';
+import { syncProjectSidecarNow } from '../storage/projectDb';
 import { logAsyncError } from '../utils/asyncErrors';
 import { MARKER_PALETTE } from '../utils/markerPalette';
 import { SECTION_TEMPLATES, insertTemplateSection } from '../utils/sectionTemplates';
@@ -34,10 +35,7 @@ export function useSongEditing({
     const updated: SongProject = { ...song, notes };
     setProjects((prev) => prev.map((p) => (p.id === songId ? updated : p)));
     if (currentProjectRef.current?.id === songId) setCurrentProject(updated);
-    saveProjectToDb(updated).catch((err) => {
-      console.error(`[Setlist] No se pudieron guardar las notas de '${song.title}':`, err);
-      showToast(`No se pudieron guardar las notas de "${song.title}"`);
-    });
+    void projectSaves.saveNow(updated);
   };
 
   // Flecha entre fichas: qué hacer al terminar una canción (undefined = ajuste general).
@@ -47,10 +45,7 @@ export function useSongEditing({
     const updated: SongProject = { ...song, transitionToNext: mode };
     setProjects((prev) => prev.map((p) => (p.id === songId ? updated : p)));
     if (currentProjectRef.current?.id === songId) setCurrentProject(updated);
-    saveProjectToDb(updated).catch((err) => {
-      console.error(`[Setlist] No se pudo guardar la transición de '${song.title}':`, err);
-      showToast(`No se pudo guardar la transición de "${song.title}"`);
-    });
+    void projectSaves.saveNow(updated);
   };
 
   // Añade una sección de plantilla (Intro, Verso 1, Coro…) en la posición del cursor.

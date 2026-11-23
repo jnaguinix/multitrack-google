@@ -314,3 +314,43 @@ export function applyDecodedTracks(
   });
   return { tracks, durationSec };
 }
+
+/** Un archivo del escaneo de una carpeta que se quiere asignar a una pista de la canción. */
+export interface ScannedFileRef {
+  filePath: string;
+  fileName: string;
+  trackName: string;
+  trackId: string;
+}
+
+/**
+ * Asigna los archivos de una carpeta elegida a las pistas YA existentes de una canción (al regenerar su caché con otra
+ * carpeta). Primero por nombre de archivo y luego por nombre de pista, y cada pista se usa una sola vez. Un archivo
+ * sin pareja NO se importa: antes recibía el ID de la pista que ocupara su misma posición en la lista, y el audio de
+ * una pista acababa con el ID (la mezcla y el nombre) de otra.
+ */
+export function matchScannedFilesToTracks<T extends ScannedFileRef>(
+  files: T[],
+  tracks: TrackChannel[]
+): Array<{ file: T; track: TrackChannel }> {
+  const claimed = new Set<string>();
+  const matchOf: Array<TrackChannel | null> = files.map(() => null);
+  const pass = (accepts: (file: T, track: TrackChannel) => boolean) => {
+    files.forEach((file, i) => {
+      if (matchOf[i]) return;
+      const track = tracks.find((t) => !claimed.has(t.id) && accepts(file, t));
+      if (track) {
+        claimed.add(track.id);
+        matchOf[i] = track;
+      }
+    });
+  };
+  pass((file, t) => Boolean(t.fileName) && t.fileName!.toLowerCase() === file.fileName.toLowerCase());
+  pass((file, t) => t.name.toLowerCase() === file.trackName.toLowerCase());
+  const out: Array<{ file: T; track: TrackChannel }> = [];
+  files.forEach((file, i) => {
+    const track = matchOf[i];
+    if (track) out.push({ file, track });
+  });
+  return out;
+}

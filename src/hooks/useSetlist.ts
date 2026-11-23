@@ -2,7 +2,6 @@ import { logAsyncError } from '../utils/asyncErrors';
 import { SongProject, TransportState } from '../types/project';
 import { nativeAudioEngine } from '../audio/nativeAudioEngine';
 import { audioEngine } from '../audio/audioEngine';
-import { saveProjectToDb } from '../storage/projectDb';
 import { projectSaves } from '../storage/projectSaves';
 import { deleteProjectNativeCache } from '../utils/nativeDialog';
 import {
@@ -106,7 +105,7 @@ export function useSetlist({
             inSetlist: true,
             setlistOrder: maxOrder + 1,
           };
-          saveProjectToDb(updated).catch(logAsyncError('guardar la canción'));
+          void projectSaves.saveNow(updated);
           if (currentProject?.id === projectId) {
             setCurrentProject(updated);
           }
@@ -170,7 +169,7 @@ export function useSetlist({
       prev.map((p) => {
         if (p.id !== projectId) return p;
         const updated: SongProject = { ...p, inSetlist: false, setlistOrder: undefined };
-        if (!isDesktopApp) saveProjectToDb(updated).catch(logAsyncError('guardar la canción'));
+        if (!isDesktopApp) void projectSaves.saveNow(updated);
         return updated;
       })
     );
@@ -222,7 +221,7 @@ export function useSetlist({
       prev.map((p) => {
         if (!idSet.has(p.id)) return p;
         const updated: SongProject = { ...p, inSetlist: false, setlistOrder: undefined };
-        if (!isDesktopApp) saveProjectToDb(updated).catch(logAsyncError('guardar la canción'));
+        if (!isDesktopApp) void projectSaves.saveNow(updated);
         return updated;
       })
     );
@@ -258,7 +257,7 @@ export function useSetlist({
       prev.map((p) => {
         if (!orderMap.has(p.id)) return p;
         const updated = { ...p, setlistOrder: orderMap.get(p.id)! };
-        if (!isDesktopApp) saveProjectToDb(updated).catch(logAsyncError('guardar la canción'));
+        if (!isDesktopApp) void projectSaves.saveNow(updated);
         return updated;
       })
     );
@@ -271,7 +270,11 @@ export function useSetlist({
     }
     // En escritorio, una sola orden a Rust con el orden nuevo (antes se reescribía la biblioteca una vez por canción).
     if (isDesktopApp) {
-      reorderDesktopSetlist(queue.map((item) => item.id)).catch(warnSetlistNotSaved('reordenar el setlist en la biblioteca'));
+      // Lo pendiente de esas canciones se guarda ANTES (un fader movido justo antes tiene un guardado diferido que
+      // llevaría el orden viejo y lo dejaría así en esa canción).
+      Promise.all(queue.map((item) => projectSaves.flush(item.id)))
+        .then(() => reorderDesktopSetlist(queue.map((item) => item.id)))
+        .catch(warnSetlistNotSaved('reordenar el setlist en la biblioteca'));
     }
   };
 

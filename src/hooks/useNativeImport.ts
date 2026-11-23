@@ -1,12 +1,13 @@
 import { useCallback } from 'react';
+import { projectSaves } from '../storage/projectSaves';
 import { logAsyncError } from '../utils/asyncErrors';
 import type { OutputBus, SongProject } from '../types/project';
-import { saveProjectToDb } from '../storage/projectDb';
 import { loadTrackMapMemory, rememberTrackMapping } from '../utils/trackMapMemory';
 import { findSongFingerprintMatches, TrackSummary } from '../audio/fingerprint';
 import { scanNativeFolder, scanNativeFiles, ScannedFolderInfo } from '../utils/nativeDialog';
 import { audioEngine } from '../audio/audioEngine';
 import { nativeAudioEngine } from '../audio/nativeAudioEngine';
+import { importIncompleteReason } from '../audio/nativeCacheManager';
 import {
   applyDecodedTracks,
   buildImportedTracks,
@@ -200,7 +201,7 @@ export function useNativeImport({
             setProjects((prev) =>
               prev.map((p) => (p.id === newSongProject.id ? newSongProject : p))
             );
-            saveProjectToDb(newSongProject).catch(logAsyncError('guardar la canción'));
+            void projectSaves.saveNow(newSongProject);
           } else {
             newSongProject = newImportedSong({
               id: targetProjectId,
@@ -222,7 +223,7 @@ export function useNativeImport({
               setCurrentProject(newSongProject);
             }
             setProjects((prev) => [newSongProject, ...prev]);
-            saveProjectToDb(newSongProject).catch(logAsyncError('guardar la canción'));
+            void projectSaves.saveNow(newSongProject);
           }
         } else {
           const combinedTracks = [...renamedExisting, ...initialTracks];
@@ -243,7 +244,7 @@ export function useNativeImport({
           setProjects((prev) =>
             prev.map((p) => (p.id === newSongProject.id ? newSongProject : p))
           );
-          saveProjectToDb(newSongProject).catch(logAsyncError('guardar la canción'));
+          void projectSaves.saveNow(newSongProject);
         }
 
         const mountMs = performance.now() - t0;
@@ -292,14 +293,26 @@ export function useNativeImport({
             unsubscribeImportProgress();
             nativeAudioEngine.markImportCompleted(targetProjectId);
             setImportStatusText(null);
+            // Una decodificación con errores o con pistas que faltan no es una caché lista (antes se ignoraba).
+            const incomplete = importIncompleteReason(importResult, filesToImport.map((f) => f.trackId));
+            if (incomplete) {
+              console.error('[NativeImport] Decodificación incompleta:', incomplete);
+              showToast(`"${newSongProject.title}": la caché quedó incompleta (${incomplete}). Usa «Generar caché nativa».`);
+            }
             if (importResult?.tracks) {
+              // Se parte de la canción de AHORA (la montada o la de la lista), no de la copia de antes de decodificar:
+              // lo que se editó mientras tanto (mezcla, notas, setlist) se perdería al guardar.
+              const base: SongProject =
+                (currentProjectRef.current?.id === targetProjectId ? currentProjectRef.current : null) ??
+                projectsRef.current.find((p) => p.id === targetProjectId) ??
+                newSongProject;
               const { tracks: updatedTracks, durationSec: updatedDuration } = applyDecodedTracks(
-                newSongProject,
+                base,
                 importResult.tracks
               );
 
               const completedProject: SongProject = {
-                ...newSongProject,
+                ...base,
                 durationSec: updatedDuration,
                 tracks: updatedTracks,
                 updatedAt: Date.now(),
@@ -308,7 +321,7 @@ export function useNativeImport({
               setProjects((prev) =>
                 prev.map((p) => (p.id === targetProjectId ? completedProject : p))
               );
-              saveProjectToDb(completedProject).catch(logAsyncError('guardar la canción'));
+              void projectSaves.saveNow(completedProject);
 
               const isStillCurrent =
                 !currentProjectRef.current || currentProjectRef.current.id === targetProjectId;

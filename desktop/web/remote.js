@@ -38,6 +38,18 @@
     return { action: 'retry', message: 'Sin conexión. Intentando reconectar…' };
   }
   // </closeAction>
+  // <resumeAction>
+  // Al volver el móvil a la pantalla o a la red (plan 6.9): un socket que se quedó «abierto» tras apagar la pantalla
+  // puede estar muerto y no avisar hasta 40 s después. Se reconecta de inmediato si no está abierto, si volvió la red o
+  // si lleva rato sin recibir nada. Una sesión terminada o tomada por otro dispositivo no se reconecta.
+  function resumeAction({ event, socketState, silentMs, stopped }) {
+    if (stopped) return 'none';
+    if (socketState !== 1) return 'reconnect';
+    if (event === 'online') return 'reconnect';
+    if (silentMs > 3000) return 'reconnect';
+    return 'none';
+  }
+  // </resumeAction>
   let state = {};
   let controls = [];
   let clock = null;
@@ -45,6 +57,10 @@
   let retryMs = 500;
   let connected = false;
   let openedAt = 0;
+  let lastMessageAt = 0;
+  let retryTimer = null;
+  let connectSeq = 0;
+  let stopped = false;
 
   document.title = byId('title').textContent = canMix ? 'Mezclador' : 'Monitor';
   if (canMix) {
@@ -458,9 +474,12 @@
   }
 
   async function connect() {
+    const seq = ++connectSeq;
     try {
       const session = await fetch(sessionUrl, { cache: 'no-store' });
+      if (seq !== connectSeq) return; // otra conexión más reciente tomó el relevo
       if (session.status === 401 || session.status === 403) {
+        stopped = true;
         connection.textContent = 'Sesión terminada. Abre de nuevo el enlace del portátil.';
         return;
       }
@@ -469,11 +488,15 @@
       socket.onopen = () => {
         connected = true;
         openedAt = Date.now();
+        lastMessageAt = openedAt;
         renderLink();
         retryMs = 500;
         connection.textContent = '';
       };
-      socket.onmessage = (event) => apply(JSON.parse(event.data));
+      socket.onmessage = (event) => {
+        lastMessageAt = Date.now();
+        apply(JSON.parse(event.data));
+      };
       socket.onclose = async (event) => {
         if (clock) clock = { ...clock, positionSec: position(), playing: false };
         connected = false;
@@ -491,7 +514,10 @@
         }
         const next = closeAction({ code: event.code, sessionStatus, livedMs: Date.now() - openedAt });
         if (next.action === 'retry') retry(next.message);
-        else connection.textContent = next.message;
+        else {
+          stopped = true;
+          connection.textContent = next.message;
+        }
       };
     } catch {
       // catch-ok: retry() muestra «Sin conexión. Intentando reconectar…» y vuelve a intentarlo
@@ -501,9 +527,50 @@
 
   function retry(message = 'Sin conexión. Intentando reconectar…') {
     connection.textContent = message;
-    setTimeout(connect, retryMs);
+    clearTimeout(retryTimer);
+    retryTimer = setTimeout(connect, retryMs);
     retryMs = Math.min(8000, retryMs * 2);
   }
+
+  // Reconecta ya: descarta el socket viejo (sin que su cierre programe otro reintento) y abre uno nuevo.
+  function reconnectNow() {
+    clearTimeout(retryTimer);
+    const old = socket;
+    if (old) {
+      old.onopen = old.onmessage = old.onclose = null;
+      try {
+        old.close();
+      } catch {
+        // catch-ok: el socket viejo ya estaba cerrado o muerto; se abre uno nuevo igualmente
+      }
+    }
+    if (clock) clock = { ...clock, positionSec: position(), playing: false };
+    connected = false;
+    renderLink();
+    renderPlayState();
+    renderTracks(false);
+    renderMeters();
+    retryMs = 500;
+    connection.textContent = 'Reconectando…';
+    void connect();
+  }
+
+  function onResume(event) {
+    const action = resumeAction({
+      event,
+      socketState: socket ? socket.readyState : -1,
+      silentMs: Date.now() - lastMessageAt,
+      stopped,
+    });
+    if (action === 'reconnect') reconnectNow();
+  }
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') onResume('visible');
+  });
+  window.addEventListener('pageshow', (e) => {
+    if (e.persisted) onResume('pageshow');
+  });
+  window.addEventListener('online', () => onResume('online'));
 
   async function start() {
     try {
