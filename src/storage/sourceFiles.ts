@@ -18,7 +18,6 @@ import {
   extractSidecarFromFileList,
   isAudioFileCandidate,
   isProjectSidecarFileName,
-  parseProjectSidecarText,
   PROJECT_SIDECAR_FILENAME,
   registerFileSidecar,
 } from '../utils/fileImportHelper';
@@ -267,46 +266,6 @@ export async function requestWritePermission(handle: any): Promise<PermissionSta
     console.warn('[SourceFiles] No se pudo pedir el permiso de escritura:', err);
   }
   return 'denied';
-}
-
-/**
- * Reads `omnitracks.project.json` (or any `*.omnitracks.json`)
- * directly from a directory handle if present.
- */
-export async function readProjectSidecarFromDirectory(
-  dirHandle: any
-): Promise<SongProject | null> {
-  if (!dirHandle || typeof dirHandle.getFileHandle !== 'function') return null;
-  try {
-    const exactHandle = await dirHandle.getFileHandle(PROJECT_SIDECAR_FILENAME);
-    const file: File = await exactHandle.getFile();
-    const parsed = parseProjectSidecarText(await file.text());
-    if (parsed) return parsed;
-  } catch (err) {
-    // Que no exista es lo normal (se buscan entonces los *.omnitracks.json); cualquier otro fallo se registra.
-    if ((err as { name?: string })?.name !== 'NotFoundError') {
-      console.warn('[SourceFiles] No se pudo leer omnitracks.project.json:', err);
-    }
-  }
-
-  if (typeof dirHandle.values === 'function') {
-    try {
-      for await (const entry of dirHandle.values()) {
-        if (entry?.kind === 'file' && isProjectSidecarFileName(entry.name)) {
-          try {
-            const file: File = await entry.getFile();
-            const parsed = parseProjectSidecarText(await file.text());
-            if (parsed) return parsed;
-          } catch (err) {
-            console.warn(`[SourceFiles] No se pudo leer el sidecar ${entry.name}:`, err);
-          }
-        }
-      }
-    } catch (err) {
-      console.warn('[SourceFiles] No se pudo recorrer la carpeta buscando el sidecar:', err);
-    }
-  }
-  return null;
 }
 
 /**

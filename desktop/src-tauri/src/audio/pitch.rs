@@ -44,10 +44,6 @@ impl PitchShifter {
         self.latency
     }
 
-    pub fn set_semitones(&mut self, semitones: i32) {
-        self.stretch.set_transpose_semitones(semitones as f32, None);
-    }
-
     /// Vuelve al estado inicial (tras un seek o un salto): se vuelve a compensar el retardo.
     pub fn reset(&mut self) {
         self.stretch.reset();

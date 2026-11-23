@@ -331,7 +331,6 @@ export default function App() {
     onChangeTrackGain: handleChangeTrackGain,
     onChangeTrackPan: handleChangeTrackPan,
     onChangeClickGain: (gain) => updateCurrentProject((p) => ({ ...p, clickGain: gain })),
-    onChangeClickPan: (pan) => updateCurrentProject((p) => ({ ...p, clickPan: pan })),
     onToggleClick: handleToggleClick,
     onChangeMasterGain: (gain) => updateCurrentProject((p) => ({ ...p, masterGain: gain })),
     onResetMixer: handleResetMixer,
@@ -366,7 +365,6 @@ export default function App() {
     setProjects,
     setCurrentProject,
     showToast,
-    isDesktopApp,
     activateProject,
     activeView,
     handleSelectView,
@@ -515,9 +513,6 @@ export default function App() {
               onAddMarkerAtPlayhead={handleAddMarkerAtPlayhead}
               onOpenSectionEditor={() => setIsSectionEditorOpen(true)}
               onEditTracks={() => setIsEditTracksOpen(true)}
-              onAddStemsToCurrentSong={(files) =>
-                handleInstantImportFiles(files, 'main', 'current-song')
-              }
               onQuickImportNewSongFiles={(files) =>
                 handleInstantImportFiles(files, 'main', 'new-song')
               }

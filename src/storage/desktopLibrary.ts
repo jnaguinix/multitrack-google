@@ -35,19 +35,6 @@ export async function loadDesktopLibrary(): Promise<LibraryFilePayload | null> {
   }
 }
 
-/**
- * Saves the entire library state (active setlist + songs) atomically to library.json.
- */
-export async function saveDesktopLibrary(library: LibraryFilePayload): Promise<void> {
-  if (!isDesktopApp()) return;
-  const invoke = (window as any).__TAURI__?.core?.invoke;
-  if (!invoke) return;
-  try {
-    await invoke('library_save', { library });
-  } catch (err) {
-    console.error('[Library] Error guardando library.json:', err);
-  }
-}
 
 /**
  * Upserts a single song into library.json and updates its omnitracks.project.json sidecar.
@@ -155,17 +142,5 @@ export async function loadDesktopSongPeaks(songId: string): Promise<Record<strin
   } catch (err) {
     console.warn(`[Library] No se pudieron leer los picos de '${songId}':`, err);
     return {};
-  }
-}
-
-export async function readDesktopSidecar(folderPath: string): Promise<any | null> {
-  if (!isDesktopApp()) return null;
-  const invoke = (window as any).__TAURI__?.core?.invoke;
-  if (!invoke) return null;
-  try {
-    return await invoke('library_read_sidecar', { folderPath });
-  } catch (err) {
-    console.warn(`[Sidecar] No se pudo leer sidecar de '${folderPath}':`, err);
-    return null;
   }
 }

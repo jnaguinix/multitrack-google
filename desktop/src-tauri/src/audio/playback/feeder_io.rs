@@ -232,15 +232,6 @@ pub fn drain_staging_through_resampler(
     }
 }
 
-/// Prepara el remuestreador para un tramo nuevo del archivo: descarta el estado del tramo anterior y vuelve a
-/// compensar el retardo del filtro, igual que tras un seek. NO se usa en los empalmes (salto de sección o vuelta
-/// de vamp): esos entran al remuestreador como una señal continua, sin reiniciarlo (ver `mod.rs`). Hoy solo la
-/// llama una prueba.
-pub fn begin_new_segment(resampler: &mut TrackResampler, delay_compensated: &mut bool) {
-    resampler.reset();
-    *delay_compensated = false;
-}
-
 /// Añade al anillo de salida (intercalado L, R; el mono se duplica) los fotogramas de `block` desde `from`.
 fn push_interleaved(block: &[Vec<f32>], from: usize, is_mono: bool, output_staging: &mut Vec<f32>) {
     let frames = block[0].len();

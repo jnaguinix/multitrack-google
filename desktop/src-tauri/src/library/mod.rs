@@ -863,22 +863,6 @@ pub async fn library_get_song_peaks(app: AppHandle, song_id: String) -> Result<H
 }
 
 #[tauri::command]
-pub async fn library_save(app: AppHandle, library: LibraryFile) -> Result<(), String> {
-    let local_data = app
-        .path()
-        .app_local_data_dir()
-        .map_err(|e| format!("Error resolviendo app_local_data_dir: {e}"))?;
-    let _guard = lock_library();
-    let mut library = library;
-    if let Ok(existing) = load_library_internal(&local_data) {
-        for song in &mut library.songs {
-            preserve_loudness(song, existing.songs.iter().find(|s| s.id == song.id));
-        }
-    }
-    save_library_internal(&local_data, &library)
-}
-
-#[tauri::command]
 pub async fn library_save_song(app: AppHandle, song: LibrarySong) -> Result<SaveSongOutcome, String> {
     let local_data = app
         .path()
@@ -1029,23 +1013,6 @@ pub async fn library_update_song_folder(
             song_id
         ))
     }
-}
-
-#[tauri::command]
-pub async fn library_write_sidecar(
-    folder_path: String,
-    song: LibrarySong,
-) -> Result<(), String> {
-    let p = Path::new(&folder_path);
-    write_sidecar(p, &song)
-}
-
-#[tauri::command]
-pub async fn library_read_sidecar(
-    folder_path: String,
-) -> Result<Option<serde_json::Value>, String> {
-    let p = Path::new(&folder_path);
-    read_sidecar(p)
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]

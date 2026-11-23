@@ -10,7 +10,7 @@ import { logAsyncError } from '../utils/asyncErrors';
 import { ControlSync, initialTrackControl, type ControlOp, type EngineTrackControl } from './controlSync';
 import { flightRecorder } from '../utils/flightRecorder';
 import { debugMode } from '../utils/debugMode';
-import { AudioEngineMode, SongProject, TrackChannel, TransportState, MetersSnapshot } from '../types/project';
+import { SongProject, TrackChannel, TransportState, MetersSnapshot } from '../types/project';
 import { MeterBallistics, NativeMetersSnapshot } from './meterBallistics';
 import { StatePoller } from './statePoller';
 import { sameTransport } from '../utils/transportEqual';
@@ -87,9 +87,7 @@ export class NativeAudioEngine {
   private onNoticeCallback: ((msg: string) => void) | null = null;
   private onDeviceDisconnectedCallback: ((disconnected: boolean) => void) | null = null;
 
-  private lastPositionSec: number = 0;
   private lastDurationSec: number = 0;
-  private lastPlaybackState: NativePlaybackSnapshot | null = null;
   private meterBallistics = new MeterBallistics();
   private wasPlayingBeforeEnd: boolean = false;
   private deviceDisconnectedAlerted: boolean = false;
@@ -283,14 +281,12 @@ export class NativeAudioEngine {
   }
 
   private applySnapshot(pb: NativePlaybackSnapshot): void {
-    this.lastPlaybackState = pb;
     this.meterBallistics.update(pb.meters, meterNow());
     // Red de seguridad: si el motor tiene algo distinto de lo que muestra la interfaz (una orden perdida o
     // aplicada al revés), se corrige y queda anotado en la caja negra.
     if (this.currentProject && this.loadedProjectId === this.currentProject.id) {
       this.controlSync.reconcile(pb, this.currentProject);
     }
-    this.lastPositionSec = pb.positionSec;
     this.lastDurationSec = pb.durationSec;
 
     this.checkEngineHealth(pb);
@@ -749,22 +745,12 @@ export class NativeAudioEngine {
     };
   }
 
-  public getEffectiveEngineModeForProject(_song: SongProject): AudioEngineMode {
-    return 'stream';
-  }
-
   public getProjectPcmEstimatedMB(song: SongProject): number {
     const frames = song.tracks.reduce((sum, t) => sum + (t.pcm?.frames || 0), 0);
     return Math.round((frames * 2) / (1024 * 1024));
   }
 
   public setPriorityProjectIds(_ids: string[]): void {}
-
-  public clearProjectFallback(_projectId: string): void {}
-
-  public getTotalCachedMB(): number {
-    return 0;
-  }
 
   /**
    * La pista deja de ser del proyecto: se silencia YA en el motor (sigue montada hasta volver a montar la canción) y

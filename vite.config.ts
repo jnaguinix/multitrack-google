@@ -12,10 +12,9 @@ export default defineConfig(() => {
       },
     },
     server: {
-      // HMR is disabled in AI Studio via DISABLE_HMR env var.
-      // Do not modify—file watching is disabled to prevent flickering during agent edits.
+      // Con DISABLE_HMR=true se apaga la recarga en caliente y la vigilancia de archivos (herencia de la plantilla
+      // original: sirve para que un agente edite sin que la vista previa parpadee). Sin esa variable, todo normal.
       hmr: process.env.DISABLE_HMR !== 'true',
-      // Disable file watching when DISABLE_HMR is true to save CPU during agent edits.
       // Fuera del watcher: la compilación de Rust (`target`, bloquea el .exe y los .pdb mientras enlaza: EBUSY),
       // la salida de `vite build` y la carpeta local de agentes.
       watch:

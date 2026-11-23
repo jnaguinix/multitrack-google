@@ -13,7 +13,6 @@ interface UseProjectActionsDeps {
   setProjects: React.Dispatch<React.SetStateAction<SongProject[]>>;
   setCurrentProject: React.Dispatch<React.SetStateAction<SongProject | null>>;
   showToast: (msg: string) => void;
-  isDesktopApp: boolean;
   activateProject: (
     projectToLoad: SongProject,
     predecodedBuffers?: Map<string, AudioBuffer>,
@@ -31,7 +30,6 @@ export function useProjectActions({
   setProjects,
   setCurrentProject,
   showToast,
-  isDesktopApp,
   activateProject,
   activeView,
   handleSelectView,

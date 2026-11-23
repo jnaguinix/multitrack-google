@@ -1,6 +1,6 @@
 import { logAsyncError } from '../utils/asyncErrors';
 import { audioEngine as defaultAudioEngine } from '../audio/audioEngine';
-import { SongProject, QuantizeMode, OutputBus, SongSection } from '../types/project';
+import { SongProject, QuantizeMode, SongSection } from '../types/project';
 
 interface UseMixerActionsDeps {
   audioEngine?: typeof defaultAudioEngine;
