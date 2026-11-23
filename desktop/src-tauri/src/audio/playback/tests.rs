@@ -3190,6 +3190,47 @@
         assert!(malos <= 4, "tras activar el vamp junto al límite el reloj no coincide con el audio ({malos} bloques)");
     }
 
+    /// Plan 6.1 (AG2 H1): con los feeders ya ~0,35 s por delante (lo normal en directo), activar el vamp a menos de
+    /// ~0,55 s del final de la sección debe reposicionar en el sitio; si no, el audio sigue hacia la sección siguiente
+    /// mientras el reloj vuelve al inicio del bucle. La prueba h06 de arriba solo avanza 15 ms y no lo detectaba.
+    #[tokio::test]
+    async fn test_ola6_entrada_al_vamp_con_los_feeders_por_delante_no_desalinea() {
+        let mut resumen = Vec::new();
+        for n in [1usize, 3] {
+            let pistas: Vec<(&str, usize)> = (0..n).map(|i| (["a", "b", "c"][i], 288_000usize)).collect();
+            let engine = motor_real(&format!("tmp_h1_{n}"), &pistas, vec![seccion("a", 0.0, 3.0), seccion("b", 3.0, 6.0)]).await;
+            engine.seek(2.85).await;
+            reproducir(&engine).await;
+            // Pausa sin consumir bloques: los feeders llenan el anillo (~0,35 s por delante).
+            std::thread::sleep(std::time::Duration::from_millis(400));
+            let _ = desajustes_en(&engine, 3);
+            assert!(engine.toggle_vamp(Some(true)).await);
+            let mut malos = 0;
+            let mut detalle = Vec::new();
+            for _ in 0..200 {
+                let (pos, reloj) = bloque_n(&engine, n as f32);
+                if let Some(p) = pos {
+                    if (p - reloj as i64).abs() > 1000 {
+                        malos += 1;
+                        if detalle.len() < 3 { detalle.push((p, reloj)); }
+                    }
+                }
+            }
+            resumen.push((n, malos, detalle));
+        }
+        assert!(resumen.iter().all(|(_, m, _)| *m <= 4), "entrada al vamp con anillo lleno: bloques desalineados por (pistas, malos, ejemplos) {resumen:?}");
+    }
+
+    /// Plan 6.1 (AG2 H2): una sección de menos de ~0,5 s no admite vamp (los feeders girarían sin drenar el anillo).
+    #[tokio::test]
+    async fn test_ola6_vamp_rechazado_en_una_seccion_demasiado_corta() {
+        let engine = motor_real("ola6_corta", &[("pista", 288_000)], vec![seccion("a", 0.0, 0.3), seccion("b", 0.3, 6.0)]).await;
+        engine.seek(0.1).await;
+        assert!(!engine.toggle_vamp(Some(true)).await, "el vamp no debe activarse en una sección de 0,3 s");
+        engine.seek(1.0).await;
+        assert!(engine.toggle_vamp(Some(true)).await, "en una sección larga sí");
+    }
+
     #[tokio::test]
     async fn test_h06_salir_del_vamp_justo_antes_del_limite_no_desalinea_el_reloj() {
         let engine = motor_real("h06_salida", &[("pista", 288_000)], vec![seccion("a", 0.0, 3.0), seccion("b", 3.0, 6.0)]).await;

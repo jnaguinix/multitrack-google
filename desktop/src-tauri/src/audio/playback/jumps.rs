@@ -170,7 +170,7 @@ impl PlaybackEngine {
     /// secciones, un rango vacío): el motor no puede creerse en vamp sin bucle que repetir.
     pub async fn toggle_vamp(&self, enable: Option<bool>) -> bool {
         let (state, near_loop_end) = self.set_vamp_state(enable).await;
-        // Salir del vamp cerca del final de la vuelta: ver `set_vamp_state`.
+        // Entrar o salir del vamp cerca del final de la vuelta: ver `set_vamp_state`.
         if near_loop_end {
             self.seek_in_place().await;
         }
@@ -178,7 +178,7 @@ impl PlaybackEngine {
     }
 
     /// Cambia el estado del vamp sin reposicionar nada (lo usa `seek`, que ya reposiciona). Devuelve el estado
-    /// resultante y si se salió del vamp con el reloj en la zona final de la vuelta (el llamante decide si
+    /// resultante y si se entró o se salió del vamp con el reloj en la zona final de la vuelta (el llamante decide si
     /// reposiciona: `toggle_vamp` sí; `seek` no hace falta).
     pub(super) async fn set_vamp_state(&self, enable: Option<bool>) -> (bool, bool) {
         let was_vamping = self.is_vamping.load(Ordering::SeqCst);
@@ -191,13 +191,16 @@ impl PlaybackEngine {
         tracing::info!("[NativeEngine] toggle_vamp: pedido={want}, cur_frame={cur_frame}, cur_sec={cur_sec:.2}");
 
         if want {
+            // Una sección de menos de ~0,5 s no admite vamp: con la vuelta más corta que el margen de los feeders
+            // (~0,35 s por delante) giran sin llegar a drenar el anillo y el audio no sigue al reloj.
+            let min_vamp_frames = (sr as u64) / 2;
             let active_loop = {
                 let sections_guard = self.sections.lock().unwrap();
                 sections_guard
                     .iter()
                     .find(|s| cur_sec >= s.start_sec && cur_sec < s.end_sec)
                     .map(|sec| ((sec.start_sec * sr).round() as u64, (sec.end_sec * sr).round() as u64))
-                    .filter(|(start, end)| end > start && *end > cur_frame)
+                    .filter(|(start, end)| end > start && *end > cur_frame && end - start >= min_vamp_frames)
             };
             let Some((loop_start, loop_end)) = active_loop else {
                 tracing::warn!("[NativeEngine] Vamp rechazado: no hay una sección con rango válido en {cur_sec:.2} s");
@@ -212,7 +215,11 @@ impl PlaybackEngine {
                 trk.is_vamping.store(true, Ordering::Relaxed);
                 *trk.active_section_loop.lock().unwrap() = Some((loop_start, loop_end));
             }
-            return (true, false);
+            // Entrar con el final de la vuelta a menos de lo que los feeders llevan adelantado: su anillo ya pasó el
+            // límite y trae el audio de la sección siguiente. Igual que al salir, `toggle_vamp` reposiciona en el sitio.
+            // Si el vamp ya estaba activo (misma sección) no hay nada que reposicionar.
+            let near_loop_end = !was_vamping && loop_end - cur_frame <= (sr as u64) * 11 / 20;
+            return (true, near_loop_end);
         }
 
         // Salir: los feeders van ~0,35 s por delante del reloj. Si el bucle está a punto de cerrar la vuelta, su
