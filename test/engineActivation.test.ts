@@ -8,6 +8,7 @@ const calls: string[] = [];
 const ready = new Map<string, boolean>();
 let importGate: Promise<void> = Promise.resolve();
 let controlDelayMs = 0;
+let stopDelayMs = 0;
 let controlsApplied = 0;
 let lastLoadArgs: any = null;
 const controlArgs: any[] = [];
@@ -26,6 +27,10 @@ const fakeInvoke = async (cmd: string, args: any = {}) => {
     case 'audio_load_project':
       lastLoadArgs = args;
       return { durationSec: 10, sampleRate: 48000, totalFrames: 480000, trackCount: 1, trackPeaks: {} };
+    case 'audio_stop':
+      if (stopDelayMs) await tick(stopDelayMs);
+      calls.push('audio_stop:fin');
+      return null;
     case 'audio_set_track_controls':
       controlArgs.push(args);
     // eslint-disable-next-line no-fallthrough
@@ -195,6 +200,27 @@ async function main() {
     controlDelayMs = 0;
     assert.ok(!calls.includes('audio_play'), 'Play de la canción anterior no llega al motor');
     console.log('OK: Play se cancela si cambió la canción elegida durante la espera');
+  }
+  // Plan 6.12 (AG2 H12a): el audio_stop de un cambio de canción llega al motor ANTES que la carga de la nueva
+  // (antes iba suelto y, si tardaba, se aplicaba después de montarla y la paraba).
+  {
+    const engine = new NativeAudioEngine();
+    await tick();
+    ready.clear();
+    ready.set('S1', true);
+    ready.set('S2', true);
+    await engine.loadProject(song('S1'));
+    await tick(30);
+    calls.length = 0;
+    stopDelayMs = 40;
+    engine.prepareProjectShell(song('S2')); // cambio de canción: pide audio_stop (lento)
+    await engine.loadProject(song('S2'));
+    stopDelayMs = 0;
+    const iStopFin = calls.indexOf('audio_stop:fin');
+    const iLoad = calls.indexOf('audio_load_project:S2');
+    assert.ok(iStopFin >= 0 && iLoad >= 0, 'se pidieron el stop y la carga');
+    assert.ok(iStopFin < iLoad, 'la carga espera a que el stop termine: no se aplica después de montar la nueva');
+    console.log('OK 6.12: el stop de un cambio de canción se espera antes de montar la nueva');
   }
   console.log('engineActivation.test.ts OK');
   process.exit(0);

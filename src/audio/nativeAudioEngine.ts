@@ -78,6 +78,8 @@ export class NativeAudioEngine {
     onError: (op, err) => logAsyncError(op.cmd)(err),
   });
   private loadedProjectId: string | null = null;
+  /** `audio_stop` pedido al cambiar de canción (plan 6.12, AG2 H12a): la carga y Play lo esperan para que no llegue después. */
+  private pendingStop: Promise<void> | null = null;
   private loadingPromises = new Map<string, Promise<{ peaksMap: Map<string, number[]>; wasCancelled: boolean }>>();
   private transportListeners = new Set<(transport: TransportState) => void>();
   private poller: StatePoller<NativePlaybackSnapshot> | null = null;
@@ -357,6 +359,7 @@ export class NativeAudioEngine {
 
     // La mezcla (buses, mutes, ganancias) viaja por la cola de controles y Play por otro camino: sin esta espera el
     // motor podía arrancar con los valores iniciales (Click o Guía por Main, una pista en mute sonando).
+    await this.settlePendingStop();
     await this.waitForControlsApplied(projId);
     if (this.currentProject?.id !== projId) {
       debugMode.trace('transporte', () => `play cancelado: mientras se aplicaba la mezcla se eligió otra canción (${this.currentProject?.id})`);
@@ -500,8 +503,19 @@ export class NativeAudioEngine {
       debugMode.trace('carga', () => `cambio de canción ${prevId} → ${project.id}: se detiene el audio y se descarta lo cargado`);
       this.loadedProjectId = null;
       this.poller?.invalidate();
-      void this.stop();
+      // Los comandos de Tauri corren como tareas independientes: sin esperar este stop, podía aplicarse DESPUÉS de montar
+      // la canción nueva y pararla. `stop()` no lanza (registra su error), así que la promesa siempre se resuelve.
+      const stopping = this.stop();
+      this.pendingStop = stopping;
+      void stopping.then(() => {
+        if (this.pendingStop === stopping) this.pendingStop = null;
+      });
     }
+  }
+
+  /** Espera el `audio_stop` pendiente de un cambio de canción (si lo hay). */
+  private async settlePendingStop(): Promise<void> {
+    while (this.pendingStop) await this.pendingStop;
   }
 
   /** Envía TODO el estado de la canción al motor (carga, importación, reapertura). */
@@ -584,6 +598,8 @@ export class NativeAudioEngine {
         }
       }
 
+      // El stop de un cambio de canción debe haber llegado al motor antes que esta carga (si no, pararía la nueva).
+      await this.settlePendingStop();
       // Mientras esperaba la caché el usuario pudo elegir otra canción: montar esta ahora detendría el audio y
       // pisaría la elegida (la última orden es la que manda).
       if (this.currentProject?.id !== project.id) {
