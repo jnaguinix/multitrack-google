@@ -1,4 +1,5 @@
 import { logAsyncError } from '../utils/asyncErrors';
+import { projectSaves } from '../storage/projectSaves';
 import { useCallback } from 'react';
 import type { OutputBus, SongProject, TrackChannel } from '../types/project';
 import { inferSongMetadataFromFiles } from '../audio/smartAnalyzer';
@@ -328,7 +329,7 @@ export function useHtmlImport({
         audioEngine.prepareProjectShell(newSongProject);
         setCurrentProject(newSongProject);
         setProjects((prev) => [newSongProject, ...prev]);
-        saveProjectToDb(newSongProject).catch(logAsyncError('guardar la canción'));
+        void projectSaves.saveNow(newSongProject);
       } else {
         const current = currentProjectRef.current!;
         const combinedTracks = [...current.tracks, ...initialTracks];
@@ -348,7 +349,7 @@ export function useHtmlImport({
         setProjects((prev) =>
           prev.map((p) => (p.id === updatedProject.id ? updatedProject : p))
         );
-        saveProjectToDb(updatedProject).catch(logAsyncError('guardar la canción'));
+        void projectSaves.saveNow(updatedProject);
       }
 
       // Save native File Blob pointers to IndexedDB in background (zero re-encoding)

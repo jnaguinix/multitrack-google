@@ -922,12 +922,30 @@ pub fn save_song_internal(local_data: &Path, song: LibrarySong) -> Result<SaveSo
     Ok(outcome)
 }
 
+/// Resultado de eliminar una canción: la biblioteca ya no la tiene; si su caché PCM no se pudo borrar (archivo abierto,
+/// antivirus) se informa para que la interfaz avise en lugar de dejar la carpeta huérfana sin decir nada.
+#[derive(Serialize, Debug, Default, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct DeleteSongOutcome {
+    pub cache_error: Option<String>,
+}
+
+/// Borra `pcm/<id>` si existe. Separado del comando para poder probarlo sin la aplicación.
+fn remove_song_cache_dir(local_data: &Path, song_id: &str) -> Result<(), String> {
+    let pcm_dir = local_data.join("pcm").join(song_id);
+    if pcm_dir.exists() {
+        fs::remove_dir_all(&pcm_dir).map_err(|e| format!("{} ({e})", pcm_dir.display()))?;
+        tracing::info!("[Library] Caché PCM eliminada para '{}'", song_id);
+    }
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn library_delete_song(
     app: AppHandle,
     state: State<'_, AudioEngineState>,
     song_id: String,
-) -> Result<(), String> {
+) -> Result<DeleteSongOutcome, String> {
     let local_data = app
         .path()
         .app_local_data_dir()
@@ -952,18 +970,14 @@ pub async fn library_delete_song(
     state.playback.unload_project_if_matches(&song_id).await;
 
     // 3. Delete native PCM cache folder pcm/<song_id>
-    let pcm_dir = local_data.join("pcm").join(&song_id);
-    if pcm_dir.exists() {
-        // La canción ya no está en la biblioteca: si la caché no se puede borrar (archivo abierto, antivirus) se
-        // devuelve el error para que la interfaz avise, en lugar de dejar la carpeta huérfana sin decir nada.
-        fs::remove_dir_all(&pcm_dir)
-            .map_err(|e| format!("La canción se quitó de la biblioteca, pero no se pudo borrar su caché ({}): {e}", pcm_dir.display()))?;
-        tracing::info!("[Library] Caché PCM eliminada para '{}'", song_id);
+    let cache_error = remove_song_cache_dir(&local_data, &song_id).err();
+    if let Some(e) = &cache_error {
+        tracing::warn!("[Library] No se pudo borrar la caché de '{song_id}': {e}");
     }
 
     // Original files are NEVER touched!
     tracing::info!("[Library] Canción '{}' eliminada de la biblioteca", song_id);
-    Ok(())
+    Ok(DeleteSongOutcome { cache_error })
 }
 
 /// Quita una canción del setlist (sigue en la biblioteca). Devuelve si estaba en él.
@@ -1506,6 +1520,21 @@ mod tests {
         assert!(setlist_remove(&dir, "a").unwrap());
         assert_eq!(setlist_song_ids(&dir).unwrap(), vec!["b".to_string()], "«a» no debe volver a aparecer en el setlist");
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Plan 6.5: borrar la caché de una canción quita `pcm/<id>` entero y no falla si no existe.
+    #[test]
+    fn test_remove_song_cache_dir_borra_la_carpeta_de_la_cancion() {
+        let dir = std::env::temp_dir().join(format!("omnitracks_del_cache_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let cache = dir.join("pcm").join("s1").join("48000");
+        fs::create_dir_all(&cache).unwrap();
+        fs::write(cache.join("t.pcm"), [0u8; 8]).unwrap();
+        fs::create_dir_all(dir.join("pcm").join("s2")).unwrap();
+        assert!(remove_song_cache_dir(&dir, "s1").is_ok());
+        assert!(!dir.join("pcm").join("s1").exists());
+        assert!(dir.join("pcm").join("s2").exists(), "no debe tocar la caché de otra canción");
+        assert!(remove_song_cache_dir(&dir, "s1").is_ok(), "una caché que ya no existe no es un error");
+        let _ = fs::remove_dir_all(dir);
     }
 
     #[test]

@@ -1,7 +1,7 @@
 import { useCallback } from 'react';
+import { projectSaves } from '../storage/projectSaves';
 import { nativeAudioEngine } from '../audio/nativeAudioEngine';
 import { updateDesktopSongFolder } from '../storage/desktopLibrary';
-import { saveProjectToDb } from '../storage/projectDb';
 import { pickNativeFolder, scanNativeFolder } from '../utils/nativeDialog';
 import type { SongProject } from '../types/project';
 
@@ -54,7 +54,7 @@ export function useRelinkProject({ isDesktopApp, currentProjectRef, setProjects,
           if (currentProjectRef.current?.id === proj.id) {
             setCurrentProject(updatedProj);
           }
-          await saveProjectToDb(updatedProj);
+          await projectSaves.saveNow(updatedProj);
           showToast(`Carpeta reubicada para "${proj.title}".`);
 
           if (updatedProj.inSetlist) {

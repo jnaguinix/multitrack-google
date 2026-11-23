@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { projectSaves } from '../storage/projectSaves';
 import { audioEngine } from '../audio/audioEngine';
 import { logAsyncError } from '../utils/asyncErrors';
 import { debugMode } from '../utils/debugMode';
-import { normalizeProjectSectionsToTime, saveProjectToDb } from '../storage/projectDb';
+import { normalizeProjectSectionsToTime } from '../storage/projectDb';
 import { resolveTransition } from '../utils/setlistTransition';
+import { withLatestSetlistState } from '../utils/setlistMerge';
 import type { SetlistTransitionMode, SongProject } from '../types/project';
 
 /** `mounted`: la canción quedó montada; `superseded`: se eligió otra después (no es un fallo); `failed`: no se pudo montar. */
@@ -11,6 +13,8 @@ export type ActivationResult = 'mounted' | 'superseded' | 'failed';
 
 interface Deps {
   currentProjectRef: React.MutableRefObject<SongProject | null>;
+  /** La lista de canciones más reciente (se lee al terminar de montar, no al empezar). */
+  projectsRef: React.MutableRefObject<SongProject[]>;
   setCurrentProject: React.Dispatch<React.SetStateAction<SongProject | null>>;
   setProjects: React.Dispatch<React.SetStateAction<SongProject[]>>;
   setlistQueue: SongProject[];
@@ -25,6 +29,7 @@ interface Deps {
  */
 export function useProjectActivation({
   currentProjectRef,
+  projectsRef,
   setCurrentProject,
   setProjects,
   setlistQueue,
@@ -91,15 +96,18 @@ export function useProjectActivation({
           peaks: peaksMap.get(t.id) || t.peaks || [],
         }));
 
-        const updatedProject: SongProject = {
-          ...latestBase,
-          durationSec: realDurationSec,
-          tracks: enrichedTracks,
-        };
+        const updatedProject: SongProject = withLatestSetlistState(
+          {
+            ...latestBase,
+            durationSec: realDurationSec,
+            tracks: enrichedTracks,
+          },
+          projectsRef.current.find((p) => p.id === normalizedProj.id)
+        );
 
         setCurrentProject(updatedProject);
         audioEngine.updateProjectConfig(updatedProject);
-        saveProjectToDb(updatedProject).catch(logAsyncError('guardar la canción'));
+        void projectSaves.saveNow(updatedProject);
         setProjects((prev) => {
           const exists = prev.some((p) => p.id === updatedProject.id);
           if (!exists) return [updatedProject, ...prev];
@@ -121,7 +129,7 @@ export function useProjectActivation({
         if (activationCountRef.current === 0) setIsActivatingProject(false);
       }
     },
-    [showToast]
+    [showToast, projectsRef]
   );
 
   // Setlist Prev / Next Song Handlers

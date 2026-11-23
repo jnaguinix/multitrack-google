@@ -42,11 +42,25 @@ export function useLibraryDeletion({
     // Antes de borrar: un guardado diferido (un fader movido hace menos de 400 ms) o ya en curso volvería a crear la
     // canción en la biblioteca justo después. Se descarta lo pendiente, se espera lo que ya iba y se ignora lo nuevo.
     await projectSaves.cancel(song.id);
-    await deleteProjectFromDb(song.id);
+    let cacheError: string | null = null;
+    try {
+      ({ cacheError } = await deleteProjectFromDb(song.id));
+    } catch (err) {
+      // La biblioteca no pudo borrarla: se queda en pantalla (quitarla la haría reaparecer al reabrir la app).
+      console.error('[Library] No se pudo eliminar la canción:', err);
+      showToast(`No se pudo eliminar "${song.title}" de la biblioteca. Detalle en la consola.`);
+      return;
+    }
     if (isDesktopApp) {
-      deleteProjectNativeCache(song.id).catch((err: any) => {
+      try {
+        await deleteProjectNativeCache(song.id);
+      } catch (err) {
         console.error('[Cache] Error al eliminar carpeta de caché nativa:', err);
-      });
+        cacheError = cacheError ?? String(err);
+      }
+    }
+    if (cacheError) {
+      showToast(`"${song.title}" se eliminó, pero no se pudo borrar su caché de audio (queda ocupando disco). Detalle en la consola.`);
     }
 
     const remaining = projects.filter((p) => p.id !== song.id);
@@ -54,7 +68,7 @@ export function useLibraryDeletion({
     if (currentProject?.id === song.id) {
       setCurrentProject(null);
     }
-    showToast(`"${song.title}" eliminada de la biblioteca (archivos originales intactos)`);
+    if (!cacheError) showToast(`"${song.title}" eliminada de la biblioteca (archivos originales intactos)`);
   };
 
   return { songToDeleteFromLibrary, setSongToDeleteFromLibrary, confirmDeleteFromLibrary };

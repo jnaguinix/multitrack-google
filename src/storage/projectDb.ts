@@ -534,10 +534,9 @@ export async function loadAllProjectsFromDb(): Promise<SongProject[]> {
   });
 }
 
-export async function deleteProjectFromDb(projectId: string): Promise<void> {
+export async function deleteProjectFromDb(projectId: string): Promise<{ cacheError: string | null }> {
   if (isDesktopApp()) {
-    await deleteDesktopSong(projectId);
-    return;
+    return deleteDesktopSong(projectId);
   }
   const pendingTimer = sidecarDebounceTimers.get(projectId);
   if (pendingTimer) {
@@ -571,7 +570,7 @@ export async function deleteProjectFromDb(projectId: string): Promise<void> {
     };
 
     tx.oncomplete = () => {
-      resolve();
+      resolve({ cacheError: null });
     };
     tx.onerror = () => reject(tx.error);
   });
