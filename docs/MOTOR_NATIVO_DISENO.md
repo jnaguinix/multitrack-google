@@ -141,17 +141,17 @@ Se examinaron todos los accesos `audioEngine.*` en `src/` y `desktop/frontend/`.
 | # | Método / Propiedad | Archivos donde se llama | Categoría | Comportamiento en `nativeEngine.ts` (Escritorio) |
 |---|---|---|---|---|
 | 1 | `cancelQueuedJump` | `src/App.tsx` | En la interfaz | Llama al comando IPC `audio_cancel_jump`. |
-| 2 | `clearProjectFallback` | `src/App.tsx` | En la interfaz | No-op. En nativo no existe degradación por fallback a Web Audio. |
+| 2 | `clearProjectFallback` | — | — | Eliminado el 2026-11-23 (ninguna llamada; no existe degradación por fallback a Web Audio). |
 | 3 | `decodeStemBuffer` | `src/App.tsx` | Opcional | Exclusivo de Web Audio en navegador. En escritorio no se llama (ver flujo de importación abajo). Retorna Promise rechazada si se invoca por error. |
 | 4 | `evictSongFromRamCache` | `src/hooks/useSetlist.ts`, `useLibraryDeletion.ts` | En la interfaz | No-op en nativo (cuerpo vacío): no libera nada. Se conserva solo porque la interfaz la sigue llamando. |
 | 5 | `getCachedProjectBuffers` | `src/App.tsx` | En la interfaz | Devuelve `undefined`. En escritorio el audio no se almacena en `Map<string, AudioBuffer>`. |
-| 6 | `getEffectiveEngineModeForProject` | `src/components/SetlistPageView.tsx` | En la interfaz | Devuelve `'stream'` (la UI muestra el distintivo de reproducción desde disco). |
+| 6 | `getEffectiveEngineModeForProject` | — | — | Eliminado el 2026-11-23 (ninguna llamada). |
 | 7 | `getEngineMode` | `src/App.tsx` | En la interfaz | Devuelve `'stream'`. |
 | 8 | `getGlobalStreamStats` | `src/audio/audioEngine.ts` | Opcional | Devuelve las métricas de underruns y rendimiento recolectadas desde Rust vía `audio_get_stats`. |
 | 9 | `getProjectPcmEstimatedMB` | `src/components/LibraryView.tsx`, `src/components/SetlistPageView.tsx` | En la interfaz | Calcula la estimación de tamaño de archivo PCM en disco: $\text{frames} \times \text{canales} \times 2 \text{ bytes}$. |
 | 10 | `getRamBudgetMB` | `src/App.tsx` | En la interfaz | Devuelve `0` o valor neutral (en escritorio no hay límite de presupuesto de RAM Web Audio). |
 | 11 | `getSongRamCacheInfo` | `src/App.tsx`, `src/components/LiveSetView.tsx`, `src/components/SetlistPageView.tsx` | En la interfaz | Devuelve `{ isReady: true, cachedCount: total, totalCount: total }` si el proyecto tiene caché PCM completa en disco. |
-| 12 | `getTotalCachedMB` | `src/App.tsx` | En la interfaz | Devuelve el tamaño en MB ocupado por los búferes circulares de streaming activos (~15 MB). |
+| 12 | `getTotalCachedMB` | — | — | Eliminado el 2026-11-23 (ninguna llamada). |
 | 13 | `getTotalDurationSec` | `src/App.tsx` | En la interfaz | Devuelve la duración máxima en segundos de las pistas cargadas en el motor nativo. |
 | 14 | `getTrackMeters` | `src/components/MultitrackMixer.tsx`, `src/components/TimelineArranger.tsx`, `desktop/frontend/RemoteConnectionBridge.tsx` | En la interfaz | **Síncrono.** Devuelve la última instantánea `MetersSnapshot` (con `rms: 0..1`, `peak: 0..1` y `clipping: bool`) recibida en caché local desde Rust. |
 | 15 | `getTransportState` | `desktop/frontend/RemoteConnectionBridge.tsx` | En la interfaz | **Síncrono.** Devuelve el último `TransportState` interpolado localmente a 60 fps. |

@@ -46,7 +46,7 @@ desktop/src-tauri/src/audio/playback/
 ├── bus.rs          # TrackBus: tipos y conversión de buses de salida (main, cue, both)
 ├── clock.rs        # ClockJumps y advance_clock: saltos de sección y vueltas de vamp aplicados al reloj current_frame desde el callback
 ├── fade.rs         # FadeEnvelope, FadeType y constantes (FADE_MS = 8.0): micro-fundidos
-├── feeder_io.rs    # Lectura de frames PCM desde disco, staging, drenaje con remuestreo, begin_new_segment (hoy solo lo usa una prueba) y FeederAliveGuard
+├── feeder_io.rs    # Lectura de frames PCM desde disco, staging, drenaje con remuestreo y FeederAliveGuard
 ├── jumps.rs        # queue_section_jump, cancel_queued_jump, toggle_vamp (impl PlaybackEngine)
 ├── transport.rs    # play, pause, stop, seek (con rewind_tracks: handshake con los feeders), get_playback_state, reopen_stream (impl PlaybackEngine)
 ├── types.rs        # NativeSongSection, QueuedJumpInfo, ActiveTrack, PlaybackStateSnapshot, PeakMeter/BusMeters (medidores), etc.
@@ -59,7 +59,7 @@ desktop/src-tauri/src/audio/playback/
 - **Seek con handshake por generación** (`rewind_tracks`): el transporte sube `seek_generation`, activa buffering, pide el seek a cada feeder, espera su `seek_ack`, vacía el anillo y publica `flush_done`. El feeder no empuja audio nuevo hasta ese momento y el callback no sale de buffering sin `flush_done` de la generación vigente. Si un feeder murió o no responde en 5 s, la pista se da por terminada y se registra un aviso.
 - **Fin de pista**: una pista más corta que la canción no se da por terminada: su feeder sigue empujando silencio pasado el final del archivo, para que su posición siga al reloj y vuelva a sonar tras un salto o un vamp hacia atrás. `eof` solo lo marca el transporte cuando un feeder no confirma un seek (hilo caído); esa pista no cuenta para salir de buffering ni para el contador de underruns.
 - **Underrun**: `consume_track_block` lee solo fotogramas completos, anota los que faltaron en `skip_frames` y descarta esa cantidad cuando el audio vuelve, para que la pista siga alineada con el reloj.
-- **Empalmes**: el tramo parcial previo a un salto o vuelta de vamp se completa con ceros y solo se emiten los fotogramas con señal (no el bloque entero que devuelve `process_partial` de rubato); el empalme entra al remuestreador como una sola señal continua (lo que queda antes de la transición, el cruce de 8 ms y el audio nuevo), sin vaciarlo ni reiniciarlo: reiniciar el filtro dejaba el audio nuevo desplazado respecto al cruce y se oía un clic. `begin_new_segment` (reinicio de tramo, como tras un seek) NO se llama en los empalmes.
+- **Empalmes**: el tramo parcial previo a un salto o vuelta de vamp se completa con ceros y solo se emiten los fotogramas con señal (no el bloque entero que devuelve `process_partial` de rubato); el empalme entra al remuestreador como una sola señal continua (lo que queda antes de la transición, el cruce de 8 ms y el audio nuevo), sin vaciarlo ni reiniciarlo: reiniciar el filtro dejaba el audio nuevo desplazado respecto al cruce y se oía un clic.
 
 ---
 
@@ -70,7 +70,7 @@ Gestiona el catálogo de canciones y la integridad de metadatos locales:
   - Implementa la persistencia atómica de `library.json` mediante `save_library_internal` (escritura en un `.tmp` único y reemplazo con `replace_file_atomic`: renombrado atómico con reintentos breves y sin escritura directa de respaldo; la copia de seguridad `.backup.json` se refresca igual). El sidecar usa el mismo reemplazo y su fallo se devuelve (`SaveSongOutcome.sidecar_error` en `library_save_song`) para que la interfaz lo avise (`src/storage/failureTracker.ts`, `src/utils/userNotices.ts`).
   - Manejo del archivo sidecar `omnitracks.project.json` en la carpeta de origen de cada canción (con fallback de lectura en `.omnitracks.json` para retrocompatibilidad). No guarda los picos de forma de onda (`sidecar_json`): eran ~90 % de sus líneas y se regeneran con la caché PCM.
   - Picos de forma de onda fuera de `library.json`: `peaks/<id>.json` (`store_song_peaks`, `attach_song_peaks`, `remove_song_peaks`, `read_song_peaks`). Se guardan solo si cambiaron (resumen hash en memoria). `load_library_internal` (guardados) no los trae; `load_library_for_ui` (`library_load`) los une solo a las canciones del setlist, y `library_get_song_peaks` entrega los de una canción cuando se añade al setlist. Una biblioteca antigua con los picos dentro se migra sola; si no se pueden escribir, se quedan en `library.json`.
-  - Comandos Tauri IPC expuestos: `library_load`, `library_get_song_peaks`, `library_save`, `library_save_song`, `library_delete_song`, `library_setlist_remove`, `library_setlist_clear`, `library_setlist_reorder`, `library_update_song_folder`, `library_write_sidecar`, `library_read_sidecar`. Los tres `library_setlist_*` leen la biblioteca del disco y cambian solo `inSetlist`, `setlistOrder` y `activeSetlist` bajo el cerrojo (no reescriben una copia de la interfaz ni tocan `updatedAt`).
+  - Comandos Tauri IPC expuestos: `library_load`, `library_get_song_peaks`, `library_save_song`, `library_delete_song`, `library_setlist_remove`, `library_setlist_clear`, `library_setlist_reorder`, `library_update_song_folder`, `library_write_sidecar`, `library_read_sidecar`. Los tres `library_setlist_*` leen la biblioteca del disco y cambian solo `inSetlist`, `setlistOrder` y `activeSetlist` bajo el cerrojo (no reescriben una copia de la interfaz ni tocan `updatedAt`).
 
 ### 3.1 Guardado diferido, borrado y cierre de la ventana
 - **`src/storage/saveScheduler.ts`**: agrupa los cambios continuos de una canción (400 ms). Los guardados de una misma canción van en fila (uno no empieza hasta que termina el anterior). `cancel(id)` —lo usa `useLibraryDeletion` antes de borrar— descarta lo pendiente, espera lo que ya iba y durante 10 s ignora los guardados de esa canción, para que un fader movido hace un instante no la recree. `flush(id)` guarda y espera una canción; `flushAll` espera también lo que estaba en curso.
@@ -141,7 +141,7 @@ Puentes con el escritorio en `desktop/frontend/`: `bridgeLoop.ts` (bucle de inte
    audio_scan_folder / audio_scan_files (audio/mod.rs)
           │ Extrae metadatos y duraciones (sin decodificar a PCM)
           ▼
-   library_save_song & library_write_sidecar (library/mod.rs)
+   library_save_song (library/mod.rs: guarda la canción y su sidecar)
           │ Persiste en library.json y omnitracks.project.json
           ▼
 [Biblioteca de Repertorio] (library_load)
