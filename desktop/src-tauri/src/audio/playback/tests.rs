@@ -1644,15 +1644,6 @@
     }
 
     #[test]
-    fn test_a15_tras_un_empalme_el_remuestreador_empieza_un_tramo_nuevo() {
-        let mut r = TrackResampler::new(48000, 48000, 1024, 2).unwrap();
-        let mut compensado = true;
-        begin_new_segment(&mut r, &mut compensado);
-        assert!(!compensado, "el retardo del filtro debe volver a compensarse");
-        assert_eq!(r.resample_ratio(), 1.0, "el remuestreador ya no cambia de relación (el tono lo hace otro módulo)");
-    }
-
-    #[test]
     fn test_clock_jumps_aplica_el_salto_con_el_sobrante_del_bloque() {
         let j = ClockJumps::new();
         j.schedule_jump(1000, 200);

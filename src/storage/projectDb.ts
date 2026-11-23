@@ -4,8 +4,6 @@ import { isDesktopApp } from '../utils/nativeDialog';
 import { deleteDesktopSong, loadDesktopLibrary, saveDesktopSong } from './desktopLibrary';
 import { migrateTrackNames } from '../utils/instrumentCatalog';
 import {
-  collectAudioFromDirectory,
-  getRegisteredHandle,
   queryReadPermission,
   writeProjectSidecarToDirectory,
 } from './sourceFiles';
@@ -579,19 +577,6 @@ export async function deleteProjectFromDb(projectId: string): Promise<void> {
   });
 }
 
-export async function saveStemAudioToDb(stem: StoredAudioStem): Promise<void> {
-  if (stem.dirHandle) {
-    registerProjectDirHandle(stem.projectId, stem.dirHandle);
-  }
-  const db = await openDatabase();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction(STORE_AUDIO, 'readwrite');
-    tx.objectStore(STORE_AUDIO).put(stem);
-    tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error);
-  });
-}
-
 /**
  * Writes all stems of a song in a single atomic IndexedDB transaction using native Blobs
  */
@@ -610,23 +595,6 @@ export async function saveStemsBatchToDb(stems: StoredAudioStem[]): Promise<void
     for (const stem of stems) {
       store.put(stem);
     }
-    tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error);
-  });
-}
-
-/**
- * Deletes the original stem Blobs of the given tracks from IndexedDB (e.g. once the
- * OPFS .pcm copy has been verified). Buffer mode needs these Blobs, so only call it
- * when the song will be played from OPFS streaming.
- */
-export async function deleteStemsFromDb(projectId: string, trackIds: string[]): Promise<void> {
-  if (trackIds.length === 0) return;
-  const db = await openDatabase();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction(STORE_AUDIO, 'readwrite');
-    const store = tx.objectStore(STORE_AUDIO);
-    for (const trackId of trackIds) store.delete(`${projectId}:${trackId}`);
     tx.oncomplete = () => resolve();
     tx.onerror = () => reject(tx.error);
   });
@@ -665,16 +633,6 @@ async function hydrateStem(stem: StoredAudioStem): Promise<StoredAudioStem> {
     const name = (err as { name?: string })?.name;
     return { ...stem, unavailable: name === 'NotFoundError' ? 'missing' : 'permission' };
   }
-}
-
-export interface SourceAccessResult {
-  /** Stems readable right now (handle-based or copied) */
-  available: number;
-  /** Stems whose original file is gone / moved (needs relinking) */
-  missing: string[];
-  /** Stems still blocked by a denied permission */
-  denied: string[];
-  total: number;
 }
 
 export async function extractStemArrayBuffer(stem: StoredAudioStem): Promise<ArrayBuffer | null> {

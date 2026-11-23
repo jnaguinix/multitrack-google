@@ -203,15 +203,6 @@ pub struct MetersSnapshotDto {
     pub clipped: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SwitchSongResult {
-    pub project_id: String,
-    pub track_count: usize,
-    pub duration_sec: f64,
-    pub switch_duration_ms: u64,
-}
-
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProjectLoadInfo {

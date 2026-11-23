@@ -6,8 +6,6 @@ export type SplitRoutingMode = 'stereo' | 'split-mono';
 
 export type SetlistTransitionMode = 'stop' | 'cue-next' | 'auto-play';
 
-export type AudioEngineMode = 'buffer' | 'stream';
-
 export interface TrackPcmMetadata {
   sampleRate: number;
   channels: number;
@@ -116,16 +114,6 @@ export interface SongProject {
   sections: SongSection[];
   tracks: TrackChannel[];
   updatedAt: number;
-}
-
-export interface SongRamCacheInfo {
-  cachedCount: number;
-  totalCount: number;
-  isReady: boolean;
-  isPreloading: boolean;
-  skippedByRamBudget?: boolean;
-  cachedBytes?: number;
-  estimatedBytes?: number;
 }
 
 export interface TransportState {

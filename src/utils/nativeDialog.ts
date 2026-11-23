@@ -118,17 +118,6 @@ export async function importTrackBytesRaw(
 }
 
 
-export interface NativeCacheStats {
-  totalBytes: number;
-  projectCount: number;
-  projectIds: string[];
-}
-
-export interface CleanOrphanResult {
-  freedBytes: number;
-  deletedCount: number;
-}
-
 export async function deleteProjectNativeCache(projectId: string): Promise<void> {
   const invoke = (window as any).__TAURI__?.core?.invoke;
   if (!invoke) return;
@@ -138,18 +127,6 @@ export async function deleteProjectNativeCache(projectId: string): Promise<void>
     console.error('[NativeDialog] Error eliminando caché nativa del proyecto:', err);
     throw err;
   }
-}
-
-export async function getNativeCacheStats(): Promise<NativeCacheStats> {
-  const invoke = (window as any).__TAURI__?.core?.invoke;
-  if (!invoke) return { totalBytes: 0, projectCount: 0, projectIds: [] };
-  return await invoke('audio_get_cache_stats');
-}
-
-export async function cleanOrphanNativeCaches(validProjectIds: string[]): Promise<CleanOrphanResult> {
-  const invoke = (window as any).__TAURI__?.core?.invoke;
-  if (!invoke) return { freedBytes: 0, deletedCount: 0 };
-  return await invoke('audio_clean_orphan_caches', { validProjectIds });
 }
 
 export async function checkFilesExist(paths: string[]): Promise<boolean[]> {

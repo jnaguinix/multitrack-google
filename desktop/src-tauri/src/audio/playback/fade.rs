@@ -36,10 +36,6 @@ impl FadeEnvelope {
         self.current_frame = 0;
     }
 
-    pub fn is_fading_out(&self) -> bool {
-        self.fade_type == FadeType::FadeOut
-    }
-
     pub fn is_fade_out_complete(&self) -> bool {
         self.fade_type == FadeType::FadeOut && self.current_frame >= self.fade_frames
     }

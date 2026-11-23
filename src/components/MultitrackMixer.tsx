@@ -1,7 +1,6 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useRef } from 'react';
 import {
   MetersSnapshot,
-  OutputBus,
   SongProject,
   TrackChannel,
   TransportState,
@@ -348,7 +347,6 @@ export interface MultitrackMixerProps {
   onChangeTrackGain: (trackId: string, gain: number) => void;
   onChangeTrackPan: (trackId: string, pan: number) => void;
   onChangeClickGain: (gain: number) => void;
-  onChangeClickPan?: (pan: number) => void;
   onToggleClick: () => void;
   onChangeMasterGain: (gain: number) => void;
   /** «Aur.»: enviar una pista también a los auriculares. */
@@ -376,7 +374,6 @@ export const MultitrackMixer: React.FC<MultitrackMixerProps> = ({
   onChangeTrackGain,
   onChangeTrackPan,
   onChangeClickGain,
-  onChangeClickPan,
   onToggleClick,
   onChangeMasterGain,
   onToggleTrackMonitor,

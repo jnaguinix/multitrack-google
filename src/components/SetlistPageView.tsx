@@ -1,29 +1,15 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Play,
-  Pause,
-  MoreHorizontal,
   Plus,
-  GripHorizontal,
   Flag,
-  Filter,
-  Music,
-  X,
-  ChevronLeft,
-  ChevronRight,
-  Trash2,
-  Zap,
   RotateCcw,
   Sliders,
-  Repeat,
   Radio,
 } from 'lucide-react';
 import {
-  OutputBus,
   QuantizeMode,
   SetlistTransitionMode,
   SongProject,
-  TrackChannel,
   TransportState,
 } from '../types/project';
 import { audioEngine } from '../audio/audioEngine';
@@ -31,7 +17,7 @@ import { nativeAudioEngine } from '../audio/nativeAudioEngine';
 import { extractAudioFilesFromDataTransfer } from '../utils/fileImportHelper';
 import { formatMmSs, formatTimecode } from './TransportDeck';
 import { drawSectionWaveBars, getSongWaveformPeaks } from '../utils/songWaveform';
-import { MultitrackMixer, gainToDb } from './MultitrackMixer';
+import { MultitrackMixer } from './MultitrackMixer';
 import { isDesktopApp } from '../utils/nativeDialog';
 import { SongPickerModal } from './SongPickerModal';
 import { SetlistStrip, SongTileStatus } from './SetlistStrip';
@@ -68,7 +54,6 @@ interface SetlistPageViewProps {
   onOpenSectionEditor: () => void;
   onEditTracks?: () => void;
   onPickInstrument?: (trackId: string) => void;
-  onAddStemsToCurrentSong: (files: FileList | File[]) => void;
   onQuickImportNewSongFiles: (files: FileList | File[]) => void;
   onQuickImportNativeFolder?: (folderPath: string) => void;
   onQuickImportNativeFiles?: (filePaths: string[]) => void;
@@ -77,7 +62,6 @@ interface SetlistPageViewProps {
   onChangeTrackGain: (trackId: string, gain: number) => void;
   onChangeTrackPan: (trackId: string, pan: number) => void;
   onChangeClickGain: (gain: number) => void;
-  onChangeClickPan?: (pan: number) => void;
   onToggleClick: () => void;
   onChangeMasterGain: (gain: number) => void;
   onToggleTrackMonitor?: (trackId: string) => void;
@@ -98,12 +82,6 @@ interface SetlistPageViewProps {
 
 function songDuration(song: SongProject): number {
   return song.durationSec || ((song.totalBars || 24) * 4 * 60) / (song.bpm || 120);
-}
-
-function formatTrackDb(gain: number): string {
-  const db = gainToDb(gain);
-  if (!isFinite(db)) return '-∞ dB';
-  return `${db > 0 ? '+' : ''}${db.toFixed(1)} dB`;
 }
 
 export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
@@ -128,7 +106,6 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
   onOpenSectionEditor,
   onEditTracks,
   onPickInstrument,
-  onAddStemsToCurrentSong,
   onQuickImportNewSongFiles,
   onQuickImportNativeFolder,
   onQuickImportNativeFiles,
@@ -137,7 +114,6 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
   onChangeTrackGain,
   onChangeTrackPan,
   onChangeClickGain,
-  onChangeClickPan,
   onToggleClick,
   onChangeMasterGain,
   onToggleTrackMonitor,
@@ -149,9 +125,6 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
   onSetSongTransition,
   onAddSectionTemplate,
 }) => {
-  const [trackFilterText, setTrackFilterText] = useState('');
-  const [isFilterOpen, setIsFilterOpen] = useState(false);
-  const [dragOverCardIdx, setDragOverCardIdx] = useState<number | null>(null);
   const [cursorNotice, setCursorNotice] = useState<string | null>(null);
   const [isFloatingMixerOpen, setIsFloatingMixerOpen] = useState(false);
   const [showClearConfirm, setShowClearConfirm] = useState(false);
@@ -161,7 +134,6 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
   const setlistIds = useMemo(() => new Set(setlistQueue.map((s) => s.id)), [setlistQueue]);
 
   const masterCanvasRef = useRef<HTMLCanvasElement | null>(null);
-  const addAudioInputRef = useRef<HTMLInputElement | null>(null);
 
   const totalDurationSec = useMemo(() => {
     if (!project) return 0;
@@ -240,19 +212,11 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
     }, 2500);
   };
 
-  // Filtered project for the tracks grid & floating Mixer
-  const filteredProjectForMixer = useMemo(() => {
-    if (!project) return null;
-    const q = trackFilterText.trim().toLowerCase();
-    if (!q) return project;
-    return {
-      ...project,
-      tracks: project.tracks.filter((t) => t.name.toLowerCase().includes(q)),
-    };
-  }, [project, trackFilterText]);
+  // La consola flotante muestra la canción completa (el filtro de pistas por texto se retiró: no tenía interfaz).
+  const filteredProjectForMixer = project;
 
   const isProjectInSetlist = Boolean(project && setlistQueue.some((s) => s.id === project.id));
-  const startOffsets = setlistQueue.reduce<number[]>((acc, song, i) => {
+  const startOffsets = setlistQueue.reduce<number[]>((acc, _song, i) => {
     acc.push(i === 0 ? 0 : acc[i - 1] + songDuration(setlistQueue[i - 1]));
     return acc;
   }, []);
@@ -525,7 +489,6 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
               onChangeTrackGain={onChangeTrackGain}
               onChangeTrackPan={onChangeTrackPan}
               onChangeClickGain={onChangeClickGain}
-              onChangeClickPan={onChangeClickPan}
               onToggleClick={onToggleClick}
               onChangeMasterGain={onChangeMasterGain}
               onToggleTrackMonitor={onToggleTrackMonitor}

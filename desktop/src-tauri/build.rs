@@ -51,15 +51,12 @@ fn main() {
             "audio_check_files_exist",
             "library_load",
             "library_get_song_peaks",
-            "library_save",
             "library_save_song",
             "library_delete_song",
             "library_setlist_remove",
             "library_setlist_clear",
             "library_setlist_reorder",
             "library_update_song_folder",
-            "library_write_sidecar",
-            "library_read_sidecar",
         ]);
         tauri_build::try_build(tauri_build::Attributes::new().app_manifest(manifest))
             .expect("Tauri build configuration");

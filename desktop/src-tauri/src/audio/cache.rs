@@ -4,7 +4,6 @@ use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 
 pub const CACHE_FORMAT_VERSION: u32 = 1;
-pub const WAVEFORM_PEAKS_COUNT: usize = 320;
 pub const MONO_SIDE_THRESHOLD_DB: f64 = -40.0;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

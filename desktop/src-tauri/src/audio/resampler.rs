@@ -9,7 +9,6 @@ use rubato::{
 pub struct TrackResampler {
     resampler: SincFixedIn<f32>,
     pub chunk_size: usize,
-    channels: usize,
     output_delay_frames: usize,
     /// Relación salida/entrada: frecuencia de destino / frecuencia de origen.
     ratio: f64,
@@ -48,7 +47,6 @@ impl TrackResampler {
         Ok(Self {
             resampler,
             chunk_size,
-            channels,
             output_delay_frames,
             ratio,
         })
@@ -69,10 +67,6 @@ impl TrackResampler {
 
     pub fn output_frames_max(&self) -> usize {
         self.resampler.output_frames_max()
-    }
-
-    pub fn nbr_channels(&self) -> usize {
-        self.channels
     }
 
     /// Resamples a chunk of multi-channel audio data.

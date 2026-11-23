@@ -254,7 +254,6 @@ const ALLOW_BOM: Record<string, string> = {};
 // Recorrido del repositorio
 // ---------------------------------------------------------------------------------------------
 const ROOT = path.resolve(process.cwd());
-const rel = (p: string) => path.relative(ROOT, p).replace(/\\/g, '/');
 
 /**
  * Archivos del repositorio: los agregados a git Y los nuevos sin agregar (respetando .gitignore). Antes solo se

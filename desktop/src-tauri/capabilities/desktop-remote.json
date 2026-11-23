@@ -57,14 +57,11 @@
     "allow-audio-analyze-loudness",
     "allow-library-load",
     "allow-library-get-song-peaks",
-    "allow-library-save",
     "allow-library-save-song",
     "allow-library-delete-song",
     "allow-library-setlist-remove",
     "allow-library-setlist-clear",
     "allow-library-setlist-reorder",
-    "allow-library-update-song-folder",
-    "allow-library-write-sidecar",
-    "allow-library-read-sidecar"
+    "allow-library-update-song-folder"
   ]
 }
