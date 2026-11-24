@@ -16,6 +16,8 @@ import { audioEngine } from '../audio/audioEngine';
 import { nativeAudioEngine } from '../audio/nativeAudioEngine';
 import { isDesktopApp } from '../utils/nativeDialog';
 import { drawSectionWaveBars, getSongWaveformPeaks } from '../utils/songWaveform';
+import { isPadOnlySong, noteIndexToLabel, parseKeyToNoteIndex, subdivisionBadge } from '../utils/padSong';
+import { PadStagePanel } from './PadStagePanel';
 
 /**
  * LIVE SET — the performance page.
@@ -70,6 +72,7 @@ function clockParts(totalSec: number): { main: string; tenths: string } {
 type SongStatus = 'ready' | 'preparing' | 'pending';
 
 function songStatus(song: SongProject): SongStatus {
+  if (isPadOnlySong(song)) return 'ready';
   // Escritorio: el estado sale de la caché PCM nativa, no del motor web (OPFS).
   if (isDesktopApp()) {
     if (nativeAudioEngine.isProjectImporting(song.id)) return 'preparing';
@@ -163,7 +166,8 @@ export const LiveSetView: React.FC<LiveSetViewProps> = ({
     );
   }
 
-  const sections: SongSection[] = project ? [...project.sections].sort((a, b) => a.startTimeSec - b.startTimeSec) : [];
+  const padOnly = isPadOnlySong(project);
+  const sections: SongSection[] = project && !padOnly ? [...project.sections].sort((a, b) => a.startTimeSec - b.startTimeSec) : [];
   const total = Math.max(1, transport.totalDurationSec || project?.durationSec || 1);
   const now = Math.min(total, Math.max(0, transport.currentTimeSec));
   const remaining = total - now;
@@ -205,9 +209,16 @@ export const LiveSetView: React.FC<LiveSetViewProps> = ({
               {project && (
                 <p className="lt-live-song-details">
                   {hasRealArtist && <span>{project.artist}</span>}
-                  <strong>{project.keySignature}</strong>
-                  <span>{project.bpm} BPM</span>
-                  <span>{sections.length} {sections.length === 1 ? 'sección' : 'secciones'}</span>
+                  <strong>{padOnly ? noteIndexToLabel(parseKeyToNoteIndex(project.keySignature)) : project.keySignature}</strong>
+                  <span>
+                    {project.bpm} BPM
+                    {padOnly ? ` · ${subdivisionBadge(project.clickSubdivision)}` : ''}
+                  </span>
+                  <span>
+                    {padOnly
+                      ? 'Modo continuo · Pad + Click'
+                      : `${sections.length} ${sections.length === 1 ? 'sección' : 'secciones'}`}
+                  </span>
                 </p>
               )}
             </div>
@@ -217,12 +228,18 @@ export const LiveSetView: React.FC<LiveSetViewProps> = ({
                 <div className="lt-live-clock">
                   {clock.main}<span className="lt-live-clock-tenths">.{clock.tenths}</span>
                 </div>
-                <p className="lt-live-secondary">Quedan {mmss(remainingShown)} de {mmss(total)}</p>
+                <p className="lt-live-secondary">
+                  {padOnly ? 'Modo continuo · Sin fin automático' : `Quedan ${mmss(remainingShown)} de ${mmss(total)}`}
+                </p>
               </div>
             )}
           </header>
 
-          {project && (
+          {project && padOnly && (
+            <PadStagePanel mode="live" project={project} transport={transport} />
+          )}
+
+          {project && !padOnly && (
             <>
               <div className="lt-live-map" role="group" aria-label="Mapa de la canción. Selecciona una sección para saltar.">
                 <LiveWaveform project={project} duration={total} />
@@ -373,19 +390,21 @@ export const LiveSetView: React.FC<LiveSetViewProps> = ({
               <span className="hidden lg:inline">Parar</span>
             </button>
 
-            <button
-              type="button"
-              onClick={onToggleVamp}
-              disabled={!project}
-              className="lt-live-btn"
-              data-on={transport.isVamping || undefined}
-              aria-pressed={transport.isVamping}
-              aria-keyshortcuts="V"
-              title="Repetir la sección actual hasta que la sueltes"
-            >
-              <Repeat className="w-4 h-4" />
-              <span>{transport.isVamping ? 'Repitiendo' : 'Repetir sección'}</span>
-            </button>
+            {!padOnly && (
+              <button
+                type="button"
+                onClick={onToggleVamp}
+                disabled={!project}
+                className="lt-live-btn"
+                data-on={transport.isVamping || undefined}
+                aria-pressed={transport.isVamping}
+                aria-keyshortcuts="V"
+                title="Repetir la sección actual hasta que la sueltes"
+              >
+                <Repeat className="w-4 h-4" />
+                <span>{transport.isVamping ? 'Repitiendo' : 'Repetir sección'}</span>
+              </button>
+            )}
           </div>
 
           <div className="flex items-center gap-3 min-w-0">
@@ -441,8 +460,8 @@ export const LiveSetView: React.FC<LiveSetViewProps> = ({
                   <span className="min-w-0 flex-1 text-left">
                     <span className="block lt-live-song-title">{song.title}</span>
                     <span className="block text-xs text-[var(--lt-mut)] tabular-nums">
-                      {isCurrent ? (transport.isPlaying ? 'Sonando' : 'Cargada') : isNext ? 'Siguiente' :`${song.bpm} BPM`}
-                      {dur > 0 ? `, ${mmss(dur)}` : ''}
+                      {isCurrent ? (transport.isPlaying ? 'Sonando' : 'Cargada') : isNext ? 'Siguiente' : `${song.bpm} BPM`}
+                      {isPadOnlySong(song) ? ' · Pad' : dur > 0 ? `, ${mmss(dur)}` : ''}
                     </span>
                   </span>
                   <span className="lt-live-status" data-status={status} title={STATUS_LABEL[status]}>

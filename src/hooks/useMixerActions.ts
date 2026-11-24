@@ -1,6 +1,7 @@
 import { logAsyncError } from '../utils/asyncErrors';
 import { audioEngine as defaultAudioEngine } from '../audio/audioEngine';
 import { SongProject, QuantizeMode, SongSection } from '../types/project';
+import { DEFAULT_PAD_GAIN, isPadOnlySong } from '../utils/padSong';
 
 interface UseMixerActionsDeps {
   audioEngine?: typeof defaultAudioEngine;
@@ -37,6 +38,34 @@ export function useMixerActions({
 
   const handleToggleClick = () => {
     updateCurrentProject((p) => ({ ...p, clickEnabled: !p.clickEnabled }));
+  };
+
+  const handleChangeKeySignature = (keySignature: string) => {
+    updateCurrentProject((p) => ({ ...p, keySignature }));
+  };
+
+  const handleChangeBeatsPerBar = (beatsPerBar: number) => {
+    updateCurrentProject((p) => ({
+      ...p,
+      beatsPerBar,
+      ...(p.padOnly ? { beatUnit: beatsPerBar === 6 ? 8 : 4 } : {}),
+    }));
+  };
+
+  const handleChangeClickSubdivision = (clickSubdivision: 1 | 2 | 4) => {
+    updateCurrentProject((p) => ({ ...p, clickSubdivision }));
+  };
+
+  const handleTogglePad = () => {
+    updateCurrentProject((p) => ({ ...p, padEnabled: p.padEnabled === false }));
+  };
+
+  const handleChangePadGain = (padGain: number) => {
+    updateCurrentProject((p) => ({ ...p, padGain }));
+  };
+
+  const handleTogglePadMonitor = () => {
+    updateCurrentProject((p) => ({ ...p, padMonitor: !p.padMonitor }));
   };
 
   const handleToggleTrackMute = (trackId: string) => {
@@ -111,6 +140,7 @@ export function useMixerActions({
       cueMasterGain: 1.0,
       // El envío a auriculares y el canal de click de una secuencia dividida también vuelven a 0 dB (antes no se tocaban).
       monitorGain: 1.0,
+      ...(isPadOnlySong(p) ? { padGain: DEFAULT_PAD_GAIN, padEnabled: true } : {}),
       tracks: p.tracks.map((t) => ({
         ...t,
         gain: 1.0,
@@ -148,6 +178,12 @@ export function useMixerActions({
     handleChangePitch,
     handleChangeQuantize,
     handleToggleClick,
+    handleChangeKeySignature,
+    handleChangeBeatsPerBar,
+    handleChangeClickSubdivision,
+    handleTogglePad,
+    handleChangePadGain,
+    handleTogglePadMonitor,
     handleToggleTrackMute,
     handleToggleTrackSolo,
     handleToggleTrackMonitor,

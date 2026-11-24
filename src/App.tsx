@@ -307,6 +307,12 @@ export default function App() {
     handleChangePitch,
     handleChangeQuantize,
     handleToggleClick,
+    handleChangeKeySignature,
+    handleChangeBeatsPerBar,
+    handleChangeClickSubdivision,
+    handleTogglePad,
+    handleChangePadGain,
+    handleTogglePadMonitor,
     handleToggleTrackMute,
     handleToggleTrackSolo,
     handleToggleTrackMonitor,
@@ -339,6 +345,9 @@ export default function App() {
     onChangeMonitorGain: handleChangeMonitorGain,
     onChangeTrackCueGain: handleChangeTrackCueGain,
     onToggleTrackCueMute: handleToggleTrackCueMute,
+    onTogglePad: handleTogglePad,
+    onChangePadGain: handleChangePadGain,
+    onTogglePadMonitor: handleTogglePadMonitor,
     onPickInstrument: setInstrumentPickerTrackId,
   };
 
@@ -373,6 +382,7 @@ export default function App() {
   });
 
   const {
+    handleCreatePadSong,
     handleAddToSetlist,
     handleRemoveFromSetlist,
     handleClearSetlist,
@@ -508,6 +518,10 @@ export default function App() {
               onChangeQuantize={handleChangeQuantize}
               onChangePitch={handleChangePitch}
               onChangeBpm={handleChangeBpm}
+              onChangeKeySignature={handleChangeKeySignature}
+              onChangeBeatsPerBar={handleChangeBeatsPerBar}
+              onChangeClickSubdivision={handleChangeClickSubdivision}
+              onCreatePadSong={handleCreatePadSong}
               onSeekSeconds={handleSeekSeconds}
               onJumpSection={handleJumpSection}
               onCancelQueuedJump={handleCancelQueuedJump}

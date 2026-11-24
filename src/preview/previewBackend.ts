@@ -118,6 +118,10 @@ export function createPreviewBackend() {
   let masterGain = 1;
   let cueMasterGain = 0.708;
   let monitorGain = 1;
+  let clickEnabled = false;
+  let clickGain = 0.8;
+  let clickSubdivision = 1;
+  let padState = { activeMode: false, enabled: false, note: 0, gain: 0.85, monitor: false };
   let callbacks = 0;
   let settings = { host: 'WASAPI', deviceName: null as string | null, sampleRate: 48000, bufferSize: null as number | null, testChannel: null as number | null };
 
@@ -138,7 +142,7 @@ export function createPreviewBackend() {
     if (vamping && loopRange && position >= loopRange[1]) {
       position = loopRange[0] + (position - loopRange[1]);
     }
-    if (position >= duration) {
+    if (duration > 0 && position >= duration) {
       position = duration;
       playing = false;
     }
@@ -155,12 +159,18 @@ export function createPreviewBackend() {
       const level = audible ? Math.min(0.98, (0.25 + 0.35 * Math.abs(Math.sin(t * (1.3 + i * 0.37) + i))) * Math.min(2, c!.gain)) : 0;
       return { trackId: id, l: level, r: level * 0.94 };
     });
+    if (padState.activeMode) {
+      const level = playing && padState.enabled ? Math.min(0.9, (0.22 + 0.08 * Math.sin(t * 0.8)) * Math.min(2, padState.gain)) : 0;
+      tracks.push({ trackId: '__pad__', l: level, r: level * 0.96 });
+    }
     const sum = Math.min(0.98, tracks.reduce((m, x) => Math.max(m, x.l), 0) * masterGain);
     const pair = (v: number) => ({ l: v, r: v * 0.95 });
     // Envío a auriculares: pistas marcadas «Aur.» y audibles, con el fader Monitor.
-    const sent = tracks.reduce((m, x) => (controls.get(x.trackId)?.monitor ? Math.max(m, x.l) : m), 0);
-    const monitor = Math.min(0.98, sent * monitorGain);
-    return { tracks, main: pair(sum), cue: pair(0), out: pair(sum), click: pair(0), monitor: pair(monitor), clipped: false };
+    const sentFromTracks = tracks.reduce((m, x) => (controls.get(x.trackId)?.monitor ? Math.max(m, x.l) : m), 0);
+    const padMonitorLv = padState.activeMode && padState.monitor ? (tracks.find((x) => x.trackId === '__pad__')?.l ?? 0) : 0;
+    const monitor = Math.min(0.98, Math.max(sentFromTracks, padMonitorLv) * monitorGain);
+    const clickLv = playing && clickEnabled ? Math.min(0.9, 0.35 * clickGain * Math.abs(Math.sin(t * (bpm / 60) * Math.PI * clickSubdivision))) : 0;
+    return { tracks, main: pair(sum), cue: pair(clickLv * cueMasterGain), out: pair(sum), click: pair(clickLv), monitor: pair(monitor), clipped: false };
   };
 
   const snapshot = () => {
@@ -183,13 +193,19 @@ export function createPreviewBackend() {
       queuedSectionId: queued?.sectionId ?? null,
       isVamping: vamping,
       pitchSemitones: pitch,
-      clickEnabled: false,
-      clickGain: 1,
+      clickEnabled,
+      clickGain,
+      clickSubdivision,
       quantizeMode: quantize,
       splitMono,
       masterGain,
       cueMasterGain,
       monitorGain,
+      padActive: padState.activeMode,
+      padEnabled: padState.enabled,
+      padNote: padState.note,
+      padGain: padState.gain,
+      padMonitor: padState.monitor,
       meters: meters(),
       trackControls: trackIds.map((id) => ({ trackId: id, ...(controls.get(id) as TrackControl) })),
     };
@@ -234,19 +250,23 @@ export function createPreviewBackend() {
       songsById.delete(a?.songId);
       return null;
     },
-    // Setlist: como en Rust, solo cambian la pertenencia y el orden.
+    // Setlist: como en Rust, solo cambian la pertenencia y el orden (y se borran las canciones sin secuencia).
     library_setlist_remove: (a) => {
       const s = songsById.get(a?.songId);
       const estaba = Boolean(s?.inSetlist);
-      if (s) songsById.set(s.id, { ...s, inSetlist: false, setlistOrder: undefined });
+      if (s) {
+        if (s.padOnly) songsById.delete(s.id);
+        else songsById.set(s.id, { ...s, inSetlist: false, setlistOrder: undefined });
+      }
       return estaba;
     },
     library_setlist_clear: () => {
       let n = 0;
-      for (const s of songsById.values()) {
+      for (const s of [...songsById.values()]) {
         if (s.inSetlist) {
           n += 1;
-          songsById.set(s.id, { ...s, inSetlist: false, setlistOrder: undefined });
+          if (s.padOnly) songsById.delete(s.id);
+          else songsById.set(s.id, { ...s, inSetlist: false, setlistOrder: undefined });
         }
       }
       return n;
@@ -273,11 +293,19 @@ export function createPreviewBackend() {
     audio_load_project: (a) => {
       const song = songsById.get(a?.projectId);
       loadedId = a?.projectId ?? null;
-      trackIds = song?.tracks.map((t) => t.id) ?? [];
-      sections = (a?.sections ?? song?.sections.map((s) => ({ id: s.id, name: s.name, startSec: s.startTimeSec, endSec: s.endTimeSec })) ?? []).map(
-        (s: any) => ({ id: s.id, name: s.name, startSec: s.startSec ?? s.start_sec, endSec: s.endSec ?? s.end_sec })
-      );
-      duration = song?.durationSec ?? Math.max(0, ...sections.map((s) => s.endSec));
+      if (a?.padConfig?.activeMode) {
+        padState = { ...a.padConfig };
+        trackIds = [];
+        sections = [];
+        duration = 0;
+      } else {
+        padState = { activeMode: false, enabled: false, note: 0, gain: 0, monitor: false };
+        trackIds = song?.tracks.map((t) => t.id) ?? [];
+        sections = (a?.sections ?? song?.sections.map((s) => ({ id: s.id, name: s.name, startSec: s.startTimeSec, endSec: s.endTimeSec })) ?? []).map(
+          (s: any) => ({ id: s.id, name: s.name, startSec: s.startSec ?? s.start_sec, endSec: s.endSec ?? s.end_sec })
+        );
+        duration = song?.durationSec ?? Math.max(0, ...sections.map((s) => s.endSec));
+      }
       bpm = a?.bpm ?? song?.bpm ?? 120;
       quantize = a?.quantizeMode ?? song?.quantizeMode ?? 'section-end';
       position = 0;
@@ -285,6 +313,7 @@ export function createPreviewBackend() {
       queued = null;
       vamping = false;
       loopRange = null;
+      controls.clear();
       for (const t of song?.tracks ?? []) controls.set(t.id, { gain: t.gain, pan: Math.round(t.pan * 100), muted: t.muted, soloed: t.soloed, monitor: false, splitSequence: false, cueGain: 1, cueMuted: false, bus: 'main' });
       const trackPeaks: Record<string, number[]> = {};
       for (const t of song?.tracks ?? []) trackPeaks[t.id] = t.peaks;
@@ -308,7 +337,7 @@ export function createPreviewBackend() {
     // ---- Motor: transporte
     audio_play: () => {
       tick();
-      if (position >= duration) position = 0;
+      if (duration > 0 && position >= duration) position = 0;
       playing = true;
       return null;
     },
@@ -325,7 +354,7 @@ export function createPreviewBackend() {
     },
     audio_seek: (a) => {
       tick();
-      position = Math.max(0, Math.min(duration, a?.positionSec ?? 0));
+      position = duration > 0 ? Math.max(0, Math.min(duration, a?.positionSec ?? 0)) : Math.max(0, a?.positionSec ?? 0);
       queued = null;
       return null;
     },
@@ -372,7 +401,20 @@ export function createPreviewBackend() {
       splitMono = Boolean(a?.enabled);
       return null;
     },
-    audio_set_metronome: () => null,
+    audio_set_metronome: (a) => {
+      const cfg = a?.config;
+      if (cfg) {
+        if (cfg.enabled != null) clickEnabled = Boolean(cfg.enabled);
+        if (cfg.gain != null) clickGain = Number(cfg.gain);
+        if (cfg.subdivision != null) clickSubdivision = Number(cfg.subdivision);
+        if (cfg.bpm != null) bpm = Number(cfg.bpm);
+      }
+      return null;
+    },
+    audio_set_pad: (a) => {
+      if (a?.config) padState = { ...padState, ...a.config };
+      return null;
+    },
 
     // ---- Dispositivo y ajustes de audio
     audio_get_config: () => settings,

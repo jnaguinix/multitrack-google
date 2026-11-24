@@ -11,6 +11,7 @@
 import type { SongProject, TrackChannel } from '../types/project';
 import { panToEngine } from '../utils/panScale';
 import { engineBus } from '../utils/instrumentCatalog';
+import { isPadOnlySong, padConfigFromProject } from '../utils/padSong';
 import { flightRecorder, type FlightRecorder } from '../utils/flightRecorder';
 import { ControlQueue, type ControlOp, type InvokeFn } from './controlQueue';
 
@@ -38,6 +39,11 @@ export interface EngineGlobals {
   cueMasterGain?: number;
   monitorGain?: number;
   pitchSemitones?: number;
+  padActive?: boolean;
+  padEnabled?: boolean;
+  padNote?: number;
+  padGain?: number;
+  padMonitor?: boolean;
 }
 
 export interface TrackDesired {
@@ -157,6 +163,32 @@ export function diffProjectControls(prev: SongProject | null, next: SongProject)
     ops.push({ key: 'pitch', cmd: 'audio_set_pitch', args: { semitones: next.pitchSemitones || 0 } });
   }
 
+  // Pad continuo (exclusivo de canciones sin secuencia)
+  const nextPad = padConfigFromProject(next);
+  const prevPad = prev ? padConfigFromProject(prev) : null;
+  const padChanged =
+    !prevPad ||
+    prevPad.activeMode !== nextPad.activeMode ||
+    prevPad.enabled !== nextPad.enabled ||
+    prevPad.note !== nextPad.note ||
+    !sameGain(prevPad.gain, nextPad.gain) ||
+    prevPad.monitor !== nextPad.monitor;
+  if (padChanged && (nextPad.activeMode || Boolean(prevPad?.activeMode))) {
+    const padGainOnly =
+      Boolean(prevPad) &&
+      prevPad!.activeMode === nextPad.activeMode &&
+      prevPad!.enabled === nextPad.enabled &&
+      prevPad!.note === nextPad.note &&
+      prevPad!.monitor === nextPad.monitor &&
+      !sameGain(prevPad!.gain, nextPad.gain);
+    ops.push({
+      key: 'pad',
+      cmd: 'audio_set_pad',
+      args: { config: nextPad },
+      ...(padGainOnly ? { continuous: true } : {}),
+    });
+  }
+
   // Pistas: solo los campos que cambiaron (todos si la pista es nueva)
   const before = new Map<string, TrackDesired>();
   for (const t of prev?.tracks ?? []) before.set(t.id, desiredTrack(t));
@@ -178,6 +210,7 @@ export function isContinuousOnly(ops: readonly ControlOp[]): boolean {
   return (
     ops.length > 0 &&
     ops.every((op) => {
+      if (op.continuous) return true;
       if (op.key === 'master') return true;
       if (!op.key.startsWith('track:')) return false;
       return Object.keys(op.args).every((k) => k === 'trackId' || k === 'gain' || k === 'pan' || k === 'cueGain');
@@ -279,14 +312,15 @@ export class ControlSync {
    */
   reconcile(engine: { trackControls?: readonly EngineTrackControl[] } & EngineGlobals, project: SongProject): string[] {
     const settled = this.queue.isIdle() && this.now() - this.queue.lastSendAt >= SETTLE_MS;
-    if (!settled || !engine.trackControls || engine.trackControls.length === 0) {
+    const hasTrackControls = Boolean(engine.trackControls && engine.trackControls.length > 0);
+    if (!settled || (!hasTrackControls && !isPadOnlySong(project))) {
       this.streaks.clear();
       return [];
     }
 
     // Diferencias actuales, por clave de control
     const found = new Map<string, { signature: string; summary: string; op: ControlOp }>();
-    for (const m of findTrackMismatches(project.tracks.map(desiredTrack), engine.trackControls)) {
+    for (const m of findTrackMismatches(project.tracks.map(desiredTrack), engine.trackControls ?? [])) {
       const args: Record<string, unknown> = { trackId: m.trackId };
       for (const f of m.fields) args[f] = m.desired[f];
       found.set(`track:${m.trackId}`, {
@@ -316,6 +350,23 @@ export class ControlSync {
         summary: `tono: motor=${engine.pitchSemitones} interfaz=${wantPitch}`,
         op: { key: 'pitch', cmd: 'audio_set_pitch', args: { semitones: wantPitch } },
       });
+    }
+    if (engine.padActive !== undefined) {
+      const wantPad = padConfigFromProject(project);
+      const padDiff =
+        engine.padActive !== wantPad.activeMode ||
+        (wantPad.activeMode &&
+          (engine.padEnabled !== wantPad.enabled ||
+            engine.padNote !== wantPad.note ||
+            (engine.padGain !== undefined && !sameGain(engine.padGain, wantPad.gain)) ||
+            (engine.padMonitor !== undefined && engine.padMonitor !== wantPad.monitor)));
+      if (padDiff) {
+        found.set('pad', {
+          signature: `active=${engine.padActive},on=${engine.padEnabled},note=${engine.padNote},gain=${engine.padGain},mon=${engine.padMonitor}`,
+          summary: `pad: motor=(${engine.padActive},${engine.padEnabled},${engine.padNote}) interfaz=(${wantPad.activeMode},${wantPad.enabled},${wantPad.note})`,
+          op: { key: 'pad', cmd: 'audio_set_pad', args: { config: wantPad } },
+        });
+      }
     }
 
     // Una diferencia solo se corrige si se repite en sondeos consecutivos (una orden en vuelo no cuenta)

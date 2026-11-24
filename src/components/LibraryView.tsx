@@ -7,6 +7,7 @@ import { isDesktopApp } from '../utils/nativeDialog';
 import { formatMmSs } from './TransportDeck';
 import { SongMetadataEditModal } from './modals/SongMetadataEditModal';
 import { filterSongs } from '../utils/songSearch';
+import { filterLibrarySongs } from '../utils/padSong';
 import { useProgressiveList } from '../hooks/useProgressiveList';
 import { MenuItem, MenuSeparator, PopoverMenu } from './ui/Menu';
 
@@ -39,15 +40,17 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
   const [query, setQuery] = useState('');
   const [sort, setSort] = useState<'name' | 'recent' | 'bpm'>('name');
 
+  const libraryProjects = useMemo(() => filterLibrarySongs(projects), [projects]);
+
   const visibleProjects = useMemo(() => {
-    const filtered = filterSongs(projects, query);
+    const filtered = filterSongs(libraryProjects, query);
     filtered.sort((a, b) => {
       if (sort === 'recent') return (b.updatedAt || 0) - (a.updatedAt || 0);
       if (sort === 'bpm') return (a.bpm || 0) - (b.bpm || 0);
       return a.title.localeCompare(b.title, 'es', { sensitivity: 'base' });
     });
     return filtered;
-  }, [projects, query, sort]);
+  }, [libraryProjects, query, sort]);
   const { shown, hasMore, remaining, showMore, sentinelRef } = useProgressiveList(visibleProjects, `${query}|${sort}`);
 
   return (
@@ -73,7 +76,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                     <div className="space-y-3">
             <div className="lt-library-toolbar">
               <h2 className="text-base font-semibold text-neutral-200">
-                Canciones ({query.trim() ? `${visibleProjects.length} de ${projects.length}` : projects.length})
+                Canciones ({query.trim() ? `${visibleProjects.length} de ${libraryProjects.length}` : libraryProjects.length})
               </h2>
               <label className="lt-picker-search">
                 <Search size={15} aria-hidden="true" />
@@ -95,8 +98,8 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
             </div>
 
             <div className="divide-y divide-studio-line">
-              {projects.length === 0 && <p className="rounded-lg bg-studio-panel p-4 text-sm text-studio-muted">Pulsa «Importar» arriba para añadir tu primera canción.</p>}
-              {projects.length > 0 && visibleProjects.length === 0 && <p className="rounded-lg bg-studio-panel p-4 text-sm text-studio-muted">Ninguna canción coincide con «{query}».</p>}
+              {libraryProjects.length === 0 && <p className="rounded-lg bg-studio-panel p-4 text-sm text-studio-muted">Pulsa «Importar» arriba para añadir tu primera canción.</p>}
+              {libraryProjects.length > 0 && visibleProjects.length === 0 && <p className="rounded-lg bg-studio-panel p-4 text-sm text-studio-muted">Ninguna canción coincide con «{query}».</p>}
               {shown.map((proj, index) => {
                 const isCurrent = proj.id === currentProjectId;
                 const durSec =

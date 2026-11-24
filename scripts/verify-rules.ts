@@ -191,7 +191,7 @@ export function findOwnModals(text: string, file: string): Finding[] {
 // ---------------------------------------------------------------------------------------------
 // Regla 5: controles de la mezcla con `invoke` suelto
 // ---------------------------------------------------------------------------------------------
-const MIX_COMMANDS = ['audio_set_track_controls', 'audio_set_master_gains', 'audio_set_metronome', 'audio_set_pitch', 'audio_update_project_config'];
+const MIX_COMMANDS = ['audio_set_track_controls', 'audio_set_master_gains', 'audio_set_metronome', 'audio_set_pad', 'audio_set_pitch', 'audio_update_project_config'];
 
 export function findLooseMixInvokes(text: string, file: string): Finding[] {
   const { code } = stripSource(text);

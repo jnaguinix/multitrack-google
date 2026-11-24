@@ -14,6 +14,7 @@ import {
   TransportState,
 } from '../types/project';
 import { orderTracksForDisplay } from '../utils/instrumentCatalog';
+import { isPadOnlySong } from '../utils/padSong';
 import { useLiveMeters } from '../audio/liveMeters';
 import { formatMmSs } from './TransportDeck';
 import { isDesktopApp, pickNativeFiles } from '../utils/nativeDialog';
@@ -272,6 +273,7 @@ export const TimelineArranger: React.FC<TimelineArrangerProps> = ({
     Math.min(1, transport.currentTimeSec / totalDurationSec)
   );
 
+  const isPadSong = isPadOnlySong(project);
   const anySolo = project.tracks.some((t) => t.soloed);
 
   const handleSeekByRatio = (ratio: number) => {
@@ -302,26 +304,28 @@ export const TimelineArranger: React.FC<TimelineArrangerProps> = ({
           {/* Left Header matching Track Controls width (264px / w-66) */}
           <div className="lt-arranger-channel bg-studio-panel shrink-0 px-3.5 py-2 border-r border-neutral-800 flex items-center justify-between">
             <span className="text-xs font-bold text-neutral-200">
-              Pistas ({project.tracks.length})
+              {isPadSong ? 'Sin secuencia' : `Pistas (${project.tracks.length})`}
             </span>
             <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={() => {
-                  if (isDesktopApp()) {
-                    pickNativeFiles().then((paths) => {
-                      if (paths && paths.length > 0) onAddNativeStemsToCurrentSong?.(paths);
-                    });
-                    return;
-                  }
-                  addStemInputRef.current?.click();
-                }}
-                className="text-xs font-bold text-studio-ink hover:text-studio-ink flex items-center gap-1 cursor-pointer whitespace-nowrap shrink-0"
-                title="Añadir archivo de audio a esta canción actual"
-              >
-                <Plus className="w-3.5 h-3.5" />
-                <span>Añadir Stem</span>
-              </button>
+              {!isPadSong && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (isDesktopApp()) {
+                      pickNativeFiles().then((paths) => {
+                        if (paths && paths.length > 0) onAddNativeStemsToCurrentSong?.(paths);
+                      });
+                      return;
+                    }
+                    addStemInputRef.current?.click();
+                  }}
+                  className="text-xs font-bold text-studio-ink hover:text-studio-ink flex items-center gap-1 cursor-pointer whitespace-nowrap shrink-0"
+                  title="Añadir archivo de audio a esta canción actual"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>Añadir Stem</span>
+                </button>
+              )}
               <input
                 ref={addStemInputRef}
                 type="file"
@@ -438,22 +442,43 @@ export const TimelineArranger: React.FC<TimelineArrangerProps> = ({
 
         {/* 2-Line Track Rows (64px / h-16 height so instrument names are large and 100% readable) */}
         {project.tracks.length === 0 ? (
-          <div className="flex-1 flex flex-col items-center justify-center p-10 text-center">
-            <Volume2 className="w-10 h-10 text-neutral-400 mb-2.5" />
-            <h3 className="text-base font-bold text-neutral-100 mb-1">
-              No hay pistas en este proyecto
-            </h3>
-            <p className="text-xs text-neutral-300 max-w-md mb-4">
-              Arrastra una canción desde el Repertorio izquierdo o suelta tus archivos de audio (.wav, .mp3, .m4a).
-            </p>
-            <button
-              type="button"
-              onClick={onOpenImportModal}
-              className="px-4 py-2 bg-studio-ink hover:bg-neutral-200 text-studio-ground font-bold text-xs rounded-lg cursor-pointer"
-            >
-              Importar Archivos de Audio
-            </button>
-          </div>
+          isPadSong ? (
+            <div className="flex-1 flex flex-col items-center justify-center p-10 text-center">
+              <Volume2 className="w-10 h-10 text-studio-accent mb-2.5" />
+              <h3 className="text-base font-bold text-neutral-100 mb-1">
+                Canción sin secuencia (Pad + Click)
+              </h3>
+              <p className="text-xs text-neutral-300 max-w-md mb-4">
+                Esta canción suena con pad continuo y metrónomo. Prepara el tono y el tiempo en Setlist o ajusta los niveles en Mezcla.
+              </p>
+              {onToggleDockedMixer && (
+                <button
+                  type="button"
+                  onClick={onToggleDockedMixer}
+                  className="px-4 py-2 bg-studio-ink hover:bg-neutral-200 text-studio-ground font-bold text-xs rounded-lg cursor-pointer"
+                >
+                  {isDockedMixerOpen ? 'Cerrar Consola Mixer' : 'Abrir Consola Mixer'}
+                </button>
+              )}
+            </div>
+          ) : (
+            <div className="flex-1 flex flex-col items-center justify-center p-10 text-center">
+              <Volume2 className="w-10 h-10 text-neutral-400 mb-2.5" />
+              <h3 className="text-base font-bold text-neutral-100 mb-1">
+                No hay pistas en este proyecto
+              </h3>
+              <p className="text-xs text-neutral-300 max-w-md mb-4">
+                Arrastra una canción desde el Repertorio izquierdo o suelta tus archivos de audio (.wav, .mp3, .m4a).
+              </p>
+              <button
+                type="button"
+                onClick={onOpenImportModal}
+                className="px-4 py-2 bg-studio-ink hover:bg-neutral-200 text-studio-ground font-bold text-xs rounded-lg cursor-pointer"
+              >
+                Importar Archivos de Audio
+              </button>
+            </div>
+          )
         ) : (
           <div className="divide-y divide-neutral-800/90">
             {orderTracksForDisplay(project.tracks).map((track: TrackChannel) => {
@@ -606,36 +631,38 @@ export const TimelineArranger: React.FC<TimelineArrangerProps> = ({
           )}
         </div>
 
-        <div className="flex items-center gap-3">
-          <button
-            type="button"
-            onClick={onAddMarkerAtPlayhead}
-            className="text-studio-ink hover:underline font-semibold flex items-center gap-1 cursor-pointer"
-          >
-            <Flag className="w-3.5 h-3.5" />
-            <span>+ Marcar Sección ({formatMmSs(transport.currentTimeSec)})</span>
-          </button>
-          <span aria-hidden="true">·</span>
-          <button
-            type="button"
-            onClick={onOpenSectionEditor}
-            className="text-neutral-200 hover:underline font-semibold cursor-pointer"
-          >
-            Editar Secciones ({project.sections.length})
-          </button>
-          {onEditTracks && (
-            <>
-              <span aria-hidden="true">·</span>
-              <button
-                type="button"
-                onClick={onEditTracks}
-                className="text-neutral-200 hover:underline font-semibold cursor-pointer"
-              >
-                Editar Pistas ({project.tracks.length})
-              </button>
-            </>
-          )}
-        </div>
+        {!isPadSong && (
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              onClick={onAddMarkerAtPlayhead}
+              className="text-studio-ink hover:underline font-semibold flex items-center gap-1 cursor-pointer"
+            >
+              <Flag className="w-3.5 h-3.5" />
+              <span>+ Marcar Sección ({formatMmSs(transport.currentTimeSec)})</span>
+            </button>
+            <span aria-hidden="true">·</span>
+            <button
+              type="button"
+              onClick={onOpenSectionEditor}
+              className="text-neutral-200 hover:underline font-semibold cursor-pointer"
+            >
+              Editar Secciones ({project.sections.length})
+            </button>
+            {onEditTracks && (
+              <>
+                <span aria-hidden="true">·</span>
+                <button
+                  type="button"
+                  onClick={onEditTracks}
+                  className="text-neutral-200 hover:underline font-semibold cursor-pointer"
+                >
+                  Editar Pistas ({project.tracks.length})
+                </button>
+              </>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );

@@ -96,7 +96,7 @@ export interface SongProject {
   clickEnabled: boolean;
   clickGain: number;
   clickPan?: number;
-  clickSubdivision: 1 | 2; // 1 = quarter notes, 2 = eighth notes
+  clickSubdivision: 1 | 2 | 4; // 1 = negras (×1), 2 = corcheas (×2), 4 = semicorcheas (×4)
   masterGain: number;
   /** Sonoridad medida por el motor (solo escritorio, en segundo plano). */
   loudness?: SongLoudness;
@@ -113,6 +113,14 @@ export interface SongProject {
   lastUsedAt?: number;
   sections: SongSection[];
   tracks: TrackChannel[];
+  /** Canción sin secuencia (solo pad sintetizado + click, vive únicamente en el setlist). */
+  padOnly?: boolean;
+  /** Si el pad está encendido (no silenciado) en una canción sin secuencia. */
+  padEnabled?: boolean;
+  /** Ganancia lineal del pad (0..4, por defecto 0.85). */
+  padGain?: number;
+  /** «Aur.»: envía el pad también a los auriculares. */
+  padMonitor?: boolean;
   updatedAt: number;
 }
 

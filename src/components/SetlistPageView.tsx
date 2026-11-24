@@ -21,6 +21,9 @@ import { MultitrackMixer } from './MultitrackMixer';
 import { isDesktopApp } from '../utils/nativeDialog';
 import { SongPickerModal } from './SongPickerModal';
 import { SetlistStrip, SongTileStatus } from './SetlistStrip';
+import { CreatePadSongModal } from './modals/CreatePadSongModal';
+import { PadStagePanel } from './PadStagePanel';
+import { isPadOnlySong } from '../utils/padSong';
 import { SECTION_TEMPLATES } from '../utils/sectionTemplates';
 import { MenuItem, MenuLabel, PopoverMenu } from './ui/Menu';
 import { Dialog, DialogBody, DialogFooter, DialogHeader } from './ui/Dialog';
@@ -68,6 +71,13 @@ interface SetlistPageViewProps {
   onChangeMonitorGain?: (gain: number) => void;
   onChangeTrackCueGain?: (trackId: string, gain: number) => void;
   onToggleTrackCueMute?: (trackId: string) => void;
+  onTogglePad?: () => void;
+  onChangePadGain?: (gain: number) => void;
+  onTogglePadMonitor?: () => void;
+  onChangeKeySignature?: (key: string) => void;
+  onChangeBeatsPerBar?: (beatsPerBar: number) => void;
+  onChangeClickSubdivision?: (subdivision: 1 | 2 | 4) => void;
+  onCreatePadSong?: (song: SongProject) => void;
   onResetMixer: () => void;
   onOptimizeProject: (song: SongProject) => void;
   /** Guarda las notas de una canción. */
@@ -81,6 +91,7 @@ interface SetlistPageViewProps {
 }
 
 function songDuration(song: SongProject): number {
+  if (isPadOnlySong(song)) return 0;
   return song.durationSec || ((song.totalBars || 24) * 4 * 60) / (song.bpm || 120);
 }
 
@@ -120,15 +131,24 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
   onChangeMonitorGain,
   onChangeTrackCueGain,
   onToggleTrackCueMute,
+  onTogglePad,
+  onChangePadGain,
+  onTogglePadMonitor,
+  onChangeKeySignature,
+  onChangeBeatsPerBar,
+  onChangeClickSubdivision,
+  onCreatePadSong,
   onResetMixer,
   onStartLive,
   onSetSongTransition,
   onAddSectionTemplate,
+  onChangeBpm,
 }) => {
   const [cursorNotice, setCursorNotice] = useState<string | null>(null);
   const [isFloatingMixerOpen, setIsFloatingMixerOpen] = useState(false);
   const [showClearConfirm, setShowClearConfirm] = useState(false);
   const [isPickerOpen, setIsPickerOpen] = useState(false);
+  const [isCreatePadOpen, setIsCreatePadOpen] = useState(false);
   const [isEditingStrip, setIsEditingStrip] = useState(false);
   const openPicker = () => setIsPickerOpen(true);
   const setlistIds = useMemo(() => new Set(setlistQueue.map((s) => s.id)), [setlistQueue]);
@@ -225,6 +245,7 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
 
   /** Estado de la caché de audio de una canción, tal como lo muestra su ficha. */
   const statusOf = (song: SongProject): SongTileStatus => {
+    if (isPadOnlySong(song)) return { text: 'Lista', tone: 'ready', title: 'Pad + Click listos al instante.' };
     const liveText = isDesktopApp() ? nativeAudioEngine.formatImportProgress(song.id) : null;
     if (isDesktopApp()) {
       if (liveText) return { text: liveText, tone: 'busy', title: `Generando la caché de audio: ${liveText}` };
@@ -243,7 +264,33 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
 
   const mapPanel =
     isProjectInSetlist && project ? (
-      <section className="lt-map" aria-label="Mapa de la canción">
+      isPadOnlySong(project) ? (
+        <section className="lt-map" aria-label="Preparar pad y metrónomo">
+          <header className="lt-map-header">
+            <div className="min-w-0">
+              <strong title={project.title}>{project.title}</strong>
+              <span>modo sin secuencia · prepara tono, BPM y subdivisión antes de pasar a En vivo</span>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <button type="button" onClick={() => setIsFloatingMixerOpen(true)} className="lt-control">
+                <Sliders size={16} /> Mezcla
+              </button>
+            </div>
+          </header>
+          <PadStagePanel
+            mode="prepare"
+            project={project}
+            transport={transport}
+            onChangeKeySignature={onChangeKeySignature}
+            onChangeBpm={onChangeBpm}
+            onChangeBeatsPerBar={onChangeBeatsPerBar}
+            onChangeClickSubdivision={onChangeClickSubdivision}
+            onTogglePad={onTogglePad}
+            onToggleClick={onToggleClick}
+          />
+        </section>
+      ) : (
+        <section className="lt-map" aria-label="Mapa de la canción">
         <header className="lt-map-header">
           <div className="min-w-0">
             <strong title={project.title}>{project.title}</strong>
@@ -329,6 +376,7 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
           </p>
         )}
       </section>
+      )
     ) : null;
 
   return (
@@ -353,7 +401,7 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
             <span>
               {setlistQueue.length === 0
                 ? 'Sin canciones'
-                : `${setlistQueue.length === 1 ? '1 canción' : setlistQueue.length + ' canciones'} · ${formatMmSs(setlistTotalSec)}`}
+                : `${setlistQueue.length === 1 ? '1 canción' : setlistQueue.length + ' canciones'}${setlistTotalSec > 0 ? ` · ${formatMmSs(setlistTotalSec)}` : ''}`}
             </span>
             {setlistQueue.length > 0 && (
               <span className={readyCount === setlistQueue.length ? 'lt-plan-ok' : 'lt-plan-warn'}>
@@ -423,7 +471,7 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
           isEditing={isEditingStrip}
           startOffsets={startOffsets}
           statusOf={statusOf}
-          canOptimize={(song) => !isDesktopApp() && !audioEngine.isProjectPcmReady(song) && song.tracks.length > 0}
+          canOptimize={(song) => !isDesktopApp() && !isPadOnlySong(song) && !audioEngine.isProjectPcmReady(song) && song.tracks.length > 0}
           onSelect={onRequestSongAction}
           onPlay={(song) => {
             if (project?.id === song.id) onPlayPause();
@@ -456,6 +504,16 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
           onQuickImportNewSongFiles={onQuickImportNewSongFiles}
           onQuickImportNativeFolder={onQuickImportNativeFolder}
           onQuickImportNativeFiles={onQuickImportNativeFiles}
+          onOpenCreatePad={onCreatePadSong ? () => setIsCreatePadOpen(true) : undefined}
+        />
+      )}
+
+      {isCreatePadOpen && (
+        <CreatePadSongModal
+          isOpen={isCreatePadOpen}
+          nextSetlistOrder={setlistQueue.length}
+          onClose={() => setIsCreatePadOpen(false)}
+          onCreate={(song) => onCreatePadSong?.(song)}
         />
       )}
 
@@ -495,6 +553,9 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
               onChangeMonitorGain={onChangeMonitorGain}
               onChangeTrackCueGain={onChangeTrackCueGain}
               onToggleTrackCueMute={onToggleTrackCueMute}
+              onTogglePad={onTogglePad}
+              onChangePadGain={onChangePadGain}
+              onTogglePadMonitor={onTogglePadMonitor}
               onResetMixer={onResetMixer}
               onPickInstrument={onPickInstrument}
             />
@@ -520,7 +581,7 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
           />
           <DialogBody>
             <p className="lt-dialog-note">
-              Tus canciones, pistas y marcadores seguirán <strong>completamente intactos en tu biblioteca</strong>. Podrás volver a agregarlas en cualquier momento.
+              Tus canciones normales, pistas y marcadores seguirán <strong>completamente intactos en tu biblioteca</strong>. Podrás volver a agregarlas en cualquier momento.
             </p>
           </DialogBody>
           <DialogFooter>

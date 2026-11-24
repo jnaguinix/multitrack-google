@@ -70,6 +70,27 @@ export function trackLevels(
   return { l: linearToPosition(l), r: linearToPosition(r) };
 }
 
+/** Medidor del pad continuo en canciones sin secuencia. */
+export function padLevels(
+  project: SongProject,
+  transport: TransportState,
+  meters: MetersSnapshot
+): StripLevels {
+  if (!transport.isPlaying || project.padEnabled === false) return { l: 0, r: 0 };
+  const reading = meters.tracks['__pad__'];
+  if (reading && reading.peak > 0) {
+    return {
+      l: linearToPosition(reading.l ?? reading.peak),
+      r: linearToPosition(reading.r ?? reading.peak),
+    };
+  }
+  const nbMain = meters.nativeBuses?.main;
+  if (nbMain && (nbMain.l > 0 || nbMain.r > 0)) {
+    return { l: linearToPosition(nbMain.l), r: linearToPosition(nbMain.r) };
+  }
+  return { l: 0, r: 0 };
+}
+
 /** Niveles de los cuatro buses: medidos en escritorio, estimados en la web. */
 export function computeMixerLevels(
   project: SongProject,

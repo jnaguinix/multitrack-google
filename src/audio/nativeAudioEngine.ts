@@ -11,6 +11,7 @@ import { ControlSync, initialTrackControl, type ControlOp, type EngineTrackContr
 import { flightRecorder } from '../utils/flightRecorder';
 import { debugMode } from '../utils/debugMode';
 import { SongProject, TrackChannel, TransportState, MetersSnapshot } from '../types/project';
+import { isPadOnlySong, padConfigFromProject } from '../utils/padSong';
 import { MeterBallistics, NativeMetersSnapshot } from './meterBallistics';
 import { StatePoller } from './statePoller';
 import { sameTransport } from '../utils/transportEqual';
@@ -57,6 +58,12 @@ export interface NativePlaybackSnapshot {
   bufferingMs?: number;
   /** El dispositivo de salida realmente abierto (null si aún no hay salida abierta). */
   openDevice?: { name: string; sampleRate: number; channels: number } | null;
+  /** Modo sin secuencia activo en el motor. */
+  padActive?: boolean;
+  padEnabled?: boolean;
+  padNote?: number;
+  padGain?: number;
+  padMonitor?: boolean;
   /** Picos reales medidos por el motor desde la consulta anterior. */
   meters?: NativeMetersSnapshot;
 }
@@ -190,7 +197,7 @@ export class NativeAudioEngine {
     return Boolean(
       this.currentProject &&
         this.loadedProjectId === this.currentProject.id &&
-        this.currentProject.tracks.length > 0
+        (this.currentProject.tracks.length > 0 || isPadOnlySong(this.currentProject))
     );
   }
 
@@ -582,19 +589,22 @@ export class NativeAudioEngine {
     }
 
     const loadTask = (async () => {
-      onProgress?.(10, `Verificando caché nativa para "${project.title}"...`);
+      const padOnly = isPadOnlySong(project);
+      if (!padOnly) {
+        onProgress?.(10, `Verificando caché nativa para "${project.title}"...`);
 
-      const cacheStatus = await this.checkProjectCacheStatus(project);
-      if (!cacheStatus.isReady && project.tracks.length > 0) {
-        if (this.isProjectImporting(project.id)) {
-          return { peaksMap, wasCancelled: false };
-        }
-        onProgress?.(20, 'Generando caché PCM nativa...');
-        const success = await this.generateNativeCacheForProject(project, onProgress);
-        if (!success) {
-          this.loadedProjectId = null;
-          this.onNoticeCallback?.(`La canción "${project.title}" no dispone de caché PCM nativa.`);
-          return { peaksMap, wasCancelled: false };
+        const cacheStatus = await this.checkProjectCacheStatus(project);
+        if (!cacheStatus.isReady && project.tracks.length > 0) {
+          if (this.isProjectImporting(project.id)) {
+            return { peaksMap, wasCancelled: false };
+          }
+          onProgress?.(20, 'Generando caché PCM nativa...');
+          const success = await this.generateNativeCacheForProject(project, onProgress);
+          if (!success) {
+            this.loadedProjectId = null;
+            this.onNoticeCallback?.(`La canción "${project.title}" no dispone de caché PCM nativa.`);
+            return { peaksMap, wasCancelled: false };
+          }
         }
       }
 
@@ -624,6 +634,7 @@ export class NativeAudioEngine {
           quantizeMode: project.quantizeMode || 'section-end',
           // La mezcla de cada pista viaja con la carga: ninguna nace a ganancia 1 ni con el bus deducido del ID.
           trackControls: project.tracks.map(initialTrackControl),
+          padConfig: padConfigFromProject(project),
         });
 
         // El motor tiene ahora esta canción (aunque ya no sea la elegida): `loadedProjectId` dice la verdad y Play
@@ -687,6 +698,7 @@ export class NativeAudioEngine {
   }
 
   public async preloadProject(project: SongProject): Promise<void> {
+    if (isPadOnlySong(project)) return;
     const invoke = getInvoke();
     if (!invoke) return;
     try {
@@ -730,7 +742,11 @@ export class NativeAudioEngine {
   public getTrackMeters(): MetersSnapshot {
     const isPlaying = this.currentTransport.isPlaying;
     if (!isPlaying) this.meterBallistics.reset();
-    const ids = this.currentProject ? this.currentProject.tracks.map((t) => t.id) : [];
+    const ids = this.currentProject
+      ? isPadOnlySong(this.currentProject)
+        ? ['__pad__']
+        : this.currentProject.tracks.map((t) => t.id)
+      : [];
     return this.meterBallistics.snapshot(ids, meterNow(), isPlaying);
   }
 
