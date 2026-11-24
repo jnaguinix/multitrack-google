@@ -64,6 +64,8 @@ export interface NativePlaybackSnapshot {
   padNote?: number;
   padGain?: number;
   padMonitor?: boolean;
+  padHarmony?: number;
+  padStyle?: number;
   /** Picos reales medidos por el motor desde la consulta anterior. */
   meters?: NativeMetersSnapshot;
 }

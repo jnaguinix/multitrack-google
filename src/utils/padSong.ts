@@ -1,4 +1,4 @@
-import type { SongProject } from '../types/project';
+import type { PadHarmony, PadStyle, SongProject } from '../types/project';
 
 export interface PadNoteOption {
   index: number;
@@ -41,6 +41,44 @@ export const TIME_SIGNATURE_OPTIONS: readonly { beatsPerBar: number; beatUnit: n
 ] as const;
 
 export const DEFAULT_PAD_GAIN = 0.85;
+
+export const PAD_HARMONY_OPTIONS: readonly { value: PadHarmony; engine: number; label: string; hint: string }[] = [
+  { value: 'open', engine: 0, label: 'Abierto', hint: 'Quinta y octava: funciona en mayor y menor' },
+  { value: 'major', engine: 1, label: 'Mayor', hint: 'Añade novena y tercera mayor cálida' },
+  { value: 'minor', engine: 2, label: 'Menor', hint: 'Añade tercera menor suave' },
+] as const;
+
+export const PAD_STYLE_OPTIONS: readonly { value: PadStyle; engine: number; label: string; hint: string }[] = [
+  { value: 'warm', engine: 0, label: 'Cálido', hint: 'Redondo y profundo para toda la canción' },
+  { value: 'shimmer', engine: 1, label: 'Ambiente', hint: 'Nube amplia con octava aérea y cola larga' },
+  { value: 'strings', engine: 2, label: 'Cuerdas', hint: 'Más presencia en medios para llenar la banda' },
+] as const;
+
+export function normalizePadHarmony(value: string | undefined): PadHarmony {
+  if (value === 'major' || value === 'minor') return value;
+  return 'open';
+}
+
+export function normalizePadStyle(value: string | undefined): PadStyle {
+  if (value === 'shimmer' || value === 'strings') return value;
+  return 'warm';
+}
+
+export function padHarmonyToEngine(value: PadHarmony | undefined): number {
+  return PAD_HARMONY_OPTIONS.find((o) => o.value === normalizePadHarmony(value))?.engine ?? 0;
+}
+
+export function padStyleToEngine(value: PadStyle | undefined): number {
+  return PAD_STYLE_OPTIONS.find((o) => o.value === normalizePadStyle(value))?.engine ?? 0;
+}
+
+export function padHarmonyLabel(value: PadHarmony | undefined): string {
+  return PAD_HARMONY_OPTIONS.find((o) => o.value === normalizePadHarmony(value))?.label ?? 'Abierto';
+}
+
+export function padStyleLabel(value: PadStyle | undefined): string {
+  return PAD_STYLE_OPTIONS.find((o) => o.value === normalizePadStyle(value))?.label ?? 'Cálido';
+}
 
 export function isPadOnlySong(song: Pick<SongProject, 'padOnly'> | null | undefined): boolean {
   return Boolean(song?.padOnly);
@@ -93,11 +131,13 @@ export interface PadEngineConfig {
   note: number;
   gain: number;
   monitor: boolean;
+  harmony: number;
+  style: number;
 }
 
 export function padConfigFromProject(project: SongProject | null | undefined): PadEngineConfig {
   if (!project?.padOnly) {
-    return { activeMode: false, enabled: false, note: 0, gain: 0, monitor: false };
+    return { activeMode: false, enabled: false, note: 0, gain: 0, monitor: false, harmony: 0, style: 0 };
   }
   const gain = Number.isFinite(project.padGain) ? (project.padGain as number) : DEFAULT_PAD_GAIN;
   return {
@@ -106,6 +146,8 @@ export function padConfigFromProject(project: SongProject | null | undefined): P
     note: parseKeyToNoteIndex(project.keySignature),
     gain,
     monitor: Boolean(project.padMonitor),
+    harmony: padHarmonyToEngine(project.padHarmony),
+    style: padStyleToEngine(project.padStyle),
   };
 }
 
@@ -117,6 +159,8 @@ export interface CreatePadSongParams {
   beatsPerBar?: number;
   beatUnit?: number;
   clickSubdivision?: 1 | 2 | 4;
+  padHarmony?: PadHarmony;
+  padStyle?: PadStyle;
   setlistOrder?: number;
   id?: string;
   now?: number;
@@ -158,6 +202,8 @@ export function createPadOnlySong(params: CreatePadSongParams): SongProject {
     padEnabled: true,
     padGain: DEFAULT_PAD_GAIN,
     padMonitor: false,
+    padHarmony: normalizePadHarmony(params.padHarmony),
+    padStyle: normalizePadStyle(params.padStyle),
     createdAt: now,
     lastUsedAt: now,
     updatedAt: now,

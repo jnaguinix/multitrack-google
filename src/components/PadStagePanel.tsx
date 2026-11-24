@@ -1,12 +1,18 @@
 import React from 'react';
 import { Volume2, VolumeX } from 'lucide-react';
-import type { SongProject, TransportState } from '../types/project';
+import type { PadHarmony, PadStyle, SongProject, TransportState } from '../types/project';
 import {
   CLICK_SUBDIVISION_OPTIONS,
   effectivePadNoteIndex,
   normalizeClickSubdivision,
+  normalizePadHarmony,
+  normalizePadStyle,
   noteIndexToLabel,
+  PAD_HARMONY_OPTIONS,
   PAD_NOTES,
+  PAD_STYLE_OPTIONS,
+  padHarmonyLabel,
+  padStyleLabel,
   parseKeyToNoteIndex,
   TIME_SIGNATURE_OPTIONS,
 } from '../utils/padSong';
@@ -19,6 +25,8 @@ interface PadStagePanelProps {
   onChangeBpm?: (bpm: number) => void;
   onChangeBeatsPerBar?: (beatsPerBar: number) => void;
   onChangeClickSubdivision?: (subdivision: 1 | 2 | 4) => void;
+  onChangePadHarmony?: (harmony: PadHarmony) => void;
+  onChangePadStyle?: (style: PadStyle) => void;
   onTogglePad?: () => void;
   onToggleClick?: () => void;
 }
@@ -35,6 +43,8 @@ export const PadStagePanel: React.FC<PadStagePanelProps> = ({
   onChangeBpm,
   onChangeBeatsPerBar,
   onChangeClickSubdivision,
+  onChangePadHarmony,
+  onChangePadStyle,
   onTogglePad,
   onToggleClick,
 }) => {
@@ -42,6 +52,10 @@ export const PadStagePanel: React.FC<PadStagePanelProps> = ({
   const baseNoteIdx = parseKeyToNoteIndex(project.keySignature);
   const activeNoteIdx = effectivePadNoteIndex(project.keySignature, project.pitchSemitones);
   const padOn = project.padEnabled !== false;
+  const harmony = normalizePadHarmony(project.padHarmony);
+  const style = normalizePadStyle(project.padStyle);
+  const harmonyLabel = padHarmonyLabel(harmony);
+  const styleLabel = padStyleLabel(style);
   const subdivision = normalizeClickSubdivision(project.clickSubdivision);
   const bpb = Math.max(2, Math.min(12, project.beatsPerBar || 4));
   const beatUnit = project.beatUnit || (bpb === 6 ? 8 : 4);
@@ -61,8 +75,8 @@ export const PadStagePanel: React.FC<PadStagePanelProps> = ({
             <p className="lt-pad-sub">
               {padOn
                 ? project.pitchSemitones !== 0
-                  ? `Sonando en ${noteIndexToLabel(activeNoteIdx)} (base ${noteIndexToLabel(baseNoteIdx)} ${project.pitchSemitones > 0 ? '+' : ''}${project.pitchSemitones} st)`
-                  : `Tono activo: ${noteIndexToLabel(activeNoteIdx)}`
+                  ? `Sonando en ${noteIndexToLabel(activeNoteIdx)} · ${harmonyLabel} · ${styleLabel} (base ${noteIndexToLabel(baseNoteIdx)} ${project.pitchSemitones > 0 ? '+' : ''}${project.pitchSemitones} st)`
+                  : `Tono activo: ${noteIndexToLabel(activeNoteIdx)} · ${harmonyLabel} · ${styleLabel}`
                 : 'Pad silenciado (solo click)'}
             </p>
           </div>
@@ -116,6 +130,45 @@ export const PadStagePanel: React.FC<PadStagePanelProps> = ({
             );
           })}
         </div>
+
+        {!isLive && (
+          <div className="lt-pad-options-row">
+            <div className="lt-field">
+              <span>Carácter</span>
+              <div className="lt-segmented" role="group" aria-label="Carácter armónico del pad">
+                {PAD_HARMONY_OPTIONS.map((opt) => (
+                  <button
+                    key={opt.value}
+                    type="button"
+                    className="lt-control"
+                    aria-pressed={harmony === opt.value}
+                    title={opt.hint}
+                    onClick={() => onChangePadHarmony?.(opt.value)}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="lt-field">
+              <span>Timbre</span>
+              <div className="lt-segmented" role="group" aria-label="Timbre del pad">
+                {PAD_STYLE_OPTIONS.map((opt) => (
+                  <button
+                    key={opt.value}
+                    type="button"
+                    className="lt-control"
+                    aria-pressed={style === opt.value}
+                    title={opt.hint}
+                    onClick={() => onChangePadStyle?.(opt.value)}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Bloque derecho: metrónomo moderno */}

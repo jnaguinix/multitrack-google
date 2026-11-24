@@ -7,6 +7,8 @@ import {
   Radio,
 } from 'lucide-react';
 import {
+  PadHarmony,
+  PadStyle,
   QuantizeMode,
   SetlistTransitionMode,
   SongProject,
@@ -74,6 +76,8 @@ interface SetlistPageViewProps {
   onTogglePad?: () => void;
   onChangePadGain?: (gain: number) => void;
   onTogglePadMonitor?: () => void;
+  onChangePadHarmony?: (harmony: PadHarmony) => void;
+  onChangePadStyle?: (style: PadStyle) => void;
   onChangeKeySignature?: (key: string) => void;
   onChangeBeatsPerBar?: (beatsPerBar: number) => void;
   onChangeClickSubdivision?: (subdivision: 1 | 2 | 4) => void;
@@ -134,6 +138,8 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
   onTogglePad,
   onChangePadGain,
   onTogglePadMonitor,
+  onChangePadHarmony,
+  onChangePadStyle,
   onChangeKeySignature,
   onChangeBeatsPerBar,
   onChangeClickSubdivision,
@@ -285,6 +291,8 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
             onChangeBpm={onChangeBpm}
             onChangeBeatsPerBar={onChangeBeatsPerBar}
             onChangeClickSubdivision={onChangeClickSubdivision}
+            onChangePadHarmony={onChangePadHarmony}
+            onChangePadStyle={onChangePadStyle}
             onTogglePad={onTogglePad}
             onToggleClick={onToggleClick}
           />

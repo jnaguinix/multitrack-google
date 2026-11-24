@@ -121,7 +121,7 @@ export function createPreviewBackend() {
   let clickEnabled = false;
   let clickGain = 0.8;
   let clickSubdivision = 1;
-  let padState = { activeMode: false, enabled: false, note: 0, gain: 0.85, monitor: false };
+  let padState = { activeMode: false, enabled: false, note: 0, gain: 0.85, monitor: false, harmony: 0, style: 0 };
   let callbacks = 0;
   let settings = { host: 'WASAPI', deviceName: null as string | null, sampleRate: 48000, bufferSize: null as number | null, testChannel: null as number | null };
 
@@ -206,6 +206,8 @@ export function createPreviewBackend() {
       padNote: padState.note,
       padGain: padState.gain,
       padMonitor: padState.monitor,
+      padHarmony: padState.harmony,
+      padStyle: padState.style,
       meters: meters(),
       trackControls: trackIds.map((id) => ({ trackId: id, ...(controls.get(id) as TrackControl) })),
     };
@@ -294,12 +296,12 @@ export function createPreviewBackend() {
       const song = songsById.get(a?.projectId);
       loadedId = a?.projectId ?? null;
       if (a?.padConfig?.activeMode) {
-        padState = { ...a.padConfig };
+        padState = { harmony: 0, style: 0, ...a.padConfig };
         trackIds = [];
         sections = [];
         duration = 0;
       } else {
-        padState = { activeMode: false, enabled: false, note: 0, gain: 0, monitor: false };
+        padState = { activeMode: false, enabled: false, note: 0, gain: 0, monitor: false, harmony: 0, style: 0 };
         trackIds = song?.tracks.map((t) => t.id) ?? [];
         sections = (a?.sections ?? song?.sections.map((s) => ({ id: s.id, name: s.name, startSec: s.startTimeSec, endSec: s.endTimeSec })) ?? []).map(
           (s: any) => ({ id: s.id, name: s.name, startSec: s.startSec ?? s.start_sec, endSec: s.endSec ?? s.end_sec })

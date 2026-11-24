@@ -313,6 +313,8 @@ export default function App() {
     handleTogglePad,
     handleChangePadGain,
     handleTogglePadMonitor,
+    handleChangePadHarmony,
+    handleChangePadStyle,
     handleToggleTrackMute,
     handleToggleTrackSolo,
     handleToggleTrackMonitor,
@@ -521,6 +523,8 @@ export default function App() {
               onChangeKeySignature={handleChangeKeySignature}
               onChangeBeatsPerBar={handleChangeBeatsPerBar}
               onChangeClickSubdivision={handleChangeClickSubdivision}
+              onChangePadHarmony={handleChangePadHarmony}
+              onChangePadStyle={handleChangePadStyle}
               onCreatePadSong={handleCreatePadSong}
               onSeekSeconds={handleSeekSeconds}
               onJumpSection={handleJumpSection}

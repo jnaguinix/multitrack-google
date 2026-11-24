@@ -2083,6 +2083,9 @@ html { zoom: var(--ui-zoom); }
 .lt-pad-stage-prepare .lt-field select,
 .lt-pad-stage-prepare .lt-field input,
 .lt-pad-stage-prepare .lt-metro-controls .lt-control { min-height: 32px; padding-top: 3px; padding-bottom: 3px; }
+.lt-pad-options-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-top: auto; }
+.lt-pad-stage-prepare .lt-pad-options-row { gap: 8px; }
+.lt-pad-stage-prepare .lt-pad-options-row .lt-control { min-height: 30px; padding: 3px 6px; font-size: 12px; }
 .lt-tile-pad-wave { display: flex; align-items: center; justify-content: flex-start; height: 34px; }
 .lt-tile-pad-badge {
   display: inline-flex;
@@ -2098,6 +2101,7 @@ html { zoom: var(--ui-zoom); }
 }
 @media (max-width: 900px) {
   .lt-pad-stage { grid-template-columns: minmax(0, 1fr); }
+  .lt-pad-options-row { grid-template-columns: minmax(0, 1fr); }
 }
 @media (prefers-reduced-motion: reduce) {
   .lt-pad-note, .lt-metro-beat { transition: none; }

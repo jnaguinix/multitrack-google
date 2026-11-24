@@ -440,6 +440,17 @@ async function main() {
     const noteOps = diffProjectControls(padA, padNote);
     assert(noteOps.length === 1 && noteOps[0].cmd === 'audio_set_pad' && !isContinuousOnly(noteOps), 'cambiar nota del pad se guarda de inmediato');
 
+    const padStyle = { ...padA, padHarmony: 'minor' as const, padStyle: 'shimmer' as const };
+    const styleOps = diffProjectControls(padA, padStyle);
+    assert(
+      styleOps.length === 1 &&
+        styleOps[0].cmd === 'audio_set_pad' &&
+        (styleOps[0].args.config as any).harmony === 2 &&
+        (styleOps[0].args.config as any).style === 1 &&
+        !isContinuousOnly(styleOps),
+      'cambiar armonía o timbre del pad envía audio_set_pad de inmediato'
+    );
+
     // Reconciliación sin trackControls
     const sent: Array<{ cmd: string; args?: Record<string, unknown> }> = [];
     let clock = 10_000;
@@ -454,7 +465,7 @@ async function main() {
     sync.syncAll(padA);
     await sync.queue.idle();
     clock += SETTLE_MS + 1;
-    const snap = { padActive: true, padEnabled: true, padNote: 0, padGain: padA.padGain, padMonitor: false };
+    const snap = { padActive: true, padEnabled: true, padNote: 0, padGain: padA.padGain, padMonitor: false, padHarmony: 0, padStyle: 0 };
     assert(sync.reconcile(snap, padA).length === 0, 'primera lectura discrepante del pad espera confirmación');
     const fixed = sync.reconcile(snap, padA);
     assert(fixed.includes('pad'), 'segunda lectura discrepante corrige el pad aunque no haya pistas');

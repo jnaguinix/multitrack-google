@@ -1,10 +1,12 @@
 import React, { useState } from 'react';
 import { Disc3 } from 'lucide-react';
-import { SongProject } from '../../types/project';
+import { PadHarmony, PadStyle, SongProject } from '../../types/project';
 import {
   CLICK_SUBDIVISION_OPTIONS,
   createPadOnlySong,
+  PAD_HARMONY_OPTIONS,
   PAD_NOTES,
+  PAD_STYLE_OPTIONS,
   TIME_SIGNATURE_OPTIONS,
 } from '../../utils/padSong';
 import { Dialog, DialogBody, DialogFooter, DialogHeader } from '../ui/Dialog';
@@ -29,6 +31,8 @@ export const CreatePadSongModal: React.FC<CreatePadSongModalProps> = ({
   const [bpm, setBpm] = useState(72);
   const [timeSig, setTimeSig] = useState('4/4');
   const [subdivision, setSubdivision] = useState<1 | 2 | 4>(1);
+  const [harmony, setHarmony] = useState<PadHarmony>('open');
+  const [style, setStyle] = useState<PadStyle>('warm');
 
   if (!isOpen) return null;
 
@@ -45,6 +49,8 @@ export const CreatePadSongModal: React.FC<CreatePadSongModalProps> = ({
       beatsPerBar: Number(bpbStr) || 4,
       beatUnit: Number(unitStr) || 4,
       clickSubdivision: subdivision,
+      padHarmony: harmony,
+      padStyle: style,
       setlistOrder: nextSetlistOrder,
     });
     onCreate(song);
@@ -136,6 +142,43 @@ export const CreatePadSongModal: React.FC<CreatePadSongModalProps> = ({
                     onClick={() => setSubdivision(opt.value)}
                   >
                     {opt.badge}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          <div className="lt-pad-options-row">
+            <div className="lt-field">
+              <span>Carácter</span>
+              <div className="lt-segmented" role="group" aria-label="Carácter armónico del pad">
+                {PAD_HARMONY_OPTIONS.map((opt) => (
+                  <button
+                    key={opt.value}
+                    type="button"
+                    className="lt-control"
+                    aria-pressed={harmony === opt.value}
+                    title={opt.hint}
+                    onClick={() => setHarmony(opt.value)}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="lt-field">
+              <span>Timbre</span>
+              <div className="lt-segmented" role="group" aria-label="Timbre del pad">
+                {PAD_STYLE_OPTIONS.map((opt) => (
+                  <button
+                    key={opt.value}
+                    type="button"
+                    className="lt-control"
+                    aria-pressed={style === opt.value}
+                    title={opt.hint}
+                    onClick={() => setStyle(opt.value)}
+                  >
+                    {opt.label}
                   </button>
                 ))}
               </div>

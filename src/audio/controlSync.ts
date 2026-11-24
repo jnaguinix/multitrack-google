@@ -44,6 +44,8 @@ export interface EngineGlobals {
   padNote?: number;
   padGain?: number;
   padMonitor?: boolean;
+  padHarmony?: number;
+  padStyle?: number;
 }
 
 export interface TrackDesired {
@@ -172,7 +174,9 @@ export function diffProjectControls(prev: SongProject | null, next: SongProject)
     prevPad.enabled !== nextPad.enabled ||
     prevPad.note !== nextPad.note ||
     !sameGain(prevPad.gain, nextPad.gain) ||
-    prevPad.monitor !== nextPad.monitor;
+    prevPad.monitor !== nextPad.monitor ||
+    prevPad.harmony !== nextPad.harmony ||
+    prevPad.style !== nextPad.style;
   if (padChanged && (nextPad.activeMode || Boolean(prevPad?.activeMode))) {
     const padGainOnly =
       Boolean(prevPad) &&
@@ -180,6 +184,8 @@ export function diffProjectControls(prev: SongProject | null, next: SongProject)
       prevPad!.enabled === nextPad.enabled &&
       prevPad!.note === nextPad.note &&
       prevPad!.monitor === nextPad.monitor &&
+      prevPad!.harmony === nextPad.harmony &&
+      prevPad!.style === nextPad.style &&
       !sameGain(prevPad!.gain, nextPad.gain);
     ops.push({
       key: 'pad',
@@ -359,11 +365,13 @@ export class ControlSync {
           (engine.padEnabled !== wantPad.enabled ||
             engine.padNote !== wantPad.note ||
             (engine.padGain !== undefined && !sameGain(engine.padGain, wantPad.gain)) ||
-            (engine.padMonitor !== undefined && engine.padMonitor !== wantPad.monitor)));
+            (engine.padMonitor !== undefined && engine.padMonitor !== wantPad.monitor) ||
+            (engine.padHarmony !== undefined && engine.padHarmony !== wantPad.harmony) ||
+            (engine.padStyle !== undefined && engine.padStyle !== wantPad.style)));
       if (padDiff) {
         found.set('pad', {
-          signature: `active=${engine.padActive},on=${engine.padEnabled},note=${engine.padNote},gain=${engine.padGain},mon=${engine.padMonitor}`,
-          summary: `pad: motor=(${engine.padActive},${engine.padEnabled},${engine.padNote}) interfaz=(${wantPad.activeMode},${wantPad.enabled},${wantPad.note})`,
+          signature: `active=${engine.padActive},on=${engine.padEnabled},note=${engine.padNote},gain=${engine.padGain},mon=${engine.padMonitor},har=${engine.padHarmony},sty=${engine.padStyle}`,
+          summary: `pad: motor=(${engine.padActive},${engine.padEnabled},${engine.padNote},${engine.padHarmony},${engine.padStyle}) interfaz=(${wantPad.activeMode},${wantPad.enabled},${wantPad.note},${wantPad.harmony},${wantPad.style})`,
           op: { key: 'pad', cmd: 'audio_set_pad', args: { config: wantPad } },
         });
       }
