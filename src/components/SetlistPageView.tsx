@@ -271,32 +271,20 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
   const mapPanel =
     isProjectInSetlist && project ? (
       isPadOnlySong(project) ? (
-        <section className="lt-map" aria-label="Preparar pad y metrónomo">
-          <header className="lt-map-header">
-            <div className="min-w-0">
-              <strong title={project.title}>{project.title}</strong>
-              <span>modo sin secuencia · prepara tono, BPM y subdivisión antes de pasar a En vivo</span>
-            </div>
-            <div className="flex flex-wrap items-center gap-2">
-              <button type="button" onClick={() => setIsFloatingMixerOpen(true)} className="lt-control">
-                <Sliders size={16} /> Mezcla
-              </button>
-            </div>
-          </header>
-          <PadStagePanel
-            mode="prepare"
-            project={project}
-            transport={transport}
-            onChangeKeySignature={onChangeKeySignature}
-            onChangeBpm={onChangeBpm}
-            onChangeBeatsPerBar={onChangeBeatsPerBar}
-            onChangeClickSubdivision={onChangeClickSubdivision}
-            onChangePadHarmony={onChangePadHarmony}
-            onChangePadStyle={onChangePadStyle}
-            onTogglePad={onTogglePad}
-            onToggleClick={onToggleClick}
-          />
-        </section>
+        <PadStagePanel
+          mode="prepare"
+          project={project}
+          transport={transport}
+          onChangeKeySignature={onChangeKeySignature}
+          onChangeBpm={onChangeBpm}
+          onChangeBeatsPerBar={onChangeBeatsPerBar}
+          onChangeClickSubdivision={onChangeClickSubdivision}
+          onChangePadHarmony={onChangePadHarmony}
+          onChangePadStyle={onChangePadStyle}
+          onTogglePad={onTogglePad}
+          onToggleClick={onToggleClick}
+          onOpenMixer={() => setIsFloatingMixerOpen(true)}
+        />
       ) : (
         <section className="lt-map" aria-label="Mapa de la canción">
         <header className="lt-map-header">
@@ -383,7 +371,7 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
             Esta canción aún no tiene secciones. Usa «Añadir sección» mientras reproduces para dividirla en Intro, Verso, Coro, Puente…
           </p>
         )}
-      </section>
+        </section>
       )
     ) : null;
 

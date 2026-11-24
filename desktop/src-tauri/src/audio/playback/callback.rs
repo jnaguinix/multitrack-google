@@ -565,7 +565,7 @@ impl BlockMixer {
             let t = (f + 1) as f32;
             let (master_g, cue_g, monitor_g) = (master0 + d_master * t, cue0 + d_cue * t, monitor0 + d_monitor * t);
 
-            // En canciones sin secuencia el Pad ya tiene su propia envolvente suave (2,5 s / 3 s):
+            // En canciones sin secuencia el Pad ya tiene su propia envolvente suave (1,8 s / 3 s):
             // el micro-fundido de 8 ms solo se aplica al Click para que se apague en seco al pausar/parar
             // mientras el Pad continúa su bajada progresiva sin salto entre bloques.
             let (click_env, out_env) = if pad_only_active {

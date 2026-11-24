@@ -1,5 +1,5 @@
 import React from 'react';
-import { Volume2, VolumeX } from 'lucide-react';
+import { Sliders, Volume2, VolumeX } from 'lucide-react';
 import type { PadHarmony, PadStyle, SongProject, TransportState } from '../types/project';
 import {
   CLICK_SUBDIVISION_OPTIONS,
@@ -29,6 +29,7 @@ interface PadStagePanelProps {
   onChangePadStyle?: (style: PadStyle) => void;
   onTogglePad?: () => void;
   onToggleClick?: () => void;
+  onOpenMixer?: () => void;
 }
 
 /**
@@ -47,6 +48,7 @@ export const PadStagePanel: React.FC<PadStagePanelProps> = ({
   onChangePadStyle,
   onTogglePad,
   onToggleClick,
+  onOpenMixer,
 }) => {
   const isLive = mode === 'live';
   const baseNoteIdx = parseKeyToNoteIndex(project.keySignature);
@@ -80,16 +82,31 @@ export const PadStagePanel: React.FC<PadStagePanelProps> = ({
                 : 'Pad silenciado (solo click)'}
             </p>
           </div>
-          {!isLive && onTogglePad ? (
-            <button
-              type="button"
-              className="lt-control"
-              aria-pressed={padOn}
-              onClick={onTogglePad}
-            >
-              {padOn ? <Volume2 size={15} /> : <VolumeX size={15} />}
-              <span>{padOn ? 'Pad activo' : 'Pad silenciado'}</span>
-            </button>
+          {!isLive ? (
+            <div className="lt-pad-head-actions">
+              {onOpenMixer && (
+                <button
+                  type="button"
+                  className="lt-control"
+                  onClick={onOpenMixer}
+                  title="Abrir consola rápida de mezcla"
+                >
+                  <Sliders size={14} />
+                  <span>Mezcla</span>
+                </button>
+              )}
+              {onTogglePad && (
+                <button
+                  type="button"
+                  className="lt-control"
+                  aria-pressed={padOn}
+                  onClick={onTogglePad}
+                >
+                  {padOn ? <Volume2 size={15} /> : <VolumeX size={15} />}
+                  <span>{padOn ? 'Pad activo' : 'Pad silenciado'}</span>
+                </button>
+              )}
+            </div>
           ) : (
             <span className="lt-pad-pill" data-active={padOn && transport.isPlaying || undefined}>
               {padOn ? (transport.isPlaying ? 'Sonando' : 'Pad listo') : 'Silenciado'}

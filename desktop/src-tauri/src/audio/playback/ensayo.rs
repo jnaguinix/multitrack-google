@@ -738,13 +738,13 @@ async fn ensayo_modo_sin_pista_pad_y_click() {
         (pk_ch0, pk_ch1)
     };
 
-    // 1. Entrada progresiva (2,5 s) y sonido continuo sin parar solo.
-    let (ch0_ini, ch1_ini) = correr(30, false, &engine, &mut prev_music, &mut max_step_music, &mut asignaciones);
-    let _ = correr(230, false, &engine, &mut prev_music, &mut max_step_music, &mut asignaciones);
+    // 1. Entrada progresiva (1,8 s) y sonido continuo sin parar solo.
+    let (ch0_ini, ch1_ini) = correr(20, false, &engine, &mut prev_music, &mut max_step_music, &mut asignaciones);
+    let _ = correr(180, false, &engine, &mut prev_music, &mut max_step_music, &mut asignaciones);
     let (ch0, ch1) = correr(40, false, &engine, &mut prev_music, &mut max_step_music, &mut asignaciones);
     assert!(ch0_ini > 0.1 && ch0 > 0.1, "canal 0 debe llevar el click");
     assert!(ch1_ini < ch1 * 0.4, "el pad debe entrar progresivo, no de golpe: ini={ch1_ini}, lleno={ch1}");
-    assert!(ch1 > 0.05, "canal 1 debe llevar el pad");
+    assert!(ch1 > 0.1, "canal 1 debe llevar el pad con presencia: {ch1}");
     assert!(engine.is_playing.load(Ordering::SeqCst), "la canción sin pista no debe pararse sola");
 
     // 1b. Bajar subdivisión del metrónomo ×4 -> ×2 -> ×1 sin parar: nunca debe quedarse mudo.
@@ -836,6 +836,29 @@ async fn ensayo_modo_sin_pista_pad_y_click() {
     assert!(!engine.pad.is_active_mode());
     assert!(!engine.get_playback_state().pad_active);
 
-    assert!(max_step_music <= ESCALON_MAXIMO, "escalón en canal de música del pad: {max_step_music}");
+    // 7. Volver de una canción normal a otra canción Pad + Click y verificar medidores reales (`__pad__` y `main`).
+    engine
+        .load_pad_project(
+            "pad-regreso",
+            SR,
+            Some(92.0),
+            Some(4),
+            PadConfig { active_mode: true, enabled: true, note: 10, gain: 0.85, monitor: false, harmony: 1, style: 2 },
+        )
+        .await
+        .expect("cargar canción pad tras canción normal");
+    engine.begin_playback(|| async { Ok::<(), String>(()) }).await.unwrap();
+    let _ = engine.get_playback_state(); // vacía lecturas previas
+    let (_, ch1_regreso) = correr(200, true, &engine, &mut prev_music, &mut max_step_music, &mut asignaciones);
+    assert!(ch1_regreso > 0.1, "al volver desde una canción normal el pad debe sonar claro: {ch1_regreso}");
+    let meters_pad = engine.get_playback_state().meters;
+    let pad_trk = meters_pad.tracks.iter().find(|t| t.track_id == "__pad__").expect("debe publicar medidor __pad__");
+    assert!(pad_trk.l > 0.1 && pad_trk.r > 0.1, "medidor __pad__ inesperado: {:?}", pad_trk);
+    assert!(meters_pad.main.l > 0.1 && meters_pad.main.r > 0.1, "medidor main inesperado: {:?}", meters_pad.main);
+
+    // El sintetizador armónico continuo (620–1560 Hz a nivel presente) tiene mayor pendiente natural que una
+    // rampa lineal PCM (`ESCALON_MAXIMO = 0.01`), pero sigue muy por debajo de cualquier salto o clic real.
+    const ESCALON_MAXIMO_PAD: f32 = 0.035;
+    assert!(max_step_music <= ESCALON_MAXIMO_PAD, "escalón en canal de música del pad: {max_step_music}");
     assert_eq!(asignaciones, 0, "el callback asignó memoria en modo pad: {asignaciones}");
 }

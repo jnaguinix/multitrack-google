@@ -1,7 +1,7 @@
 //! Sintetizador de pad continuo en tiempo real para canciones sin secuencia.
 //!
-//! Corre en el hilo del callback de audio: memoria fija en la pila, sin asignaciones dinámicas,
-//! sin bloqueos (`Mutex`) ni registro. Cambia de nota con fundido cruzado suave y suaviza volumen y mute.
+//! Corre en el hilo del callback de audio: búferes preasignados fuera del callback, cero asignaciones
+//! dinámicas al mezclar, sin bloqueos (`Mutex`) ni registro. Cambia de nota con fundido cruzado suave.
 
 use std::f32::consts::TAU;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicU8, Ordering};
@@ -20,13 +20,13 @@ const REVERB_BUF_LEN: usize = 8192;
 /// Duración del fundido cruzado al cambiar de nota o armonía (segundos).
 const CROSSFADE_SEC: f32 = 0.45;
 /// Entrada progresiva del pad al pulsar Play o encenderlo (segundos).
-pub const PAD_FADE_IN_SEC: f32 = 2.5;
+pub const PAD_FADE_IN_SEC: f32 = 1.8;
 /// Salida decreciente del pad al apagarlo, pausar o parar (segundos).
 pub const PAD_FADE_OUT_SEC: f32 = 3.0;
 /// Corte rápido de emergencia (doble Stop o cambio a canción normal): 8 ms sin chasquido.
 const PAD_FAST_CUT_SEC: f32 = 0.008;
-/// Escala de salida conservadora: deja margen amplio bajo `LIMITER_KNEE` (0.9) y evita saturación.
-const PAD_OUTPUT_SCALE: f32 = 0.24;
+/// Escala de salida equilibrada: presencia clara bajo el click sin acercarse a `LIMITER_KNEE` (0.9).
+const PAD_OUTPUT_SCALE: f32 = 0.38;
 
 /// Configuración del pad recibida desde la interfaz o incluida en el estado del motor.
 /// Sin comas en estos comentarios: `scripts/verify-ipc.ts` analiza los campos de la struct.
@@ -281,9 +281,9 @@ fn voice_pair_specs(harmony: u8, air_mode: u8) -> [(f32, f32, f32); VOICE_PAIRS]
     };
 
     [
-        (0.0, 4.5, 0.30),  // Tónica grave cálida
-        (7.0, -6.0, 0.21), // Quinta abierta
-        (12.0, 8.5, 0.19), // Octava central
+        (0.0, 0.0, 0.30),  // Tónica centrada (estable al sumar a mono)
+        (7.0, -5.5, 0.21), // Quinta abierta
+        (12.0, 7.5, 0.19), // Octava central
         (p3_st, p3_cents, p3_amp),
         (p4_st, p4_cents, p4_amp),
         (p5_st, p5_cents, p5_amp),
@@ -355,9 +355,9 @@ impl PadVoice {
     }
 }
 
-/// Reverb difusa FDN de 4 líneas de retardo en memoria fija preasignada (0 asignaciones en tiempo real).
+/// Reverb difusa FDN de 4 líneas de retardo preasignadas en bloque único (0 asignaciones en tiempo real y sin tocar la pila).
 struct PadReverb {
-    lines: Box<[[f32; REVERB_BUF_LEN]; 4]>,
+    lines: Box<[f32]>,
     idx: [usize; 4],
     damp: [f32; 4],
     dirty: bool,
@@ -366,7 +366,7 @@ struct PadReverb {
 impl PadReverb {
     fn new() -> Self {
         Self {
-            lines: Box::new([[0.0; REVERB_BUF_LEN]; 4]),
+            lines: vec![0.0f32; REVERB_BUF_LEN * 4].into_boxed_slice(),
             idx: [0; 4],
             damp: [0.0; 4],
             dirty: false,
@@ -375,9 +375,7 @@ impl PadReverb {
 
     fn clear(&mut self) {
         if self.dirty {
-            for line in self.lines.iter_mut() {
-                line.fill(0.0);
-            }
+            self.lines.fill(0.0);
             self.damp = [0.0; 4];
             self.idx = [0; 4];
             self.dirty = false;
@@ -403,7 +401,7 @@ impl PadReverb {
         let mut y = [0.0f32; 4];
         for i in 0..4 {
             let pos = self.idx[i];
-            let delayed = self.lines[i][pos];
+            let delayed = self.lines[i * REVERB_BUF_LEN + pos];
             // Filtro paso bajo sedoso en la cola para que nunca suene metálica.
             self.damp[i] += 0.42 * (delayed - self.damp[i]);
             y[i] = self.damp[i];
@@ -420,13 +418,14 @@ impl PadReverb {
 
         for i in 0..4 {
             let pos = self.idx[i];
-            self.lines[i][pos] = fb[i];
+            self.lines[i * REVERB_BUF_LEN + pos] = fb[i];
             let next = pos + 1;
             self.idx[i] = if next >= lengths[i] { 0 } else { next };
         }
 
-        let wet_l = (y[0] - y[1] + y[2] - y[3]) * 0.55;
-        let wet_r = (y[0] + y[1] - y[2] - y[3]) * 0.55;
+        // Toma asimétrica estable en estéreo y al sumar a mono `(L + R) / 2`.
+        let wet_l = (y[0] + 0.65 * y[1] - 0.50 * y[2] + 0.45 * y[3]) * 0.45;
+        let wet_r = (0.45 * y[0] - 0.50 * y[1] + 0.65 * y[2] + y[3]) * 0.45;
         (wet_l, wet_r)
     }
 }
@@ -446,30 +445,30 @@ fn style_params(style: u8) -> StyleParams {
     match style {
         // 1 = Ambiente / Shimmer: nube amplia con brillo de doble octava respirando
         1 => StyleParams {
-            cutoff_min: 560.0,
-            cutoff_span: 520.0,
-            air_boost: 1.55,
-            reverb_wet: 0.48,
-            reverb_fb: 0.84,
-            third_harm: 0.0,
+            cutoff_min: 780.0,
+            cutoff_span: 560.0,
+            air_boost: 1.50,
+            reverb_wet: 0.44,
+            reverb_fb: 0.82,
+            third_harm: 0.02,
         },
         // 2 = Cuerdas: más presencia en medios y articulación armónica clara
         2 => StyleParams {
-            cutoff_min: 720.0,
-            cutoff_span: 560.0,
-            air_boost: 1.0,
-            reverb_wet: 0.30,
-            reverb_fb: 0.74,
-            third_harm: 0.05,
+            cutoff_min: 940.0,
+            cutoff_span: 620.0,
+            air_boost: 1.05,
+            reverb_wet: 0.28,
+            reverb_fb: 0.72,
+            third_harm: 0.07,
         },
-        // 0 = Cálido (por defecto): redondo, oscuro y envolvente
+        // 0 = Cálido (por defecto): redondo, profundo y con presencia en altavoces reales
         _ => StyleParams {
-            cutoff_min: 440.0,
-            cutoff_span: 240.0,
-            air_boost: 0.55,
-            reverb_wet: 0.35,
-            reverb_fb: 0.78,
-            third_harm: 0.0,
+            cutoff_min: 620.0,
+            cutoff_span: 320.0,
+            air_boost: 0.65,
+            reverb_wet: 0.32,
+            reverb_fb: 0.76,
+            third_harm: 0.02,
         },
     }
 }
@@ -705,6 +704,16 @@ impl PadSynth {
             }
         }
 
+        // Invariante defensivo: si debe sonar pero todas las voces estaban apagadas, inicializa la principal.
+        if want_on && self.voices.iter().all(|v| v.level == 0.0 && v.target_level == 0.0) {
+            self.current_note = target_note;
+            self.current_harmony = target_harmony;
+            self.current_air_mode = target_air_mode;
+            self.voices[0].configure(target_note, target_harmony, target_air_mode, sample_rate, true);
+            self.voices[0].level = 1.0;
+            self.voices[0].target_level = 1.0;
+        }
+
         if !want_on && self.env_level == 0.0 {
             self.clear_filters_and_reverb();
             self.fast_cutting = false;
@@ -721,6 +730,9 @@ impl PadSynth {
         } else {
             self.smooth_gain
         };
+        if self.env_level == 0.0 && want_on && g_target > 0.0 {
+            self.smooth_gain = g_target;
+        }
         let g0 = self.smooth_gain;
         let alpha = smoothing_alpha(frames, sample_rate);
         let g1 = smooth_toward(g0, g_target, alpha);
@@ -782,8 +794,8 @@ impl PadSynth {
                 self.env_level = (self.env_level - env_step_out).max(0.0);
             }
             let e = self.env_level;
-            // Curva S suave: arranque y llegada progresivos sin escalones.
-            let env = e * e * (3.0 - 2.0 * e);
+            // Curva monótona suave: arranca sin clic y crece con presencia audible desde los primeros instantes.
+            let env = e * (0.45 + 0.55 * e);
 
             let mut sum_l = 0.0f32;
             let mut sum_r = 0.0f32;
@@ -847,6 +859,11 @@ impl PadSynth {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Pendiente muestra-a-muestra de una onda sinusoidal polifónica continua a nivel presente (0.38, 620–1560 Hz).
+    const PAD_MAX_STEP: f32 = 0.035;
+    /// Segunda diferencia máxima: detecta saltos o chasquidos reales aunque la onda continua tenga pendiente suave.
+    const PAD_MAX_ACCEL: f32 = 0.015;
 
     #[test]
     fn test_pad_parse_y_transposicion() {
@@ -929,7 +946,10 @@ mod tests {
 
         let mut prev_l = 0.0f32;
         let mut prev_r = 0.0f32;
+        let mut prev_dl = 0.0f32;
+        let mut prev_dr = 0.0f32;
         let mut max_step = 0.0f32;
+        let mut max_accel = 0.0f32;
         let mut peak = 0.0f32;
 
         for b in 0..560 {
@@ -947,14 +967,20 @@ mod tests {
             synth.render_block(&ctl, 0, 480, 48_000, &mut out_l, &mut out_r, &mut mon_l, &mut mon_r, true);
             for i in 0..480 {
                 assert!(out_l[i].is_finite() && out_r[i].is_finite());
-                max_step = max_step.max((out_l[i] - prev_l).abs()).max((out_r[i] - prev_r).abs());
+                let dl = out_l[i] - prev_l;
+                let dr = out_r[i] - prev_r;
+                max_step = max_step.max(dl.abs()).max(dr.abs());
+                max_accel = max_accel.max((dl - prev_dl).abs()).max((dr - prev_dr).abs());
                 peak = peak.max(out_l[i].abs()).max(out_r[i].abs());
+                prev_dl = dl;
+                prev_dr = dr;
                 prev_l = out_l[i];
                 prev_r = out_r[i];
             }
         }
         assert!(peak > 0.05 && peak < 0.9, "nivel inesperado del pad: {peak}");
-        assert!(max_step <= 0.01, "escalón demasiado grande en el pad: {max_step}");
+        assert!(max_step <= PAD_MAX_STEP, "escalón demasiado grande en el pad: {max_step}");
+        assert!(max_accel <= PAD_MAX_ACCEL, "discontinuidad/clic en cambio de nota o mute: {max_accel}");
     }
 
     #[test]
@@ -994,15 +1020,15 @@ mod tests {
             pk
         };
 
-        // Entrada incremental (2,5 s): primeros 0,3 s mucho más suaves que 1,0..1,3 s y que asentado tras 2,6 s.
-        let pk_inicio = correr(&mut synth, 30, true);
-        let _ = correr(&mut synth, 70, true);
-        let pk_medio = correr(&mut synth, 30, true);
-        let _ = correr(&mut synth, 130, true);
+        // Entrada incremental (1,8 s): primeros 0,2 s suaves, a los 0,8..1,0 s ya presentes y llenos tras 1,9 s.
+        let pk_inicio = correr(&mut synth, 20, true);
+        let _ = correr(&mut synth, 60, true);
+        let pk_medio = correr(&mut synth, 20, true);
+        let _ = correr(&mut synth, 100, true);
         let pk_lleno = correr(&mut synth, 30, true);
         assert!(pk_inicio < pk_medio * 0.4, "el pad debe entrar suave, no de golpe: inicio={pk_inicio}, medio={pk_medio}");
-        assert!(pk_medio < pk_lleno * 0.85, "el pad debe seguir subiendo hasta 2,5 s: medio={pk_medio}, lleno={pk_lleno}");
-        assert!(pk_lleno > 0.1, "el pad lleno debe sonar claro: {pk_lleno}");
+        assert!(pk_medio < pk_lleno * 0.85, "el pad debe seguir subiendo hasta 1,8 s: medio={pk_medio}, lleno={pk_lleno}");
+        assert!(pk_lleno > 0.15, "el pad lleno debe sonar claro: {pk_lleno}");
 
         // Salida decreciente al pausar/parar (`playing = false`): a los 0,5 s aún suena, a los 1,8 s es más bajo, a los 3,1 s silencio.
         let _ = correr(&mut synth, 50, false);
@@ -1010,20 +1036,111 @@ mod tests {
         assert!(ctl.is_tail_active(), "debe quedar cola activa durante la bajada");
         let _ = correr(&mut synth, 110, false);
         let pk_out_2 = correr(&mut synth, 20, false);
-        assert!(pk_out_1 > pk_out_2 && pk_out_2 > 0.005, "la bajada debe ser progresiva: {pk_out_1} -> {pk_out_2}");
+        assert!(pk_out_1 > pk_out_2 && pk_out_2 > 0.01, "la bajada debe ser progresiva: {pk_out_1} -> {pk_out_2}");
         let _ = correr(&mut synth, 120, false);
         let pk_silencio = correr(&mut synth, 10, false);
         assert!(pk_silencio == 0.0 && !synth.has_active_tail() && !ctl.is_tail_active(), "tras 3 s debe quedar en silencio: {pk_silencio}");
 
         // Freno de emergencia (`request_fast_cut`): vuelve a subir y luego corta en 8 ms sin escalones.
-        let _ = correr(&mut synth, 260, true);
+        let _ = correr(&mut synth, 200, true);
         let _ = correr(&mut synth, 5, false);
         assert!(ctl.is_tail_active());
         ctl.request_fast_cut();
         let _ = correr(&mut synth, 2, false); // 20 ms > 8 ms
         let pk_tras_corte = correr(&mut synth, 5, false);
         assert_eq!(pk_tras_corte, 0.0, "corte rápido debe silenciar en < 20 ms");
-        assert!(max_step <= 0.01, "escalón demasiado grande durante entrada/salida/corte: {max_step}");
+        assert!(max_step <= PAD_MAX_STEP, "escalón demasiado grande durante entrada/salida/corte: {max_step}");
+    }
+
+    #[test]
+    fn test_pad_deserializa_payload_typescript() {
+        let json = r#"{"activeMode":true,"enabled":true,"note":10,"gain":0.85,"monitor":false,"harmony":0,"style":0}"#;
+        let cfg: PadConfig = serde_json::from_str(json).expect("deserializar payload exacto de TypeScript");
+        assert!(cfg.active_mode && cfg.enabled);
+        assert_eq!(cfg.note, 10);
+        assert!((cfg.gain - 0.85).abs() < 1e-6);
+        assert!(!cfg.monitor);
+        assert_eq!(cfg.harmony, 0);
+        assert_eq!(cfg.style, 0);
+    }
+
+    #[test]
+    fn test_pad_nivel_mono_y_estereo_en_todas_las_notas_y_modos() {
+        let mut out_l = vec![0.0f32; 480];
+        let mut out_r = vec![0.0f32; 480];
+        let mut mon_l = vec![0.0f32; 480];
+        let mut mon_r = vec![0.0f32; 480];
+
+        let medir = |note: u8, harmony: u8, style: u8, sr: u32,
+                     out_l: &mut Vec<f32>, out_r: &mut Vec<f32>, mon_l: &mut Vec<f32>, mon_r: &mut Vec<f32>| {
+            let ctl = PadControl::new();
+            ctl.reset_for_load(PadConfig {
+                active_mode: true,
+                enabled: true,
+                note,
+                gain: 0.85,
+                monitor: false,
+                harmony,
+                style,
+            });
+            let mut synth = PadSynth::new();
+            let mut sq_st = 0.0f64;
+            let mut sq_mono = 0.0f64;
+            let mut n = 0usize;
+            let mut peak = 0.0f32;
+            let mut max_step = 0.0f32;
+            let mut max_accel = 0.0f32;
+            let mut prev_l = 0.0f32;
+            let mut prev_r = 0.0f32;
+            let mut prev_dl = 0.0f32;
+            let mut prev_dr = 0.0f32;
+            let bloques_lleno = if sr == 44_100 { 185 } else { 200 };
+            for b in 0..(bloques_lleno + 35) {
+                out_l.fill(0.0);
+                out_r.fill(0.0);
+                mon_l.fill(0.0);
+                mon_r.fill(0.0);
+                synth.render_block(&ctl, 0, 480, sr, out_l, out_r, mon_l, mon_r, true);
+                for f in 0..480 {
+                    let l = out_l[f];
+                    let r = out_r[f];
+                    assert!(l.is_finite() && r.is_finite());
+                    peak = peak.max(l.abs()).max(r.abs());
+                    let dl = l - prev_l;
+                    let dr = r - prev_r;
+                    max_step = max_step.max(dl.abs()).max(dr.abs());
+                    max_accel = max_accel.max((dl - prev_dl).abs()).max((dr - prev_dr).abs());
+                    prev_dl = dl;
+                    prev_dr = dr;
+                    prev_l = l;
+                    prev_r = r;
+                    if b >= bloques_lleno {
+                        sq_st += (l as f64) * (l as f64) + (r as f64) * (r as f64);
+                        let m = 0.5 * (l + r);
+                        sq_mono += (m as f64) * (m as f64);
+                        n += 1;
+                    }
+                }
+            }
+            let rms_st = (sq_st / (2 * n.max(1)) as f64).sqrt() as f32;
+            let rms_mono = (sq_mono / n.max(1) as f64).sqrt() as f32;
+            assert!(peak < 0.85, "pico excesivo (sr={sr}, note={note}, h={harmony}, s={style}): {peak}");
+            assert!(max_step <= PAD_MAX_STEP, "escalon (sr={sr}, note={note}, h={harmony}, s={style}): {max_step}");
+            assert!(max_accel <= PAD_MAX_ACCEL, "discontinuidad (sr={sr}, note={note}, h={harmony}, s={style}): {max_accel}");
+            assert!(rms_st >= 0.07, "rms estereo bajo (sr={sr}, note={note}, h={harmony}, s={style}): {rms_st}");
+            assert!(rms_mono >= 0.06, "rms mono bajo (sr={sr}, note={note}, h={harmony}, s={style}): {rms_mono}");
+        };
+
+        for sr in [44_100u32, 48_000] {
+            for note in 0..12u8 {
+                medir(note, note % 3, (note / 3) % 3, sr, &mut out_l, &mut out_r, &mut mon_l, &mut mon_r);
+            }
+            for style in 0..3u8 {
+                for harmony in 0..3u8 {
+                    medir(7, harmony, style, sr, &mut out_l, &mut out_r, &mut mon_l, &mut mon_r);
+                }
+            }
+        }
     }
 
     #[test]
@@ -1098,7 +1215,7 @@ mod tests {
                         }
                     }
                 }
-                assert!(max_step <= 0.01, "escalón en armonía {harmony} / estilo {style}: {max_step}");
+                assert!(max_step <= PAD_MAX_STEP, "escalón en armonía {harmony} / estilo {style}: {max_step}");
                 let rms = (sq / n.max(1) as f64).sqrt() as f32;
                 assert!(rms > 0.02, "rms demasiado bajo en armonía {harmony} / estilo {style}: {rms}");
                 if harmony == 0 {
