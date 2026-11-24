@@ -24,7 +24,9 @@ import { isDesktopApp } from '../utils/nativeDialog';
 import { SongPickerModal } from './SongPickerModal';
 import { SetlistStrip, SongTileStatus } from './SetlistStrip';
 import { CreatePadSongModal } from './modals/CreatePadSongModal';
+import { PadPackManagerModal } from './modals/PadPackManagerModal';
 import { PadStagePanel } from './PadStagePanel';
+import type { PadPackInfo } from '../utils/padPacks';
 import { isPadOnlySong } from '../utils/padSong';
 import { SECTION_TEMPLATES } from '../utils/sectionTemplates';
 import { MenuItem, MenuLabel, PopoverMenu } from './ui/Menu';
@@ -82,6 +84,11 @@ interface SetlistPageViewProps {
   onChangeBeatsPerBar?: (beatsPerBar: number) => void;
   onChangeClickSubdivision?: (subdivision: 1 | 2 | 4) => void;
   onCreatePadSong?: (song: SongProject) => void;
+  padPacks?: PadPackInfo[];
+  isImportingPack?: boolean;
+  onChangePadPack?: (packId: string | null) => void;
+  onImportPadPack?: (name: string, folderPath: string) => Promise<PadPackInfo>;
+  onDeletePadPack?: (packId: string) => Promise<void>;
   onResetMixer: () => void;
   onOptimizeProject: (song: SongProject) => void;
   /** Guarda las notas de una canción. */
@@ -144,6 +151,11 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
   onChangeBeatsPerBar,
   onChangeClickSubdivision,
   onCreatePadSong,
+  padPacks,
+  isImportingPack,
+  onChangePadPack,
+  onImportPadPack,
+  onDeletePadPack,
   onResetMixer,
   onStartLive,
   onSetSongTransition,
@@ -155,7 +167,12 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
   const [showClearConfirm, setShowClearConfirm] = useState(false);
   const [isPickerOpen, setIsPickerOpen] = useState(false);
   const [isCreatePadOpen, setIsCreatePadOpen] = useState(false);
+  const [isPackModalOpen, setIsPackModalOpen] = useState(false);
   const [isEditingStrip, setIsEditingStrip] = useState(false);
+  const activePack = useMemo(
+    () => (project?.padPackId ? (padPacks ?? []).find((p) => p.id === project.padPackId) ?? null : null),
+    [project?.padPackId, padPacks]
+  );
   const openPicker = () => setIsPickerOpen(true);
   const setlistIds = useMemo(() => new Set(setlistQueue.map((s) => s.id)), [setlistQueue]);
 
@@ -284,6 +301,9 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
           onTogglePad={onTogglePad}
           onToggleClick={onToggleClick}
           onOpenMixer={() => setIsFloatingMixerOpen(true)}
+          activePack={activePack}
+          onOpenPackManager={() => setIsPackModalOpen(true)}
+          onUseSynth={() => onChangePadPack?.(null)}
         />
       ) : (
         <section className="lt-map" aria-label="Mapa de la canción">
@@ -508,8 +528,30 @@ export const SetlistPageView: React.FC<SetlistPageViewProps> = ({
         <CreatePadSongModal
           isOpen={isCreatePadOpen}
           nextSetlistOrder={setlistQueue.length}
+          packs={padPacks}
           onClose={() => setIsCreatePadOpen(false)}
           onCreate={(song) => onCreatePadSong?.(song)}
+        />
+      )}
+
+      {isPackModalOpen && (
+        <PadPackManagerModal
+          isOpen={isPackModalOpen}
+          packs={padPacks ?? []}
+          activePackId={project?.padPackId ?? null}
+          isImporting={Boolean(isImportingPack)}
+          onClose={() => setIsPackModalOpen(false)}
+          onSelectPack={(id) => {
+            onChangePadPack?.(id);
+            setIsPackModalOpen(false);
+          }}
+          onImportFolder={async (name, folder) => {
+            if (!onImportPadPack) throw new Error('Importación de packs no disponible.');
+            return onImportPadPack(name, folder);
+          }}
+          onDeletePack={async (id) => {
+            if (onDeletePadPack) await onDeletePadPack(id);
+          }}
         />
       )}
 

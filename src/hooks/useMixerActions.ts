@@ -76,6 +76,10 @@ export function useMixerActions({
     updateCurrentProject((p) => ({ ...p, padStyle }));
   };
 
+  const handleChangePadPack = (padPackId: string | null) => {
+    updateCurrentProject((p) => ({ ...p, padPackId }));
+  };
+
   const handleToggleTrackMute = (trackId: string) => {
     updateCurrentProject((p) => ({
       ...p,
@@ -194,6 +198,7 @@ export function useMixerActions({
     handleTogglePadMonitor,
     handleChangePadHarmony,
     handleChangePadStyle,
+    handleChangePadPack,
     handleToggleTrackMute,
     handleToggleTrackSolo,
     handleToggleTrackMonitor,

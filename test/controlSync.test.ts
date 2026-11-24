@@ -469,6 +469,47 @@ async function main() {
     assert(sync.reconcile(snap, padA).length === 0, 'primera lectura discrepante del pad espera confirmación');
     const fixed = sync.reconcile(snap, padA);
     assert(fixed.includes('pad'), 'segunda lectura discrepante corrige el pad aunque no haya pistas');
+
+    // Cambio y reconciliación del pack de pads
+    const padWithPack = { ...padA, padPackId: 'pack-warm-1' };
+    const setPackOps = diffProjectControls(padA, padWithPack);
+    assert(
+      setPackOps.length === 1 &&
+        setPackOps[0].cmd === 'audio_set_pad_pack' &&
+        setPackOps[0].args.packId === 'pack-warm-1' &&
+        !isContinuousOnly(setPackOps),
+      'elegir pack de pads envía audio_set_pad_pack de inmediato'
+    );
+    const clearPackOps = diffProjectControls(padWithPack, { ...padWithPack, padPackId: null });
+    assert(
+      clearPackOps.length === 1 &&
+        clearPackOps[0].cmd === 'audio_set_pad_pack' &&
+        clearPackOps[0].args.packId === null,
+      'volver al sintetizador envía audio_set_pad_pack con packId=null'
+    );
+
+    sent.length = 0;
+    sync.syncAll(padWithPack);
+    await sync.queue.idle();
+    clock += SETTLE_MS + 1;
+    const stalePackSnap = {
+      padActive: true,
+      padEnabled: padWithPack.padEnabled !== false,
+      padNote: 7,
+      padGain: padWithPack.padGain,
+      padMonitor: false,
+      padHarmony: 0,
+      padStyle: 0,
+      padPackId: null,
+    };
+    assert(sync.reconcile(stalePackSnap, padWithPack).length === 0, 'primera lectura discrepante del pack espera confirmación');
+    const fixedPack = sync.reconcile(stalePackSnap, padWithPack);
+    assert(fixedPack.includes('padPack'), 'segunda lectura discrepante reenvía el pack correcto');
+    await sync.queue.idle();
+    assert(
+      sent.some((m) => m.cmd === 'audio_set_pad_pack' && m.args?.packId === 'pack-warm-1'),
+      'la reconciliación debe invocar audio_set_pad_pack con el pack deseado'
+    );
   }
 
   console.log('controlSync: OK');

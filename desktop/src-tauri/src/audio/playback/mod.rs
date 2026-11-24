@@ -12,6 +12,7 @@ use crate::audio::cache::{get_project_cache_dir, read_track_metadata};
 use crate::audio::metronome::{MetronomeConfig, MetronomeEngine};
 use crate::audio::output::{get_device_name, resolve_output_config, stream_needs_reopen, AudioEngineState, AudioStreamStats};
 use crate::audio::pad::{PadConfig, PadControl};
+use crate::audio::pad_packs::PadPackBridge;
 use crate::audio::pitch::{new_pitch_shifter, PitchShifter};
 use crate::audio::resampler::TrackResampler;
 use crate::audio::routing::{self, RouteTable, RoutingSlot};
@@ -95,6 +96,7 @@ pub struct PlaybackEngine {
     pub monitor_gain: Arc<AtomicU32>,
     pub pitch_semitones: Arc<AtomicI32>,
     pub pad: Arc<PadControl>,
+    pub pad_pack: Arc<PadPackBridge>,
     pub queued_jump: Arc<std::sync::Mutex<Option<QueuedJumpInfo>>>,
     pub metronome: Arc<std::sync::Mutex<MetronomeEngine>>,
     pub preloaded_project_id: TokioMutex<Option<String>>,
@@ -141,6 +143,7 @@ impl PlaybackEngine {
             monitor_gain: Arc::new(AtomicU32::new(1.0f32.to_bits())),
             pitch_semitones: Arc::new(AtomicI32::new(0)),
             pad: Arc::new(PadControl::new()),
+            pad_pack: Arc::new(PadPackBridge::new()),
             queued_jump: Arc::new(std::sync::Mutex::new(None)),
             metronome: Arc::new(std::sync::Mutex::new(MetronomeEngine::new(
                 MetronomeConfig::default(),
@@ -284,6 +287,7 @@ impl PlaybackEngine {
         // La caché es válida: ahora sí se detiene lo que sonaba y se aplican los datos de la canción nueva.
         self.stop().await;
         self.pad.deactivate_for_song_change();
+        self.pad_pack.clear_pack();
         self.is_buffering.store(true, Ordering::SeqCst);
         *self.buffering_start_time.lock().unwrap() = Some(Instant::now());
 
@@ -751,6 +755,12 @@ impl PlaybackEngine {
         // enseguida. El reloj de la canción no cambia: el tono ya no altera la velocidad.
         if previous != clamped && has_tracks {
             self.seek_in_place().await;
+        } else if previous != clamped && !has_tracks && self.pad.is_active_mode() && self.pad_pack.has_active_pack() {
+            let bridge = Arc::clone(&self.pad_pack);
+            let target = crate::audio::pad::transpose_note(self.pad.note(), clamped);
+            if let Err(e) = tokio::task::spawn_blocking(move || bridge.load_note_sync(target)).await {
+                tracing::warn!("[NativeEngine] Error cargando nota transpuesta del pack: {e}");
+            }
         }
     }
 
@@ -777,10 +787,40 @@ impl PlaybackEngine {
     }
 
     pub fn set_pad(&self, config: PadConfig) {
+        let prev_note = self.pad.note();
         self.pad.apply(config);
+        if self.pad_pack.has_active_pack() && (config.note % 12) != prev_note {
+            let target = crate::audio::pad::transpose_note(config.note, self.pitch_semitones.load(Ordering::SeqCst));
+            if let Err(e) = self.pad_pack.load_note_sync(target) {
+                tracing::warn!("[NativeEngine] Error cargando nota del pack: {e}");
+            }
+        }
+    }
+
+    pub async fn set_pad_with_pack(&self, config: PadConfig) -> Result<(), String> {
+        let prev_note = self.pad.note();
+        self.pad.apply(config);
+        if self.pad_pack.has_active_pack() && (config.note % 12) != prev_note {
+            let bridge = Arc::clone(&self.pad_pack);
+            let target = crate::audio::pad::transpose_note(config.note, self.pitch_semitones.load(Ordering::SeqCst));
+            tokio::task::spawn_blocking(move || bridge.load_note_sync(target))
+                .await
+                .map_err(|e| format!("Error cambiando nota del pack: {e}"))??;
+        }
+        Ok(())
+    }
+
+    pub async fn set_pad_pack(&self, base_dir: &Path, pack_id: Option<String>) -> Result<(), String> {
+        let bridge = Arc::clone(&self.pad_pack);
+        let dir = base_dir.to_path_buf();
+        let target = crate::audio::pad::transpose_note(self.pad.note(), self.pitch_semitones.load(Ordering::SeqCst));
+        tokio::task::spawn_blocking(move || bridge.set_pack(Some(&dir), pack_id, target))
+            .await
+            .map_err(|e| format!("Error cambiando pack de pad: {e}"))?
     }
 
     /// Monta una canción sin pistas (pad continuo + click) sin abrir caché PCM ni hilos de lectura.
+    #[allow(clippy::too_many_arguments)]
     pub async fn load_pad_project(
         &self,
         project_id: &str,
@@ -788,6 +828,8 @@ impl PlaybackEngine {
         bpm: Option<f32>,
         beats_per_bar: Option<u32>,
         pad_config: PadConfig,
+        base_dir: Option<&Path>,
+        pad_pack_id: Option<String>,
     ) -> Result<ProjectLoadInfo, String> {
         let sr = crate::audio::output::effective_cache_rate(Some(device_sample_rate));
         self.stop().await;
@@ -817,6 +859,17 @@ impl PlaybackEngine {
         let mut cfg = pad_config;
         cfg.active_mode = true;
         self.pad.reset_for_load(cfg);
+
+        let bridge = Arc::clone(&self.pad_pack);
+        let dir_owned = base_dir.map(|p| p.to_path_buf());
+        let note_target = crate::audio::pad::transpose_note(cfg.note, self.pitch_semitones.load(Ordering::SeqCst));
+        let pack_res = tokio::task::spawn_blocking(move || bridge.set_pack(dir_owned.as_deref(), pad_pack_id, note_target))
+            .await
+            .map_err(|e| format!("Error preparando pack de pad: {e}"))?;
+        if let Err(e) = pack_res {
+            tracing::warn!("[NativeEngine] No se pudo activar pack al montar pad ({e}); se usa sintetizador");
+            self.pad_pack.clear_pack();
+        }
 
         // Orden de adquisición: primero `loaded_project_id`, después `tracks`.
         let mut loaded = self.loaded_project_id.lock().await;
@@ -942,6 +995,7 @@ impl PlaybackEngine {
             tracks.clear();
             self.stream_tracks.lock().unwrap().clear();
             self.pad.deactivate_for_song_change();
+            self.pad_pack.clear_pack();
             *loaded = None;
             tracing::info!("[NativeEngine] Unloaded project '{}'", project_id);
         }
@@ -1143,6 +1197,7 @@ impl PlaybackEngine {
             monitor_gain: Arc::clone(&self.monitor_gain),
             pitch_semitones: Arc::clone(&self.pitch_semitones),
             pad: Arc::clone(&self.pad),
+            pad_pack: Arc::clone(&self.pad_pack),
             is_vamping: Arc::clone(&self.is_vamping),
             routing: Arc::clone(&self.routing),
             bus_meters: Arc::clone(&self.bus_meters),

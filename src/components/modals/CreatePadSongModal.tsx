@@ -9,11 +9,13 @@ import {
   PAD_STYLE_OPTIONS,
   TIME_SIGNATURE_OPTIONS,
 } from '../../utils/padSong';
+import type { PadPackInfo } from '../../utils/padPacks';
 import { Dialog, DialogBody, DialogFooter, DialogHeader } from '../ui/Dialog';
 
 interface CreatePadSongModalProps {
   isOpen: boolean;
   nextSetlistOrder: number;
+  packs?: PadPackInfo[];
   onClose: () => void;
   onCreate: (song: SongProject) => void;
 }
@@ -22,6 +24,7 @@ interface CreatePadSongModalProps {
 export const CreatePadSongModal: React.FC<CreatePadSongModalProps> = ({
   isOpen,
   nextSetlistOrder,
+  packs = [],
   onClose,
   onCreate,
 }) => {
@@ -33,6 +36,7 @@ export const CreatePadSongModal: React.FC<CreatePadSongModalProps> = ({
   const [subdivision, setSubdivision] = useState<1 | 2 | 4>(1);
   const [harmony, setHarmony] = useState<PadHarmony>('open');
   const [style, setStyle] = useState<PadStyle>('warm');
+  const [padPackId, setPadPackId] = useState<string>('');
 
   if (!isOpen) return null;
 
@@ -51,6 +55,7 @@ export const CreatePadSongModal: React.FC<CreatePadSongModalProps> = ({
       clickSubdivision: subdivision,
       padHarmony: harmony,
       padStyle: style,
+      padPackId: padPackId || null,
       setlistOrder: nextSetlistOrder,
     });
     onCreate(song);
@@ -184,6 +189,20 @@ export const CreatePadSongModal: React.FC<CreatePadSongModalProps> = ({
               </div>
             </div>
           </div>
+
+          {packs.length > 0 && (
+            <label className="lt-field">
+              <span>Fuente del pad</span>
+              <select value={padPackId} onChange={(e) => setPadPackId(e.target.value)}>
+                <option value="">Sintetizador interno (constante)</option>
+                {packs.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    Pack: {p.name} ({p.availableNotes.length}/12 notas)
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
         </DialogBody>
         <DialogFooter>
           <button type="button" onClick={onClose} className="lt-control">

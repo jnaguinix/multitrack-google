@@ -122,6 +122,17 @@ export function createPreviewBackend() {
   let clickGain = 0.8;
   let clickSubdivision = 1;
   let padState = { activeMode: false, enabled: false, note: 0, gain: 0.85, monitor: false, harmony: 0, style: 0 };
+  let padPackId: string | null = null;
+  let padPacks = [
+    {
+      id: 'pack-demo-warm',
+      name: 'Warm Worship (Demo)',
+      sourceFolder: 'Vista previa / Warm Worship',
+      sampleRate: PREVIEW_SAMPLE_RATE,
+      availableNotes: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
+      durationSec: 20,
+    },
+  ];
   let callbacks = 0;
   let settings = { host: 'WASAPI', deviceName: null as string | null, sampleRate: 48000, bufferSize: null as number | null, testChannel: null as number | null };
 
@@ -208,6 +219,7 @@ export function createPreviewBackend() {
       padMonitor: padState.monitor,
       padHarmony: padState.harmony,
       padStyle: padState.style,
+      padPackId,
       meters: meters(),
       trackControls: trackIds.map((id) => ({ trackId: id, ...(controls.get(id) as TrackControl) })),
     };
@@ -297,11 +309,13 @@ export function createPreviewBackend() {
       loadedId = a?.projectId ?? null;
       if (a?.padConfig?.activeMode) {
         padState = { harmony: 0, style: 0, ...a.padConfig };
+        padPackId = a?.padPackId ?? song?.padPackId ?? null;
         trackIds = [];
         sections = [];
         duration = 0;
       } else {
         padState = { activeMode: false, enabled: false, note: 0, gain: 0, monitor: false, harmony: 0, style: 0 };
+        padPackId = null;
         trackIds = song?.tracks.map((t) => t.id) ?? [];
         sections = (a?.sections ?? song?.sections.map((s) => ({ id: s.id, name: s.name, startSec: s.startTimeSec, endSec: s.endTimeSec })) ?? []).map(
           (s: any) => ({ id: s.id, name: s.name, startSec: s.startSec ?? s.start_sec, endSec: s.endSec ?? s.end_sec })
@@ -415,6 +429,31 @@ export function createPreviewBackend() {
     },
     audio_set_pad: (a) => {
       if (a?.config) padState = { ...padState, ...a.config };
+      return null;
+    },
+    audio_list_pad_packs: () => [...padPacks],
+    audio_import_pad_pack: (a) => {
+      const name = String(a?.name ?? 'Pack demo').trim() || 'Pack demo';
+      const sourceFolder = String(a?.folderPath ?? 'Vista previa / Pack');
+      const created = {
+        id: `pack-demo-${Date.now()}`,
+        name,
+        sourceFolder,
+        sampleRate: PREVIEW_SAMPLE_RATE,
+        availableNotes: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
+        durationSec: 20,
+      };
+      padPacks = [...padPacks, created];
+      return created;
+    },
+    audio_delete_pad_pack: (a) => {
+      const id = String(a?.packId ?? '');
+      padPacks = padPacks.filter((p) => p.id !== id);
+      if (padPackId === id) padPackId = null;
+      return null;
+    },
+    audio_set_pad_pack: (a) => {
+      padPackId = a?.packId ? String(a.packId) : null;
       return null;
     },
 

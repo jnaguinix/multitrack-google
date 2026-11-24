@@ -686,6 +686,8 @@ async fn ensayo_modo_sin_pista_pad_y_click() {
             Some(120.0),
             Some(4),
             PadConfig { active_mode: true, enabled: true, note: 7, gain: 0.9, monitor: false, harmony: 0, style: 0 },
+            None,
+            None,
         )
         .await
         .expect("cargar canción sin secuencia");
@@ -844,6 +846,8 @@ async fn ensayo_modo_sin_pista_pad_y_click() {
             Some(92.0),
             Some(4),
             PadConfig { active_mode: true, enabled: true, note: 10, gain: 0.85, monitor: false, harmony: 1, style: 2 },
+            None,
+            None,
         )
         .await
         .expect("cargar canción pad tras canción normal");
@@ -856,8 +860,56 @@ async fn ensayo_modo_sin_pista_pad_y_click() {
     assert!(pad_trk.l > 0.1 && pad_trk.r > 0.1, "medidor __pad__ inesperado: {:?}", pad_trk);
     assert!(meters_pad.main.l > 0.1 && meters_pad.main.r > 0.1, "medidor main inesperado: {:?}", meters_pad.main);
 
-    // El sintetizador armónico continuo (620–1560 Hz a nivel presente) tiene mayor pendiente natural que una
-    // rampa lineal PCM (`ESCALON_MAXIMO = 0.01`), pero sigue muy por debajo de cualquier salto o clic real.
+    // 8. Activar un pack de pads en audio real, cambiar de nota en vivo y volver al sintetizador con 0 asignaciones.
+    let pack_src = std::env::temp_dir().join("omnitracks_ensayo_pack_src");
+    let pack_base = std::env::temp_dir().join("omnitracks_ensayo_pack_base");
+    let _ = std::fs::remove_dir_all(&pack_src);
+    let _ = std::fs::remove_dir_all(&pack_base);
+    std::fs::create_dir_all(&pack_src).unwrap();
+    std::fs::create_dir_all(&pack_base).unwrap();
+    for (fname, hz) in [("Pad_Bb.wav", 116.54f32), ("Pad_C.wav", 130.81f32)] {
+        let frames = SR as usize * 3;
+        let data_bytes = (frames * 4) as u32;
+        let mut wav = Vec::with_capacity(44 + data_bytes as usize);
+        wav.extend_from_slice(b"RIFF");
+        wav.extend_from_slice(&(36 + data_bytes).to_le_bytes());
+        wav.extend_from_slice(b"WAVEfmt ");
+        wav.extend_from_slice(&16u32.to_le_bytes());
+        wav.extend_from_slice(&1u16.to_le_bytes());
+        wav.extend_from_slice(&2u16.to_le_bytes());
+        wav.extend_from_slice(&SR.to_le_bytes());
+        wav.extend_from_slice(&(SR * 4).to_le_bytes());
+        wav.extend_from_slice(&4u16.to_le_bytes());
+        wav.extend_from_slice(&16u16.to_le_bytes());
+        wav.extend_from_slice(b"data");
+        wav.extend_from_slice(&data_bytes.to_le_bytes());
+        for i in 0..frames {
+            let ph = std::f32::consts::TAU * hz * (i as f32 / SR as f32);
+            let s = (ph.sin() * 0.25 * 32767.0) as i16;
+            wav.extend_from_slice(&s.to_le_bytes());
+            wav.extend_from_slice(&s.to_le_bytes());
+        }
+        std::fs::write(pack_src.join(fname), wav).unwrap();
+    }
+    let pack_info = crate::audio::pad_packs::import_pad_pack_folder(&pack_base, "Ensayo Pack", &pack_src, SR).unwrap();
+    engine.set_pad_pack(&pack_base, Some(pack_info.id.clone())).await.unwrap();
+    assert_eq!(engine.get_playback_state().pad_pack_id.as_deref(), Some(pack_info.id.as_str()));
+    let (_, ch1_pack) = correr(80, false, &engine, &mut prev_music, &mut max_step_music, &mut asignaciones);
+    assert!(ch1_pack > 0.08, "el pack activo debe emitir audio claro: {ch1_pack}");
+
+    engine.set_pad_with_pack(PadConfig { active_mode: true, enabled: true, note: 0, gain: 0.85, monitor: false, harmony: 0, style: 0 }).await.unwrap();
+    let (_, ch1_pack_nota) = correr(80, false, &engine, &mut prev_music, &mut max_step_music, &mut asignaciones);
+    assert!(ch1_pack_nota > 0.08, "tras cambiar de nota el pack debe seguir sonando: {ch1_pack_nota}");
+
+    engine.set_pad_pack(&pack_base, None).await.unwrap();
+    assert!(engine.get_playback_state().pad_pack_id.is_none());
+    let (_, ch1_vuelta_sinte) = correr(80, false, &engine, &mut prev_music, &mut max_step_music, &mut asignaciones);
+    assert!(ch1_vuelta_sinte > 0.08, "al volver al sintetizador debe seguir sonando sin cortes: {ch1_vuelta_sinte}");
+    let _ = std::fs::remove_dir_all(&pack_src);
+    let _ = std::fs::remove_dir_all(&pack_base);
+
+    // El sintetizador armónico continuo (680–1180 Hz) o un pack en audio pueden superar levemente
+    // la cota de rampa lineal PCM (`ESCALON_MAXIMO = 0.01`), pero quedan muy lejos de un clic real.
     const ESCALON_MAXIMO_PAD: f32 = 0.035;
     assert!(max_step_music <= ESCALON_MAXIMO_PAD, "escalón en canal de música del pad: {max_step_music}");
     assert_eq!(asignaciones, 0, "el callback asignó memoria en modo pad: {asignaciones}");

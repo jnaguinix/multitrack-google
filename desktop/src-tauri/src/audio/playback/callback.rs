@@ -11,6 +11,7 @@ use std::time::Instant;
 use crate::audio::metronome::MetronomeEngine;
 use crate::audio::output::AudioStreamStats;
 use crate::audio::pad::{PadControl, PadSynth};
+use crate::audio::pad_packs::PadPackBridge;
 use crate::audio::routing::{music_mono, soft_limit, RoutingSlot, LIMITER_KNEE};
 
 use super::block::{
@@ -71,6 +72,7 @@ pub struct CallbackShared {
     pub monitor_gain: Arc<AtomicU32>,
     pub pitch_semitones: Arc<AtomicI32>,
     pub pad: Arc<PadControl>,
+    pub pad_pack: Arc<PadPackBridge>,
     pub is_vamping: Arc<AtomicBool>,
     pub routing: Arc<RoutingSlot>,
     pub bus_meters: Arc<BusMeters>,
@@ -201,6 +203,7 @@ impl BlockMixer {
             mon_r[..frames].fill(0.0);
             let emitted = pad_synth.render_block(
                 &s.pad,
+                Some(&s.pad_pack),
                 s.pitch_semitones.load(Ordering::Relaxed),
                 frames,
                 sample_rate,
@@ -469,6 +472,7 @@ impl BlockMixer {
         if pad_mode {
             pad_synth.render_block(
                 &s.pad,
+                Some(&s.pad_pack),
                 s.pitch_semitones.load(Ordering::Relaxed),
                 frames,
                 sample_rate,
@@ -481,6 +485,7 @@ impl BlockMixer {
         } else if pad_synth.has_active_tail() {
             pad_synth.render_block(
                 &s.pad,
+                Some(&s.pad_pack),
                 s.pitch_semitones.load(Ordering::Relaxed),
                 frames,
                 sample_rate,
@@ -491,10 +496,10 @@ impl BlockMixer {
                 false,
             );
             if !pad_synth.has_active_tail() {
-                pad_synth.silence_reset();
+                pad_synth.silence_reset(Some(&s.pad_pack));
             }
         } else {
-            pad_synth.silence_reset();
+            pad_synth.silence_reset(Some(&s.pad_pack));
         }
 
         // Metrónomo sintético.

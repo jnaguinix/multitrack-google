@@ -129,6 +129,8 @@ export interface SongProject {
   padHarmony?: PadHarmony;
   /** Timbre del pad: Cálido, Ambiente o Cuerdas. */
   padStyle?: PadStyle;
+  /** ID del pack de audio real en disco (`null`/ausente = sintetizador interno). */
+  padPackId?: string | null;
   updatedAt: number;
 }
 

@@ -46,6 +46,7 @@ export interface EngineGlobals {
   padMonitor?: boolean;
   padHarmony?: number;
   padStyle?: number;
+  padPackId?: string | null;
 }
 
 export interface TrackDesired {
@@ -192,6 +193,17 @@ export function diffProjectControls(prev: SongProject | null, next: SongProject)
       cmd: 'audio_set_pad',
       args: { config: nextPad },
       ...(padGainOnly ? { continuous: true } : {}),
+    });
+  }
+
+  const nextPackId = nextPad.activeMode ? (next.padPackId ?? null) : null;
+  const prevPackId = prev && prevPad?.activeMode ? (prev.padPackId ?? null) : null;
+  const packChanged = prev ? prevPackId !== nextPackId : Boolean(nextPackId);
+  if (packChanged && (nextPad.activeMode || Boolean(prevPad?.activeMode))) {
+    ops.push({
+      key: 'padPack',
+      cmd: 'audio_set_pad_pack',
+      args: { packId: nextPackId },
     });
   }
 
@@ -374,6 +386,16 @@ export class ControlSync {
           summary: `pad: motor=(${engine.padActive},${engine.padEnabled},${engine.padNote},${engine.padHarmony},${engine.padStyle}) interfaz=(${wantPad.activeMode},${wantPad.enabled},${wantPad.note},${wantPad.harmony},${wantPad.style})`,
           op: { key: 'pad', cmd: 'audio_set_pad', args: { config: wantPad } },
         });
+      }
+      if (engine.padPackId !== undefined) {
+        const wantPackId = wantPad.activeMode ? (project.padPackId ?? null) : null;
+        if ((engine.padPackId ?? null) !== wantPackId) {
+          found.set('padPack', {
+            signature: `pack=${engine.padPackId ?? ''}`,
+            summary: `padPack: motor=${engine.padPackId ?? 'ninguno'} interfaz=${wantPackId ?? 'ninguno'}`,
+            op: { key: 'padPack', cmd: 'audio_set_pad_pack', args: { packId: wantPackId } },
+          });
+        }
       }
     }
 

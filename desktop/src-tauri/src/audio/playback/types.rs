@@ -278,6 +278,9 @@ pub struct PlaybackStateSnapshot {
     /// Timbre del pad (0 = calido 1 = ambiente 2 = cuerdas)
     #[serde(default)]
     pub pad_style: u8,
+    /// Pack de audio activo del pad (`None` = sintetizador interno)
+    #[serde(default)]
+    pub pad_pack_id: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]

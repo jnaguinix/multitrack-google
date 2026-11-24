@@ -7,26 +7,33 @@ use std::f32::consts::TAU;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicU8, Ordering};
 use serde::{Deserialize, Serialize};
 
+use crate::audio::pad_packs::{PadPackBridge, PadSamplePlayer};
 use crate::audio::playback::block::{sanitize_gain, smooth_toward, smoothing_alpha};
 use crate::audio::playback::types::PeakMeter;
 
 /// Máximo de voces simultáneas durante cambios rápidos de nota con fundido cruzado.
 const MAX_PAD_VOICES: usize = 4;
-/// Doce osciladores por voz (seis pares estéreo: tónica, quinta, octava, color armónico x2 y aire).
-const VOICE_PAIRS: usize = 6;
-const VOICE_OSCS: usize = VOICE_PAIRS * 2;
-/// Capacidad fija por línea de retardo de la reverb estéreo (soporta hasta ~192 kHz sin reasignar).
+/// Seis capas armónicas con ensemble de 4 osciladores por capa (24 osciladores estables por voz).
+const VOICE_LAYERS: usize = 6;
+const ENSEMBLE: usize = 4;
+const VOICE_OSCS: usize = VOICE_LAYERS * ENSEMBLE;
+const GOLDEN_ANGLE: f32 = 2.399_963_2;
+/// Capacidad fija por línea de retardo FDN (soporta hasta ~192 kHz sin reasignar).
 const REVERB_BUF_LEN: usize = 8192;
+/// Capacidad fija por difusor allpass de entrada (soporta hasta ~192 kHz sin reasignar).
+const AP_BUF_LEN: usize = 1024;
 /// Duración del fundido cruzado al cambiar de nota o armonía (segundos).
 const CROSSFADE_SEC: f32 = 0.45;
+/// Fundido cruzado al pasar entre sintetizador interno y pack de audio (segundos).
+const SOURCE_XFADE_SEC: f32 = 0.50;
 /// Entrada progresiva del pad al pulsar Play o encenderlo (segundos).
 pub const PAD_FADE_IN_SEC: f32 = 1.8;
 /// Salida decreciente del pad al apagarlo, pausar o parar (segundos).
 pub const PAD_FADE_OUT_SEC: f32 = 3.0;
 /// Corte rápido de emergencia (doble Stop o cambio a canción normal): 8 ms sin chasquido.
 const PAD_FAST_CUT_SEC: f32 = 0.008;
-/// Escala de salida equilibrada: presencia clara bajo el click sin acercarse a `LIMITER_KNEE` (0.9).
-const PAD_OUTPUT_SCALE: f32 = 0.38;
+/// Escala equilibrada del sintetizador tras filtro de 4 polos + reverb densa (bajo `LIMITER_KNEE`).
+const PAD_OUTPUT_SCALE: f32 = 1.35;
 
 /// Configuración del pad recibida desde la interfaz o incluida en el estado del motor.
 /// Sin comas en estos comentarios: `scripts/verify-ipc.ts` analiza los campos de la struct.
@@ -246,7 +253,7 @@ struct PadVoice {
     target_level: f32,
     phases: [f32; VOICE_OSCS],
     phase_inc: [f32; VOICE_OSCS],
-    pair_amps: [f32; VOICE_PAIRS],
+    layer_amps: [f32; VOICE_LAYERS],
 }
 
 impl Default for PadVoice {
@@ -260,33 +267,43 @@ impl Default for PadVoice {
             target_level: 0.0,
             phases: [0.0; VOICE_OSCS],
             phase_inc: [0.0; VOICE_OSCS],
-            pair_amps: [0.0; VOICE_PAIRS],
+            layer_amps: [0.0; VOICE_LAYERS],
         }
     }
 }
 
-/// Especificación armónica de los 6 pares estéreo según carácter (`harmony`: 0=Abierto, 1=Mayor, 2=Menor)
-/// y modo aéreo (`air_mode`: 0=Cálido/Ambiente con doble octava, 1=Cuerdas en registro medio).
-fn voice_pair_specs(harmony: u8, air_mode: u8) -> [(f32, f32, f32); VOICE_PAIRS] {
-    // Par 3 y Par 4 definen el carácter armónico; sin tercera en modo Abierto para encajar en cualquier acorde.
-    let (p3_st, p3_cents, p3_amp, p4_st, p4_cents, p4_amp) = match harmony {
-        1 => (14.0, 10.0, 0.14, 16.0, -11.0, 0.08), // Mayor: 9ª cálida + 3ª mayor filtrada arriba
-        2 => (15.0, 9.0, 0.14, 10.0, -11.0, 0.07),  // Menor: 3ª menor cálida + 7ª menor muy sutil
-        _ => (19.0, -8.0, 0.13, 12.0, 15.0, 0.09),  // Abierto: 12ª + octava ancha (neutro)
-    };
-    let (p5_st, p5_cents, p5_amp) = if air_mode == 1 {
-        (19.0, 13.0, 0.13) // Cuerdas: más cuerpo en medios-agudos
-    } else {
-        (24.0, 12.0, 0.10) // Cálido / Ambiente: velo aéreo en doble octava
+const LAYER_DETUNE_CENTS: [[f32; ENSEMBLE]; VOICE_LAYERS] = [
+    [0.0, -4.5, 5.3, -9.1],   // Sub-tónica muy estable
+    [0.0, -6.2, 7.4, 12.3],   // Tónica firme con coro suave
+    [0.0, -7.8, 9.1, -14.7],  // Quinta cálida y abierta
+    [0.0, -8.5, 10.2, 16.1],  // Octava ancha
+    [0.0, -9.2, 11.0, -17.3], // Color armónico 1
+    [0.0, -10.1, 12.2, 18.9], // Color armónico 2 / Aire
+];
+
+/// Especificación armónica de las 6 capas según carácter (`0=Abierto`, `1=Mayor`, `2=Menor`)
+/// y modo aéreo (`0=Cálido/Ambiente`, `1=Cuerdas`).
+fn voice_layer_specs(harmony: u8, air_mode: u8) -> [(f32, f32); VOICE_LAYERS] {
+    // Sub-tónica una octava abajo; el paso alto de 52 Hz limpia subgraves sin duplicar la tónica.
+    let sub_st = -12.0;
+    let (l4_st, l4_amp, l5_st, l5_amp) = match harmony {
+        1 => (14.0, 0.12, 16.0, 0.08), // Mayor: 9ª cálida + 3ª mayor filtrada arriba
+        2 => (15.0, 0.12, 10.0, 0.07), // Menor: 3ª menor cálida + 7ª menor muy sutil
+        _ => (
+            19.0,
+            if air_mode == 1 { 0.14 } else { 0.11 },
+            24.0,
+            if air_mode == 1 { 0.09 } else { 0.08 },
+        ),
     };
 
     [
-        (0.0, 0.0, 0.30),  // Tónica centrada (estable al sumar a mono)
-        (7.0, -5.5, 0.21), // Quinta abierta
-        (12.0, 7.5, 0.19), // Octava central
-        (p3_st, p3_cents, p3_amp),
-        (p4_st, p4_cents, p4_amp),
-        (p5_st, p5_cents, p5_amp),
+        (sub_st, 0.24),
+        (0.0, 0.28),
+        (7.0, 0.19),
+        (12.0, 0.17),
+        (l4_st, l4_amp),
+        (l5_st, l5_amp),
     ]
 }
 
@@ -302,128 +319,171 @@ impl PadVoice {
         } else {
             48.0 + safe_note as f32
         };
-        let specs = voice_pair_specs(safe_harmony, safe_air);
-        for (pair_idx, &(semitones, cents, amp)) in specs.iter().enumerate() {
+        let specs = voice_layer_specs(safe_harmony, safe_air);
+        for (layer_idx, &(semitones, amp)) in specs.iter().enumerate() {
             let midi = base_midi + semitones;
             let hz = 440.0 * 2.0_f32.powf((midi - 69.0) / 12.0);
-            let hz_l = hz * 2.0_f32.powf(-cents / 1200.0);
-            let hz_r = hz * 2.0_f32.powf(cents / 1200.0);
-            self.phase_inc[pair_idx * 2] = TAU * hz_l / sr;
-            self.phase_inc[pair_idx * 2 + 1] = TAU * hz_r / sr;
-            self.pair_amps[pair_idx] = amp;
+            for k in 0..ENSEMBLE {
+                let cents = LAYER_DETUNE_CENTS[layer_idx][k];
+                let osc_hz = hz * 2.0_f32.powf(cents / 1200.0);
+                self.phase_inc[layer_idx * ENSEMBLE + k] = TAU * osc_hz / sr;
+            }
+            self.layer_amps[layer_idx] = amp;
         }
         self.note = safe_note;
         self.harmony = safe_harmony;
         self.air_mode = safe_air;
         self.sample_rate = sample_rate;
         if reset_phases {
-            self.phases = [0.0; VOICE_OSCS];
+            // Fases iniciales dispersas por ángulo áureo para que nunca arranquen cancelándose ni palpitando.
+            for (idx, phase) in self.phases.iter_mut().enumerate() {
+                *phase = ((idx as f32) * GOLDEN_ANGLE) % TAU;
+            }
         }
     }
 
     #[inline]
-    fn next_stereo(&mut self, mid_breath: f32, air_breath: f32, third_harm_boost: f32) -> (f32, f32) {
+    fn next_stereo(&mut self, air_gain: f32, harm_boost: f32) -> (f32, f32) {
         let mut sum_l = 0.0f32;
         let mut sum_r = 0.0f32;
-        for pair_idx in 0..VOICE_PAIRS {
-            let i_l = pair_idx * 2;
-            let i_r = i_l + 1;
+        for layer_idx in 0..VOICE_LAYERS {
+            let base = layer_idx * ENSEMBLE;
+            let mut oscs = [0.0f32; ENSEMBLE];
+            for k in 0..ENSEMBLE {
+                let idx = base + k;
+                let mut p = self.phases[idx] + self.phase_inc[idx];
+                if p >= TAU {
+                    p -= TAU;
+                }
+                self.phases[idx] = p;
 
-            let p_l = self.phases[i_l] + self.phase_inc[i_l];
-            self.phases[i_l] = if p_l >= TAU { p_l - TAU } else { p_l };
+                // Onda analógica cálida por recurrencia trigonométrica (1 solo `sin_cos()` por oscilador).
+                let (s1, c1) = p.sin_cos();
+                let s2 = 2.0 * s1 * c1;
+                let c2 = 2.0 * c1 * c1 - 1.0;
+                let s3 = s2 * c1 + c2 * s1;
+                let s4 = 2.0 * s2 * c2;
+                let c4 = 2.0 * c2 * c2 - 1.0;
+                let s5 = s4 * c1 + c4 * s1;
+                oscs[k] = (s1 + 0.50 * s2 + 0.30 * s3 + 0.16 * s4 + 0.08 * s5) * 0.68
+                    + harm_boost * (0.40 * s3 + 0.30 * s4);
+            }
 
-            let p_r = self.phases[i_r] + self.phase_inc[i_r];
-            self.phases[i_r] = if p_r >= TAU { p_r - TAU } else { p_r };
-
-            // Oscilador cálido con leve 2º y 3º armónico (en estilo Cuerdas se realza un poco la textura).
-            let h2 = 0.18;
-            let h3 = 0.05 + third_harm_boost;
-            let osc_l = p_l.sin() + h2 * (2.0 * p_l).sin() + h3 * (3.0 * p_l).sin();
-            let osc_r = p_r.sin() + h2 * (2.0 * p_r).sin() + h3 * (3.0 * p_r).sin();
-
-            let amp = match pair_idx {
-                1 | 2 => self.pair_amps[pair_idx] * mid_breath,
-                3 | 4 => self.pair_amps[pair_idx] * (0.75 + 0.35 * mid_breath),
-                5 => self.pair_amps[pair_idx] * air_breath,
-                _ => self.pair_amps[pair_idx],
+            let amp = if layer_idx == 5 {
+                self.layer_amps[layer_idx] * air_gain
+            } else {
+                self.layer_amps[layer_idx]
             };
-
-            sum_l += osc_l * amp;
-            sum_r += osc_r * amp;
+            // Ancla central firme en 0 cents (`0.64`) + coro estéreo ancho: constante en estéreo y en suma mono.
+            sum_l += (0.64 * oscs[0] + 0.20 * oscs[1] + 0.06 * oscs[2] + 0.10 * oscs[3]) * amp;
+            sum_r += (0.64 * oscs[0] + 0.06 * oscs[1] + 0.20 * oscs[2] + 0.10 * oscs[3]) * amp;
         }
         (sum_l, sum_r)
     }
 }
 
-/// Reverb difusa FDN de 4 líneas de retardo preasignadas en bloque único (0 asignaciones en tiempo real y sin tocar la pila).
+/// Reverb difusa: 2 etapas allpass por canal + FDN de 4 líneas preasignadas en un bloque único en heap.
 struct PadReverb {
-    lines: Box<[f32]>,
+    /// Primeros `4 * REVERB_BUF_LEN` = líneas FDN; últimos `4 * AP_BUF_LEN` = allpass L1, L2, R1, R2.
+    buf: Box<[f32]>,
     idx: [usize; 4],
     damp: [f32; 4],
+    ap_idx: [usize; 4],
     dirty: bool,
 }
 
 impl PadReverb {
     fn new() -> Self {
         Self {
-            lines: vec![0.0f32; REVERB_BUF_LEN * 4].into_boxed_slice(),
+            buf: vec![0.0f32; REVERB_BUF_LEN * 4 + AP_BUF_LEN * 4].into_boxed_slice(),
             idx: [0; 4],
             damp: [0.0; 4],
+            ap_idx: [0; 4],
             dirty: false,
         }
     }
 
     fn clear(&mut self) {
         if self.dirty {
-            self.lines.fill(0.0);
+            self.buf.fill(0.0);
             self.damp = [0.0; 4];
             self.idx = [0; 4];
+            self.ap_idx = [0; 4];
             self.dirty = false;
         }
     }
 
-    /// Calcula las longitudes de retardo (primas relativas) escaladas a la frecuencia de muestreo.
     #[inline]
-    fn delay_lengths(sample_rate: u32) -> [usize; 4] {
-        const BASE_48K: [u32; 4] = [1487, 1993, 2657, 3389];
+    fn delay_lengths(sample_rate: u32) -> ([usize; 4], [usize; 4]) {
+        const FDN_48K: [u32; 4] = [1487, 1993, 2657, 3389];
+        const AP_48K: [u32; 4] = [149, 211, 173, 251];
         let sr = sample_rate.max(8_000) as u64;
-        [
-            ((BASE_48K[0] as u64 * sr) / 48_000).clamp(32, (REVERB_BUF_LEN - 1) as u64) as usize,
-            ((BASE_48K[1] as u64 * sr) / 48_000).clamp(32, (REVERB_BUF_LEN - 1) as u64) as usize,
-            ((BASE_48K[2] as u64 * sr) / 48_000).clamp(32, (REVERB_BUF_LEN - 1) as u64) as usize,
-            ((BASE_48K[3] as u64 * sr) / 48_000).clamp(32, (REVERB_BUF_LEN - 1) as u64) as usize,
-        ]
+        let fdn = [
+            ((FDN_48K[0] as u64 * sr) / 48_000).clamp(32, (REVERB_BUF_LEN - 1) as u64) as usize,
+            ((FDN_48K[1] as u64 * sr) / 48_000).clamp(32, (REVERB_BUF_LEN - 1) as u64) as usize,
+            ((FDN_48K[2] as u64 * sr) / 48_000).clamp(32, (REVERB_BUF_LEN - 1) as u64) as usize,
+            ((FDN_48K[3] as u64 * sr) / 48_000).clamp(32, (REVERB_BUF_LEN - 1) as u64) as usize,
+        ];
+        let ap = [
+            ((AP_48K[0] as u64 * sr) / 48_000).clamp(16, (AP_BUF_LEN - 1) as u64) as usize,
+            ((AP_48K[1] as u64 * sr) / 48_000).clamp(16, (AP_BUF_LEN - 1) as u64) as usize,
+            ((AP_48K[2] as u64 * sr) / 48_000).clamp(16, (AP_BUF_LEN - 1) as u64) as usize,
+            ((AP_48K[3] as u64 * sr) / 48_000).clamp(16, (AP_BUF_LEN - 1) as u64) as usize,
+        ];
+        (fdn, ap)
     }
 
     #[inline]
-    fn process_sample(&mut self, in_l: f32, in_r: f32, lengths: [usize; 4], feedback: f32) -> (f32, f32) {
+    fn run_allpass(&mut self, slot: usize, len: usize, input: f32, g: f32) -> f32 {
+        let base = REVERB_BUF_LEN * 4 + slot * AP_BUF_LEN;
+        let pos = self.ap_idx[slot];
+        let d = self.buf[base + pos];
+        let w = input + d * g;
+        self.buf[base + pos] = w;
+        let next = pos + 1;
+        self.ap_idx[slot] = if next >= len { 0 } else { next };
+        d - w * g
+    }
+
+    #[inline]
+    fn process_sample(
+        &mut self,
+        in_l: f32,
+        in_r: f32,
+        fdn_lengths: [usize; 4],
+        ap_lengths: [usize; 4],
+        feedback: f32,
+    ) -> (f32, f32) {
         self.dirty = true;
+        // 2 etapas allpass cortas en serie por canal antes de la FDN para textura sedosa sin eco metálico.
+        let diff_l = self.run_allpass(0, ap_lengths[0], in_l, 0.50);
+        let diff_l = self.run_allpass(1, ap_lengths[1], diff_l, 0.45);
+        let diff_r = self.run_allpass(2, ap_lengths[2], in_r, 0.50);
+        let diff_r = self.run_allpass(3, ap_lengths[3], diff_r, 0.45);
+
         let mut y = [0.0f32; 4];
         for i in 0..4 {
             let pos = self.idx[i];
-            let delayed = self.lines[i * REVERB_BUF_LEN + pos];
-            // Filtro paso bajo sedoso en la cola para que nunca suene metálica.
-            self.damp[i] += 0.42 * (delayed - self.damp[i]);
+            let delayed = self.buf[i * REVERB_BUF_LEN + pos];
+            self.damp[i] += 0.34 * (delayed - self.damp[i]);
             y[i] = self.damp[i];
         }
 
-        // Matriz Hadamard ortogonal 4×4 (0.5 * [1,1,1,1; ...]) para difusión envolvente sin ganancia extra.
         let sum = (y[0] + y[1] + y[2] + y[3]) * 0.5;
         let fb = [
-            (sum - y[0]) * feedback + in_l * 0.35,
-            (sum - y[1]) * feedback + in_r * 0.35,
-            (sum - y[2]) * feedback + (in_l - in_r) * 0.25,
-            (sum - y[3]) * feedback + (in_l + in_r) * 0.25,
+            (sum - y[0]) * feedback + diff_l * 0.35,
+            (sum - y[1]) * feedback + diff_r * 0.35,
+            (sum - y[2]) * feedback + (diff_l - diff_r) * 0.25,
+            (sum - y[3]) * feedback + (diff_l + diff_r) * 0.25,
         ];
 
         for i in 0..4 {
             let pos = self.idx[i];
-            self.lines[i * REVERB_BUF_LEN + pos] = fb[i];
+            self.buf[i * REVERB_BUF_LEN + pos] = fb[i];
             let next = pos + 1;
-            self.idx[i] = if next >= lengths[i] { 0 } else { next };
+            self.idx[i] = if next >= fdn_lengths[i] { 0 } else { next };
         }
 
-        // Toma asimétrica estable en estéreo y al sumar a mono `(L + R) / 2`.
         let wet_l = (y[0] + 0.65 * y[1] - 0.50 * y[2] + 0.45 * y[3]) * 0.45;
         let wet_r = (0.45 * y[0] - 0.50 * y[1] + 0.65 * y[2] + y[3]) * 0.45;
         (wet_l, wet_r)
@@ -432,51 +492,48 @@ impl PadReverb {
 
 #[derive(Clone, Copy)]
 struct StyleParams {
-    cutoff_min: f32,
-    cutoff_span: f32,
-    air_boost: f32,
+    cutoff: f32,
+    air_gain: f32,
     reverb_wet: f32,
     reverb_fb: f32,
-    third_harm: f32,
+    harm_boost: f32,
 }
 
 #[inline]
 fn style_params(style: u8) -> StyleParams {
     match style {
-        // 1 = Ambiente / Shimmer: nube amplia con brillo de doble octava respirando
+        // 1 = Ambiente: colchón amplio con doble octava y cola de reverb espaciosa
         1 => StyleParams {
-            cutoff_min: 780.0,
-            cutoff_span: 560.0,
-            air_boost: 1.50,
-            reverb_wet: 0.44,
-            reverb_fb: 0.82,
-            third_harm: 0.02,
+            cutoff: 920.0,
+            air_gain: 1.15,
+            reverb_wet: 0.48,
+            reverb_fb: 0.86,
+            harm_boost: 0.0,
         },
-        // 2 = Cuerdas: más presencia en medios y articulación armónica clara
+        // 2 = Cuerdas: articulación analógica rica en medios con presencia clara
         2 => StyleParams {
-            cutoff_min: 940.0,
-            cutoff_span: 620.0,
-            air_boost: 1.05,
-            reverb_wet: 0.28,
-            reverb_fb: 0.72,
-            third_harm: 0.07,
-        },
-        // 0 = Cálido (por defecto): redondo, profundo y con presencia en altavoces reales
-        _ => StyleParams {
-            cutoff_min: 620.0,
-            cutoff_span: 320.0,
-            air_boost: 0.65,
+            cutoff: 1180.0,
+            air_gain: 0.85,
             reverb_wet: 0.32,
             reverb_fb: 0.76,
-            third_harm: 0.02,
+            harm_boost: 0.28,
+        },
+        // 0 = Cálido (por defecto): constante, redondo y aterciopelado tipo Juno/Prophet
+        _ => StyleParams {
+            cutoff: 680.0,
+            air_gain: 0.45,
+            reverb_wet: 0.36,
+            reverb_fb: 0.80,
+            harm_boost: 0.0,
         },
     }
 }
 
-/// Estado interno del sintetizador, propiedad exclusiva de `BlockMixer` (hilo de audio).
+/// Estado interno del sintetizador y reproductor de packs, propiedad exclusiva de `BlockMixer`.
 pub struct PadSynth {
     voices: [PadVoice; MAX_PAD_VOICES],
     reverb: PadReverb,
+    sample_player: PadSamplePlayer,
     current_note: u8,
     current_harmony: u8,
     current_air_mode: u8,
@@ -485,24 +542,25 @@ pub struct PadSynth {
     fast_cutting: bool,
     /// Envolvente musical lenta (`0.0..=1.0`): sube en `PAD_FADE_IN_SEC` y baja en `PAD_FADE_OUT_SEC`.
     env_level: f32,
+    /// Mezcla entre sintetizador (`1.0`) y pack en audio (`0.0`).
+    synth_mix: f32,
     /// Ganancia suavizada del fader de volumen (rampa rápida de ~10 ms sin clics).
     smooth_gain: f32,
-    /// Filtro paso bajo de 2 polos en cascada para sonido cálido sin aspereza digital.
-    lp1_l: f32,
-    lp1_r: f32,
-    lp2_l: f32,
-    lp2_r: f32,
-    /// Tres LFOs a ritmos inconmensurables para que el pad respire sin bucle audible.
-    lfo_filter: f32,
-    lfo_breath: f32,
-    lfo_air: f32,
-    /// Mezcla suavizada del estilo elegido (evita saltos al cambiar entre Cálido / Ambiente / Cuerdas).
-    smooth_cutoff_min: f32,
-    smooth_cutoff_span: f32,
-    smooth_air_boost: f32,
+    /// Filtro paso bajo de 4 polos en cascada (24 dB/oct analógico) por canal.
+    lp_l: [f32; 4],
+    lp_r: [f32; 4],
+    /// Paso alto suave (~52 Hz) para limpiar barro subgrave sin afectar la fundamental.
+    hp_in_l: f32,
+    hp_in_r: f32,
+    hp_out_l: f32,
+    hp_out_r: f32,
+    /// Deriva térmica ultralentísima (~45 s) de ±28 Hz sobre el filtro (cero modulación audible).
+    lfo_drift: f32,
+    smooth_cutoff: f32,
+    smooth_air_gain: f32,
     smooth_reverb_wet: f32,
     smooth_reverb_fb: f32,
-    smooth_third_harm: f32,
+    smooth_harm_boost: f32,
 }
 
 impl Default for PadSynth {
@@ -517,6 +575,7 @@ impl PadSynth {
         Self {
             voices: [PadVoice::default(); MAX_PAD_VOICES],
             reverb: PadReverb::new(),
+            sample_player: PadSamplePlayer::new(),
             current_note: 0,
             current_harmony: 0,
             current_air_mode: 0,
@@ -524,20 +583,20 @@ impl PadSynth {
             last_fast_cut_gen: 0,
             fast_cutting: false,
             env_level: 0.0,
+            synth_mix: 1.0,
             smooth_gain: 0.0,
-            lp1_l: 0.0,
-            lp1_r: 0.0,
-            lp2_l: 0.0,
-            lp2_r: 0.0,
-            lfo_filter: 0.0,
-            lfo_breath: 1.1,
-            lfo_air: 2.3,
-            smooth_cutoff_min: def.cutoff_min,
-            smooth_cutoff_span: def.cutoff_span,
-            smooth_air_boost: def.air_boost,
+            lp_l: [0.0; 4],
+            lp_r: [0.0; 4],
+            hp_in_l: 0.0,
+            hp_in_r: 0.0,
+            hp_out_l: 0.0,
+            hp_out_r: 0.0,
+            lfo_drift: 0.0,
+            smooth_cutoff: def.cutoff,
+            smooth_air_gain: def.air_gain,
             smooth_reverb_wet: def.reverb_wet,
             smooth_reverb_fb: def.reverb_fb,
-            smooth_third_harm: def.third_harm,
+            smooth_harm_boost: def.harm_boost,
         }
     }
 
@@ -548,23 +607,29 @@ impl PadSynth {
     }
 
     fn clear_filters_and_reverb(&mut self) {
-        self.lp1_l = 0.0;
-        self.lp1_r = 0.0;
-        self.lp2_l = 0.0;
-        self.lp2_r = 0.0;
+        self.lp_l = [0.0; 4];
+        self.lp_r = [0.0; 4];
+        self.hp_in_l = 0.0;
+        self.hp_in_r = 0.0;
+        self.hp_out_l = 0.0;
+        self.hp_out_r = 0.0;
         self.reverb.clear();
     }
 
     /// Silencia y limpia el estado del sintetizador al pasar a una canción normal con pistas.
-    pub fn silence_reset(&mut self) {
+    pub fn silence_reset(&mut self, pack_bridge: Option<&PadPackBridge>) {
         for v in &mut self.voices {
             v.level = 0.0;
             v.target_level = 0.0;
         }
         self.env_level = 0.0;
+        self.synth_mix = 1.0;
         self.fast_cutting = false;
         self.smooth_gain = 0.0;
         self.clear_filters_and_reverb();
+        if let Some(bridge) = pack_bridge {
+            self.sample_player.silence_reset(bridge);
+        }
         self.last_generation = u64::MAX;
     }
 
@@ -618,13 +683,13 @@ impl PadSynth {
         }
     }
 
-    /// Suma `frames` muestras estéreo del pad en `out_l`/`out_r` (y en `mon_l`/`mon_r` si `monitor` está activo).
-    /// Devuelve `true` si emitió audio en este bloque (incluyendo cola decreciente) y `false` si ya está en silencio.
-    /// Cero asignaciones dinámicas, cero bloqueos, cero registro.
+    /// Suma `frames` muestras estéreo del pad (sintetizador o pack en audio) en `out_l`/`out_r`
+    /// (y en `mon_l`/`mon_r` si `monitor` está activo). Cero asignaciones ni bloqueos.
     #[allow(clippy::too_many_arguments)]
     pub fn render_block(
         &mut self,
         ctl: &PadControl,
+        pack_bridge: Option<&PadPackBridge>,
         pitch_semitones: i32,
         frames: usize,
         sample_rate: u32,
@@ -636,6 +701,10 @@ impl PadSynth {
     ) -> bool {
         if frames == 0 {
             return false;
+        }
+
+        if let Some(bridge) = pack_bridge {
+            self.sample_player.sync(bridge);
         }
 
         let active_mode = ctl.is_active_mode();
@@ -657,6 +726,8 @@ impl PadSynth {
         let target_style = ctl.style();
         let target_air_mode = u8::from(target_style == 2);
         let sp = style_params(target_style);
+        let use_sample = self.sample_player.wants_sample();
+
         let gen = ctl.generation();
         if gen != self.last_generation {
             self.last_generation = gen;
@@ -665,16 +736,16 @@ impl PadSynth {
                 self.current_harmony = target_harmony;
                 self.current_air_mode = target_air_mode;
                 self.smooth_gain = sanitize_gain(ctl.gain()).unwrap_or(0.0);
-                self.smooth_cutoff_min = sp.cutoff_min;
-                self.smooth_cutoff_span = sp.cutoff_span;
-                self.smooth_air_boost = sp.air_boost;
+                self.smooth_cutoff = sp.cutoff;
+                self.smooth_air_gain = sp.air_gain;
                 self.smooth_reverb_wet = sp.reverb_wet;
                 self.smooth_reverb_fb = sp.reverb_fb;
-                self.smooth_third_harm = sp.third_harm;
+                self.smooth_harm_boost = sp.harm_boost;
                 self.clear_filters_and_reverb();
                 self.fast_cutting = false;
+                self.synth_mix = if use_sample { 0.0 } else { 1.0 };
                 for (i, v) in self.voices.iter_mut().enumerate() {
-                    if i == 0 {
+                    if i == 0 && !use_sample {
                         v.configure(target_note, target_harmony, target_air_mode, sample_rate, true);
                         v.level = 1.0;
                         v.target_level = 1.0;
@@ -683,14 +754,16 @@ impl PadSynth {
                         v.target_level = 0.0;
                     }
                 }
-            } else if active_mode
+            } else if !use_sample
+                && active_mode
                 && (self.current_note != target_note
                     || self.current_harmony != target_harmony
                     || self.current_air_mode != target_air_mode)
             {
                 self.switch_voice(target_note, target_harmony, target_air_mode, sample_rate);
             }
-        } else if active_mode
+        } else if !use_sample
+            && active_mode
             && (self.current_note != target_note
                 || self.current_harmony != target_harmony
                 || self.current_air_mode != target_air_mode)
@@ -704,8 +777,16 @@ impl PadSynth {
             }
         }
 
-        // Invariante defensivo: si debe sonar pero todas las voces estaban apagadas, inicializa la principal.
-        if want_on && self.voices.iter().all(|v| v.level == 0.0 && v.target_level == 0.0) {
+        // Si arrancamos desde silencio absoluto con pack activo, no mezclamos medio segundo del sinte en frío.
+        if self.env_level == 0.0 && use_sample {
+            self.synth_mix = 0.0;
+        }
+
+        // Invariante defensivo: si el sintetizador debe sonar pero todas sus voces estaban a cero, inicializarla.
+        if want_on
+            && !use_sample
+            && self.voices.iter().all(|v| v.level == 0.0 && v.target_level == 0.0)
+        {
             self.current_note = target_note;
             self.current_harmony = target_harmony;
             self.current_air_mode = target_air_mode;
@@ -717,14 +798,15 @@ impl PadSynth {
         if !want_on && self.env_level == 0.0 {
             self.clear_filters_and_reverb();
             self.fast_cutting = false;
+            self.synth_mix = if use_sample { 0.0 } else { 1.0 };
+            if let Some(bridge) = pack_bridge {
+                self.sample_player.release_finished(bridge);
+            }
             ctl.set_tail_active(false);
             ctl.meter.record(0.0, 0.0);
             return false;
         }
 
-        // El fader de volumen se suaviza rápido (~10 ms); la entrada/salida musical la gobierna `env_level`.
-        // Si el modo pad acaba de desactivarse (cambio de canción), conservamos la ganancia anterior para que
-        // los 8 ms de bajada de `env_level` sean lisos sin saltos.
         let g_target = if active_mode {
             sanitize_gain(ctl.gain()).unwrap_or(self.smooth_gain)
         } else {
@@ -742,6 +824,9 @@ impl PadSynth {
             self.env_level = 0.0;
             self.fast_cutting = false;
             self.clear_filters_and_reverb();
+            if let Some(bridge) = pack_bridge {
+                self.sample_player.release_finished(bridge);
+            }
             ctl.set_tail_active(false);
             ctl.meter.record(0.0, 0.0);
             return false;
@@ -749,39 +834,39 @@ impl PadSynth {
 
         let sr = sample_rate.max(1) as f32;
         let crossfade_step = 1.0 / (CROSSFADE_SEC * sr).max(1.0);
+        let synth_mix_step = 1.0 / (SOURCE_XFADE_SEC * sr).max(1.0);
+        let synth_mix_target = if use_sample { 0.0 } else { 1.0 };
         let env_step_in = 1.0 / (PAD_FADE_IN_SEC * sr).max(1.0);
         let fade_out_sec = if self.fast_cutting { PAD_FAST_CUT_SEC } else { PAD_FADE_OUT_SEC };
         let env_step_out = 1.0 / (fade_out_sec * sr).max(1.0);
         let inv_frames = 1.0 / frames.max(1) as f32;
         let d_gain = (g1 - g0) * inv_frames;
 
-        // Suavizado al cambiar de timbre para que el filtro y la reverb evolucionen sin saltos.
         let style_alpha = (alpha * 0.35).clamp(0.01, 0.5);
-        self.smooth_cutoff_min = smooth_toward(self.smooth_cutoff_min, sp.cutoff_min, style_alpha);
-        self.smooth_cutoff_span = smooth_toward(self.smooth_cutoff_span, sp.cutoff_span, style_alpha);
-        self.smooth_air_boost = smooth_toward(self.smooth_air_boost, sp.air_boost, style_alpha);
+        self.smooth_cutoff = smooth_toward(self.smooth_cutoff, sp.cutoff, style_alpha);
+        self.smooth_air_gain = smooth_toward(self.smooth_air_gain, sp.air_gain, style_alpha);
         self.smooth_reverb_wet = smooth_toward(self.smooth_reverb_wet, sp.reverb_wet, style_alpha);
         self.smooth_reverb_fb = smooth_toward(self.smooth_reverb_fb, sp.reverb_fb, style_alpha);
-        self.smooth_third_harm = smooth_toward(self.smooth_third_harm, sp.third_harm, style_alpha);
+        self.smooth_harm_boost = smooth_toward(self.smooth_harm_boost, sp.harm_boost, style_alpha);
 
-        // Tres LFOs lentos inconmensurables (~14 s, ~23 s y ~34 s) para respiración orgánica sin bucles obvios.
-        let lfo_f_val = 0.5 + 0.5 * self.lfo_filter.sin();
-        let lfo_b_val = 0.5 + 0.5 * self.lfo_breath.sin();
-        let lfo_a_val = 0.5 + 0.5 * self.lfo_air.sin();
+        // Deriva térmica ultralentísima (~45 s) de ±28 Hz: mantiene el sonido orgánico sin vaivén.
         let dt_block = frames as f32 / sr;
-        self.lfo_filter = (self.lfo_filter + TAU * 0.071 * dt_block) % TAU;
-        self.lfo_breath = (self.lfo_breath + TAU * 0.043 * dt_block) % TAU;
-        self.lfo_air = (self.lfo_air + TAU * 0.029 * dt_block) % TAU;
+        let drift_hz = 28.0 * self.lfo_drift.sin();
+        self.lfo_drift = (self.lfo_drift + TAU * 0.022 * dt_block) % TAU;
 
-        let cutoff = self.smooth_cutoff_min + self.smooth_cutoff_span * (0.65 * lfo_f_val + 0.35 * lfo_b_val);
-        let lp_alpha = (1.0 - (-TAU * cutoff / sr).exp()).clamp(0.01, 0.99);
-        let mid_breath = 0.80 + 0.28 * lfo_b_val;
-        let air_breath = (0.45 + 0.75 * lfo_a_val) * self.smooth_air_boost;
-        let reverb_lens = PadReverb::delay_lengths(sample_rate);
+        let cutoff = (self.smooth_cutoff + drift_hz).max(200.0);
+        // Compensar la pendiente de 4 polos en cascada (1.45×) para conservar peso y nitidez en medios-graves.
+        let stage_cutoff = (cutoff * 1.45).min(0.42 * sr);
+        let lp_alpha = (1.0 - (-TAU * stage_cutoff / sr).exp()).clamp(0.01, 0.99);
+        let hp_r = (-TAU * 52.0 / sr).exp().clamp(0.90, 0.9995);
+
+        let air_gain = self.smooth_air_gain;
+        let harm_boost = self.smooth_harm_boost;
+        let (fdn_lens, ap_lens) = PadReverb::delay_lengths(sample_rate);
         let wet_mix = self.smooth_reverb_wet;
-        let dry_mix = 1.0 - 0.35 * wet_mix;
+        let dry_mix = 1.0 - 0.25 * wet_mix;
         let reverb_fb = self.smooth_reverb_fb;
-        let third_harm = self.smooth_third_harm;
+        let sample_active = self.sample_player.is_active();
 
         let monitor_on = ctl.is_monitor();
         let mut pk_l = 0.0f32;
@@ -794,44 +879,75 @@ impl PadSynth {
                 self.env_level = (self.env_level - env_step_out).max(0.0);
             }
             let e = self.env_level;
-            // Curva monótona suave: arranca sin clic y crece con presencia audible desde los primeros instantes.
             let env = e * (0.45 + 0.55 * e);
 
-            let mut sum_l = 0.0f32;
-            let mut sum_r = 0.0f32;
-            for v in &mut self.voices {
-                if v.level == 0.0 && v.target_level == 0.0 {
-                    continue;
-                }
-                if v.level < v.target_level {
-                    v.level = (v.level + crossfade_step).min(v.target_level);
-                } else if v.level > v.target_level {
-                    v.level = (v.level - crossfade_step).max(v.target_level);
-                }
-                // Curva S suave: derivada nula en los extremos para cruces sin clic.
-                let l = v.level;
-                let curve = l * l * (3.0 - 2.0 * l);
-                let (vl, vr) = v.next_stereo(mid_breath, air_breath, third_harm);
-                sum_l += vl * curve;
-                sum_r += vr * curve;
+            if self.synth_mix < synth_mix_target {
+                self.synth_mix = (self.synth_mix + synth_mix_step).min(synth_mix_target);
+            } else if self.synth_mix > synth_mix_target {
+                self.synth_mix = (self.synth_mix - synth_mix_step).max(synth_mix_target);
             }
 
-            // Filtro paso bajo de 2 polos en cascada + calidez analógica suave.
-            self.lp1_l += lp_alpha * (sum_l - self.lp1_l);
-            self.lp1_r += lp_alpha * (sum_r - self.lp1_r);
-            self.lp2_l += lp_alpha * (self.lp1_l - self.lp2_l);
-            self.lp2_r += lp_alpha * (self.lp1_r - self.lp2_r);
+            let mut mix_l = 0.0f32;
+            let mut mix_r = 0.0f32;
 
-            let warm_l = self.lp2_l / (1.0 + 0.14 * self.lp2_l.abs());
-            let warm_r = self.lp2_r / (1.0 + 0.14 * self.lp2_r.abs());
-            let (rev_l, rev_r) = self.reverb.process_sample(warm_l, warm_r, reverb_lens, reverb_fb);
+            if self.synth_mix > 0.0 {
+                let mut sum_l = 0.0f32;
+                let mut sum_r = 0.0f32;
+                for v in &mut self.voices {
+                    if v.level == 0.0 && v.target_level == 0.0 {
+                        continue;
+                    }
+                    if v.level < v.target_level {
+                        v.level = (v.level + crossfade_step).min(v.target_level);
+                    } else if v.level > v.target_level {
+                        v.level = (v.level - crossfade_step).max(v.target_level);
+                    }
+                    let l = v.level;
+                    let curve = l * l * (3.0 - 2.0 * l);
+                    let (vl, vr) = v.next_stereo(air_gain, harm_boost);
+                    sum_l += vl * curve;
+                    sum_r += vr * curve;
+                }
 
-            let mixed_l = warm_l * dry_mix + rev_l * wet_mix;
-            let mixed_r = warm_r * dry_mix + rev_r * wet_mix;
+                // Paso alto suave (52 Hz) para limpiar subgraves sin quitar peso a la tónica.
+                let hp_l = hp_r * (self.hp_out_l + sum_l - self.hp_in_l);
+                let hp_r_out = hp_r * (self.hp_out_r + sum_r - self.hp_in_r);
+                self.hp_in_l = sum_l;
+                self.hp_in_r = sum_r;
+                self.hp_out_l = hp_l;
+                self.hp_out_r = hp_r_out;
+
+                // Filtro paso bajo analógico de 4 polos (24 dB/oct) en cascada.
+                let mut xl = hp_l;
+                let mut xr = hp_r_out;
+                for s in 0..4 {
+                    self.lp_l[s] += lp_alpha * (xl - self.lp_l[s]);
+                    self.lp_r[s] += lp_alpha * (xr - self.lp_r[s]);
+                    xl = self.lp_l[s];
+                    xr = self.lp_r[s];
+                }
+
+                let warm_l = xl / (1.0 + 0.12 * xl.abs());
+                let warm_r = xr / (1.0 + 0.12 * xr.abs());
+                let (rev_l, rev_r) = self.reverb.process_sample(warm_l, warm_r, fdn_lens, ap_lens, reverb_fb);
+
+                let syn_l = (warm_l * dry_mix + rev_l * wet_mix) * PAD_OUTPUT_SCALE;
+                let syn_r = (warm_r * dry_mix + rev_r * wet_mix) * PAD_OUTPUT_SCALE;
+                let sm = self.synth_mix;
+                let s_curve = sm * sm * (3.0 - 2.0 * sm);
+                mix_l += syn_l * s_curve;
+                mix_r += syn_r * s_curve;
+            }
+
+            if sample_active {
+                let (smp_l, smp_r) = self.sample_player.next_sample(sample_rate);
+                mix_l += smp_l;
+                mix_r += smp_r;
+            }
 
             let g = (g0 + d_gain * (f + 1) as f32) * env;
-            let raw_l = mixed_l * PAD_OUTPUT_SCALE * g;
-            let raw_r = mixed_r * PAD_OUTPUT_SCALE * g;
+            let raw_l = mix_l * g;
+            let raw_r = mix_r * g;
             let sl = if raw_l.is_finite() { raw_l } else { 0.0 };
             let sr_out = if raw_r.is_finite() { raw_r } else { 0.0 };
 
@@ -846,6 +962,9 @@ impl PadSynth {
             }
         }
 
+        if let Some(bridge) = pack_bridge {
+            self.sample_player.release_finished(bridge);
+        }
         if self.env_level == 0.0 {
             self.fast_cutting = false;
             self.clear_filters_and_reverb();
@@ -912,7 +1031,7 @@ mod tests {
                 out_r.fill(0.0);
                 mon_l.fill(0.0);
                 mon_r.fill(0.0);
-                synth.render_block(&ctl, 1, 480, 48_000, &mut out_l, &mut out_r, &mut mon_l, &mut mon_r, true);
+                synth.render_block(&ctl, None, 1, 480, 48_000, &mut out_l, &mut out_r, &mut mon_l, &mut mon_r, true);
             }
             // Cola decreciente tras pausar/parar también con cero asignaciones.
             for _ in 0..320u32 {
@@ -920,7 +1039,7 @@ mod tests {
                 out_r.fill(0.0);
                 mon_l.fill(0.0);
                 mon_r.fill(0.0);
-                synth.render_block(&ctl, 1, 480, 48_000, &mut out_l, &mut out_r, &mut mon_l, &mut mon_r, false);
+                synth.render_block(&ctl, None, 1, 480, 48_000, &mut out_l, &mut out_r, &mut mon_l, &mut mon_r, false);
             }
         });
         assert_eq!(asignaciones, 0, "PadSynth asignó memoria dentro del bloque de audio");
@@ -964,7 +1083,7 @@ mod tests {
             }
             out_l.fill(0.0);
             out_r.fill(0.0);
-            synth.render_block(&ctl, 0, 480, 48_000, &mut out_l, &mut out_r, &mut mon_l, &mut mon_r, true);
+            synth.render_block(&ctl, None, 0, 480, 48_000, &mut out_l, &mut out_r, &mut mon_l, &mut mon_r, true);
             for i in 0..480 {
                 assert!(out_l[i].is_finite() && out_r[i].is_finite());
                 let dl = out_l[i] - prev_l;
@@ -1010,7 +1129,7 @@ mod tests {
                 out_r.fill(0.0);
                 mon_l.fill(0.0);
                 mon_r.fill(0.0);
-                synth.render_block(&ctl, 0, 480, 48_000, &mut out_l, &mut out_r, &mut mon_l, &mut mon_r, playing);
+                synth.render_block(&ctl, None, 0, 480, 48_000, &mut out_l, &mut out_r, &mut mon_l, &mut mon_r, playing);
                 for &x in &out_l {
                     max_step = max_step.max((x - prev_l).abs());
                     prev_l = x;
@@ -1100,7 +1219,7 @@ mod tests {
                 out_r.fill(0.0);
                 mon_l.fill(0.0);
                 mon_r.fill(0.0);
-                synth.render_block(&ctl, 0, 480, sr, out_l, out_r, mon_l, mon_r, true);
+                synth.render_block(&ctl, None, 0, 480, sr, out_l, out_r, mon_l, mon_r, true);
                 for f in 0..480 {
                     let l = out_l[f];
                     let r = out_r[f];
@@ -1204,7 +1323,7 @@ mod tests {
                 for b in 0..300 {
                     out_l.fill(0.0);
                     out_r.fill(0.0);
-                    synth.render_block(&ctl, 0, 480, 48_000, &mut out_l, &mut out_r, &mut mon_l, &mut mon_r, true);
+                    synth.render_block(&ctl, None, 0, 480, 48_000, &mut out_l, &mut out_r, &mut mon_l, &mut mon_r, true);
                     for &s in &out_l {
                         assert!(s.is_finite() && s.abs() < 0.9, "fuera de rango: {s}");
                         max_step = max_step.max((s - prev).abs());
@@ -1228,5 +1347,66 @@ mod tests {
             "los tres timbres deben producir perfiles distintos: {:?}",
             rms_por_estilo
         );
+    }
+
+    #[test]
+    fn test_pad_es_constante_sin_pulsacion_en_mono_y_estereo() {
+        let mut out_l = vec![0.0f32; 480];
+        let mut out_r = vec![0.0f32; 480];
+        let mut mon_l = vec![0.0f32; 480];
+        let mut mon_r = vec![0.0f32; 480];
+
+        for style in [0u8, 1, 2] {
+            for harmony in [0u8, 1, 2] {
+                let ctl = PadControl::new();
+                ctl.reset_for_load(PadConfig {
+                    active_mode: true,
+                    enabled: true,
+                    note: 10,
+                    gain: 0.85,
+                    monitor: false,
+                    harmony,
+                    style,
+                });
+                let mut synth = PadSynth::new();
+                for _ in 0..200 {
+                    out_l.fill(0.0);
+                    out_r.fill(0.0);
+                    synth.render_block(&ctl, None, 0, 480, 48_000, &mut out_l, &mut out_r, &mut mon_l, &mut mon_r, true);
+                }
+
+                // 10 ventanas de 0,25 s seguidas: el nivel en mono y estéreo se mantiene constante sin vaivén.
+                let mut min_st = f32::MAX;
+                let mut max_st = 0.0f32;
+                let mut min_mono = f32::MAX;
+                let mut max_mono = 0.0f32;
+                for _ in 0..10 {
+                    let mut sq_st = 0.0f64;
+                    let mut sq_mono = 0.0f64;
+                    for _ in 0..25 {
+                        out_l.fill(0.0);
+                        out_r.fill(0.0);
+                        synth.render_block(&ctl, None, 0, 480, 48_000, &mut out_l, &mut out_r, &mut mon_l, &mut mon_r, true);
+                        for i in 0..480 {
+                            let l = out_l[i] as f64;
+                            let r = out_r[i] as f64;
+                            let m = 0.5 * (l + r);
+                            sq_st += l * l + r * r;
+                            sq_mono += m * m;
+                        }
+                    }
+                    let rms_st = (sq_st / (25 * 480 * 2) as f64).sqrt() as f32;
+                    let rms_mono = (sq_mono / (25 * 480) as f64).sqrt() as f32;
+                    min_st = min_st.min(rms_st);
+                    max_st = max_st.max(rms_st);
+                    min_mono = min_mono.min(rms_mono);
+                    max_mono = max_mono.max(rms_mono);
+                }
+                let ratio_st = max_st / min_st.max(1e-6);
+                let ratio_mono = max_mono / min_mono.max(1e-6);
+                assert!(ratio_st < 1.35, "pulsación en estéreo (h={harmony}, s={style}): {min_st}..{max_st} (ratio {ratio_st})");
+                assert!(ratio_mono < 1.35, "pulsación/batido en mono (h={harmony}, s={style}): {min_mono}..{max_mono} (ratio {ratio_mono})");
+            }
+        }
     }
 }

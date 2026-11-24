@@ -1,6 +1,7 @@
 import React from 'react';
-import { Sliders, Volume2, VolumeX } from 'lucide-react';
+import { Layers, Sliders, Volume2, VolumeX } from 'lucide-react';
 import type { PadHarmony, PadStyle, SongProject, TransportState } from '../types/project';
+import type { PadPackInfo } from '../utils/padPacks';
 import {
   CLICK_SUBDIVISION_OPTIONS,
   effectivePadNoteIndex,
@@ -30,6 +31,9 @@ interface PadStagePanelProps {
   onTogglePad?: () => void;
   onToggleClick?: () => void;
   onOpenMixer?: () => void;
+  activePack?: PadPackInfo | null;
+  onOpenPackManager?: () => void;
+  onUseSynth?: () => void;
 }
 
 /**
@@ -49,6 +53,9 @@ export const PadStagePanel: React.FC<PadStagePanelProps> = ({
   onTogglePad,
   onToggleClick,
   onOpenMixer,
+  activePack,
+  onOpenPackManager,
+  onUseSynth,
 }) => {
   const isLive = mode === 'live';
   const baseNoteIdx = parseKeyToNoteIndex(project.keySignature);
@@ -58,6 +65,7 @@ export const PadStagePanel: React.FC<PadStagePanelProps> = ({
   const style = normalizePadStyle(project.padStyle);
   const harmonyLabel = padHarmonyLabel(harmony);
   const styleLabel = padStyleLabel(style);
+  const sourceDesc = activePack ? `Pack: ${activePack.name}` : `${harmonyLabel} · ${styleLabel}`;
   const subdivision = normalizeClickSubdivision(project.clickSubdivision);
   const bpb = Math.max(2, Math.min(12, project.beatsPerBar || 4));
   const beatUnit = project.beatUnit || (bpb === 6 ? 8 : 4);
@@ -77,13 +85,25 @@ export const PadStagePanel: React.FC<PadStagePanelProps> = ({
             <p className="lt-pad-sub">
               {padOn
                 ? project.pitchSemitones !== 0
-                  ? `Sonando en ${noteIndexToLabel(activeNoteIdx)} · ${harmonyLabel} · ${styleLabel} (base ${noteIndexToLabel(baseNoteIdx)} ${project.pitchSemitones > 0 ? '+' : ''}${project.pitchSemitones} st)`
-                  : `Tono activo: ${noteIndexToLabel(activeNoteIdx)} · ${harmonyLabel} · ${styleLabel}`
+                  ? `Sonando en ${noteIndexToLabel(activeNoteIdx)} · ${sourceDesc} (base ${noteIndexToLabel(baseNoteIdx)} ${project.pitchSemitones > 0 ? '+' : ''}${project.pitchSemitones} st)`
+                  : `Tono activo: ${noteIndexToLabel(activeNoteIdx)} · ${sourceDesc}`
                 : 'Pad silenciado (solo click)'}
             </p>
           </div>
           {!isLive ? (
             <div className="lt-pad-head-actions">
+              {onOpenPackManager && (
+                <button
+                  type="button"
+                  className="lt-control"
+                  aria-pressed={Boolean(activePack)}
+                  onClick={onOpenPackManager}
+                  title="Cargar o elegir packs de pads en audio (12 notas en bucle)"
+                >
+                  <Layers size={14} />
+                  <span>Packs</span>
+                </button>
+              )}
               {onOpenMixer && (
                 <button
                   type="button"
@@ -148,44 +168,64 @@ export const PadStagePanel: React.FC<PadStagePanelProps> = ({
           })}
         </div>
 
-        {!isLive && (
-          <div className="lt-pad-options-row">
-            <div className="lt-field">
-              <span>Carácter</span>
-              <div className="lt-segmented" role="group" aria-label="Carácter armónico del pad">
-                {PAD_HARMONY_OPTIONS.map((opt) => (
-                  <button
-                    key={opt.value}
-                    type="button"
-                    className="lt-control"
-                    aria-pressed={harmony === opt.value}
-                    title={opt.hint}
-                    onClick={() => onChangePadHarmony?.(opt.value)}
-                  >
-                    {opt.label}
+        {!isLive &&
+          (activePack ? (
+            <div className="lt-pad-pack-bar">
+              <div className="lt-pad-pack-meta">
+                <strong>Audio real del pack</strong>
+                <span>{activePack.availableNotes.length}/12 notas · bucle infinito</span>
+              </div>
+              <div className="lt-pad-head-actions">
+                {onUseSynth && (
+                  <button type="button" className="lt-control" onClick={onUseSynth}>
+                    Usar sintetizador
                   </button>
-                ))}
+                )}
+                {onOpenPackManager && (
+                  <button type="button" className="lt-control" onClick={onOpenPackManager}>
+                    Cambiar pack
+                  </button>
+                )}
               </div>
             </div>
-            <div className="lt-field">
-              <span>Timbre</span>
-              <div className="lt-segmented" role="group" aria-label="Timbre del pad">
-                {PAD_STYLE_OPTIONS.map((opt) => (
-                  <button
-                    key={opt.value}
-                    type="button"
-                    className="lt-control"
-                    aria-pressed={style === opt.value}
-                    title={opt.hint}
-                    onClick={() => onChangePadStyle?.(opt.value)}
-                  >
-                    {opt.label}
-                  </button>
-                ))}
+          ) : (
+            <div className="lt-pad-options-row">
+              <div className="lt-field">
+                <span>Carácter</span>
+                <div className="lt-segmented" role="group" aria-label="Carácter armónico del pad">
+                  {PAD_HARMONY_OPTIONS.map((opt) => (
+                    <button
+                      key={opt.value}
+                      type="button"
+                      className="lt-control"
+                      aria-pressed={harmony === opt.value}
+                      title={opt.hint}
+                      onClick={() => onChangePadHarmony?.(opt.value)}
+                    >
+                      {opt.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div className="lt-field">
+                <span>Timbre</span>
+                <div className="lt-segmented" role="group" aria-label="Timbre del pad">
+                  {PAD_STYLE_OPTIONS.map((opt) => (
+                    <button
+                      key={opt.value}
+                      type="button"
+                      className="lt-control"
+                      aria-pressed={style === opt.value}
+                      title={opt.hint}
+                      onClick={() => onChangePadStyle?.(opt.value)}
+                    >
+                      {opt.label}
+                    </button>
+                  ))}
+                </div>
               </div>
             </div>
-          </div>
-        )}
+          ))}
       </div>
 
       {/* Bloque derecho: metrónomo moderno */}

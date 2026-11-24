@@ -308,7 +308,9 @@ impl PlaybackEngine {
             Err(_) => Vec::new(),
         };
 
+        self.pad_pack.drain_retired();
         let pad_snap = self.pad.snapshot();
+        let pad_pack_id = self.pad_pack.active_pack_id();
 
         PlaybackStateSnapshot {
             is_playing: self.is_playing.load(Ordering::SeqCst),
@@ -352,6 +354,7 @@ impl PlaybackEngine {
             pad_monitor: pad_snap.monitor,
             pad_harmony: pad_snap.harmony,
             pad_style: pad_snap.style,
+            pad_pack_id,
             // Solo cuenta con la reproducción pedida: sin Play no hay salida abierta ni callback que saque al motor de
             // buffering (la canción recién cargada lo está), y eso no es un atasco.
             buffering_ms: if self.is_buffering.load(Ordering::SeqCst) && self.is_playing.load(Ordering::SeqCst) {

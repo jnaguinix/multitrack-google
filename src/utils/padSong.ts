@@ -161,6 +161,7 @@ export interface CreatePadSongParams {
   clickSubdivision?: 1 | 2 | 4;
   padHarmony?: PadHarmony;
   padStyle?: PadStyle;
+  padPackId?: string | null;
   setlistOrder?: number;
   id?: string;
   now?: number;
@@ -204,6 +205,7 @@ export function createPadOnlySong(params: CreatePadSongParams): SongProject {
     padMonitor: false,
     padHarmony: normalizePadHarmony(params.padHarmony),
     padStyle: normalizePadStyle(params.padStyle),
+    padPackId: params.padPackId ? params.padPackId : null,
     createdAt: now,
     lastUsedAt: now,
     updatedAt: now,

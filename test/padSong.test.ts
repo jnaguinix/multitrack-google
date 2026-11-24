@@ -122,6 +122,17 @@ assert.deepEqual(padConfigFromProject(normalSong), {
   style: 0,
 });
 
+assert.equal(padSong.padPackId, null, 'por defecto una canción sin secuencia arranca con sintetizador interno');
+const packSong = createPadOnlySong({
+  id: 'pad-pack-1',
+  title: 'Gloria',
+  keySignature: 'D',
+  bpm: 70,
+  padPackId: 'pack-warm-01',
+  now: 123458,
+});
+assert.equal(packSong.padPackId, 'pack-warm-01', 'debe conservar el pack elegido al crear la canción');
+
 // 5. Exclusión de la biblioteca: las canciones sin secuencia no salen en Biblioteca
 const visible = filterLibrarySongs([padSong, normalSong]);
 assert.deepEqual(
