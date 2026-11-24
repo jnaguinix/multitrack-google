@@ -102,6 +102,7 @@ Reproductor de multitracks optimizado para cultos y música en vivo. Dispone de 
 - Trabajar siempre en rama aparte creada a partir de la rama indicada. Nunca realizar commits ni merges directos a `main`, salvo que el dueño lo pida de forma expresa (como en la migración a 0.3.0).
 - No lanzar `verify.ps1 -Completo` por iniciativa propia: tarda cerca de una hora. Por commit basta el verify rápido; el completo lo pide el dueño.
 - Un cambio lógico por commit, con mensaje descriptivo y preciso.
+- **Módulos nuevos, en archivos nuevos**: una función o módulo nuevo va en su propio archivo (en `src/utils/`, `src/hooks/`, `src/components/` o `desktop/src-tauri/src/audio/`, según toque) y se conecta desde los existentes con pocas líneas. No se añade lógica nueva a los archivos que ya son grandes (`src/App.tsx`, `audio/mod.rs`, `playback/mod.rs`, `SectionEditorModal.tsx`…): si un cambio los haría crecer de forma notable, primero se extrae a un archivo aparte. Un archivo nuevo con una sola responsabilidad y su prueba al lado (`test/<nombre>.test.ts` o `#[cfg(test)]`); y se registra en el mapa de módulos de `CLAUDE.md`, `AGENTS.md` y `docs/ARQUITECTURA.md`.
 - Nunca tragar errores: terminantemente prohibido `.catch(() => {})` o silenciar excepciones sin log o notificación visual al usuario.
 - En reportes de verificación, marcar explícitamente como «No medido» toda prueba o métrica no ejecutada.
 - Actualizar este archivo (`CLAUDE.md`), su copia `AGENTS.md` (idéntica salvo esa frase) y `docs/ARQUITECTURA.md` inmediatamente si se mueven, renombran o agregan módulos.
