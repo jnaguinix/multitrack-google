@@ -15,6 +15,7 @@ import {
   SongProject,
   TransportState,
 } from '../types/project';
+import { isPadOnlySong, subdivisionBadge } from '../utils/padSong';
 
 interface TransportDeckProps {
   project: SongProject;
@@ -71,19 +72,25 @@ export const TransportDeck: React.FC<TransportDeckProps> = ({
 
   onCancelQueuedJump,
 }) => {
+  const isPadSong = isPadOnlySong(project);
   const activeSection = project.sections.find((s) => s.id === transport.activeSectionId);
   const queuedSection = project.sections.find((s) => s.id === transport.queuedSectionId);
 
   const currentSetlistIdx = setlistQueue.findIndex((song) => song.id === project.id);
   const notice = transport.mountingProgressText || importStatusText;
   const playLabel = transport.isMountingSong ? 'Cargando…' : transport.isPlaying ? 'Pausar' : 'Reproducir';
+  const minBpm = isPadSong ? 40 : 50;
+  const maxBpm = isPadSong ? 240 : 220;
+  const subtitle = isPadSong
+    ? `${project.keySignature} · ${project.bpm} BPM ${subdivisionBadge(project.clickSubdivision)} · Pad + Click`
+    : `${project.keySignature} · ${project.bpm} BPM · ${activeSection?.name || 'Sin sección activa'}`;
 
   return (
     <section aria-label="Transporte" className="lt-transport">
       <div className="lt-transport-song min-w-0">
         <p className="truncate text-base font-semibold" title={project.title}>{project.title}</p>
         <p className="truncate text-xs text-neutral-400" title={notice || undefined}>
-          {notice ||`${project.keySignature} · ${project.bpm} BPM · ${activeSection?.name || 'Sin sección activa'}`}
+          {notice || subtitle}
         </p>
       </div>
 
@@ -105,15 +112,17 @@ export const TransportDeck: React.FC<TransportDeckProps> = ({
             <SkipForward size={15} />
           </button>
         )}
-        <button type="button" onClick={onToggleVamp} aria-pressed={transport.isVamping} className="lt-control lt-icon-control" aria-label="Repetir sección" title="Repetir sección (V)" aria-keyshortcuts="V">
-          <Repeat size={16} />
-        </button>
+        {!isPadSong && (
+          <button type="button" onClick={onToggleVamp} aria-pressed={transport.isVamping} className="lt-control lt-icon-control" aria-label="Repetir sección" title="Repetir sección (V)" aria-keyshortcuts="V">
+            <Repeat size={16} />
+          </button>
+        )}
       </div>
 
       <div className="lt-transport-readout flex items-center gap-2.5">
         <div className="flex items-baseline gap-1.5 whitespace-nowrap">
           <span className="lt-transport-clock">{formatTimecode(transport.currentTimeSec)}</span>
-          <span className="text-xs text-neutral-400">/ {formatMmSs(transport.totalDurationSec)}</span>
+          {!isPadSong && <span className="text-xs text-neutral-400">/ {formatMmSs(transport.totalDurationSec)}</span>}
         </div>
         <div className="flex items-center gap-0.5 max-sm:hidden" aria-label={`Pulso ${transport.currentBeat} de ${project.beatsPerBar}`}>
           {Array.from({ length: project.beatsPerBar }, (_, index) => (
@@ -148,21 +157,23 @@ export const TransportDeck: React.FC<TransportDeckProps> = ({
               </select>
             </label>
           )}
-          <label className="lt-field">
-            Salto de sección
-            <select value={project.quantizeMode} onChange={(event) => onChangeQuantize(event.target.value as QuantizeMode)}>
-              <option value="immediate">Inmediato</option>
-              <option value="1-bar">Al siguiente compás</option>
-              <option value="2-bars">Cada dos compases</option>
-              <option value="section-end">Al final de la sección</option>
-            </select>
-          </label>
+          {!isPadSong && (
+            <label className="lt-field">
+              Salto de sección
+              <select value={project.quantizeMode} onChange={(event) => onChangeQuantize(event.target.value as QuantizeMode)}>
+                <option value="immediate">Inmediato</option>
+                <option value="1-bar">Al siguiente compás</option>
+                <option value="2-bars">Cada dos compases</option>
+                <option value="section-end">Al final de la sección</option>
+              </select>
+            </label>
+          )}
           <div className="grid grid-cols-2 gap-2">
             <label className="lt-field">
               BPM
-              <input type="number" min={50} max={220} value={project.bpm} onChange={(event) => {
+              <input type="number" min={minBpm} max={maxBpm} value={project.bpm} onChange={(event) => {
                 const bpm = Number(event.target.value);
-                if (bpm >= 50 && bpm <= 220) onChangeBpm(bpm);
+                if (bpm >= minBpm && bpm <= maxBpm) onChangeBpm(bpm);
               }} />
             </label>
             <label className="lt-field">

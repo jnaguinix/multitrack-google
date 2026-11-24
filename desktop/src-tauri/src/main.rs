@@ -261,6 +261,7 @@ fn main() {
             omnitracks_desktop::audio::audio_toggle_vamp,
             omnitracks_desktop::audio::audio_set_pitch,
             omnitracks_desktop::audio::audio_set_metronome,
+            omnitracks_desktop::audio::audio_set_pad,
             omnitracks_desktop::audio::audio_get_routing,
             omnitracks_desktop::audio::audio_set_routing,
             omnitracks_desktop::audio::audio_reset_routing,

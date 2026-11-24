@@ -14,6 +14,7 @@ import {
 } from '../src/audio/controlSync';
 import { FlightRecorder } from '../src/utils/flightRecorder';
 import { SaveScheduler } from '../src/storage/saveScheduler';
+import { createPadOnlySong } from '../src/utils/padSong';
 import type { SongProject } from '../src/types/project';
 
 function assert(condition: boolean, msg: string) {
@@ -423,6 +424,40 @@ async function main() {
     assert(r.lastMismatch()?.summary === 'prueba', 'la última discrepancia se guarda');
     const rep = r.report({ canción: 'p1' });
     assert(rep.includes('canción: p1') && rep.includes('Última discrepancia') && rep.includes('discrepancia: prueba'), 'el informe incluye contexto y discrepancia');
+  }
+
+  // ------------------------------------------------------------------ modo sin secuencia (pad)
+  {
+    const padA = createPadOnlySong({ id: 'pad-1', title: 'Adoración', keySignature: 'G', bpm: 72, clickSubdivision: 2 });
+    const initialOps = diffProjectControls(null, padA);
+    assert(initialOps.some((o) => o.cmd === 'audio_set_pad' && (o.args.config as any).note === 7), 'carga inicial envía audio_set_pad con nota G');
+
+    const padGain = { ...padA, padGain: 0.45 };
+    const gainOps = diffProjectControls(padA, padGain);
+    assert(gainOps.length === 1 && gainOps[0].cmd === 'audio_set_pad' && isContinuousOnly(gainOps), 'mover fader del pad es continuo');
+
+    const padNote = { ...padA, keySignature: 'D' };
+    const noteOps = diffProjectControls(padA, padNote);
+    assert(noteOps.length === 1 && noteOps[0].cmd === 'audio_set_pad' && !isContinuousOnly(noteOps), 'cambiar nota del pad se guarda de inmediato');
+
+    // Reconciliación sin trackControls
+    const sent: Array<{ cmd: string; args?: Record<string, unknown> }> = [];
+    let clock = 10_000;
+    const sync = new ControlSync({
+      getInvoke: () => async (cmd, args) => {
+        sent.push({ cmd, args });
+      },
+      onError: () => {},
+      recorder: new FlightRecorder(20),
+      now: () => clock,
+    });
+    sync.syncAll(padA);
+    await sync.queue.idle();
+    clock += SETTLE_MS + 1;
+    const snap = { padActive: true, padEnabled: true, padNote: 0, padGain: padA.padGain, padMonitor: false };
+    assert(sync.reconcile(snap, padA).length === 0, 'primera lectura discrepante del pad espera confirmación');
+    const fixed = sync.reconcile(snap, padA);
+    assert(fixed.includes('pad'), 'segunda lectura discrepante corrige el pad aunque no haya pistas');
   }
 
   console.log('controlSync: OK');

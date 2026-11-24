@@ -7,7 +7,7 @@ pub struct MetronomeConfig {
     pub enabled: bool,
     pub bpm: f32,
     pub beats_per_bar: u32,
-    pub subdivision: u32, // 1 = quarter note, 2 = eighth note
+    pub subdivision: u32, // 1 = negras (×1), 2 = corcheas (×2), 4 = semicorcheas (×4)
     pub gain: f32,        // 0.0 to 2.0
     /// Obsoleto: el ruteo vive en el dispositivo (`audio/routing.rs`). Se acepta y se ignora.
     #[serde(default)]
@@ -273,6 +273,46 @@ mod tests {
             }
         });
         assert_eq!(asignaciones, 0, "el metrónomo asignó memoria dentro del bloque de audio");
+    }
+
+    #[test]
+    fn test_subdivision_cuadruple_sin_asignaciones_y_con_acentos() {
+        let mut met = MetronomeEngine::new(MetronomeConfig {
+            enabled: true,
+            bpm: 120.0,
+            beats_per_bar: 4,
+            subdivision: 4,
+            gain: 1.0,
+            split_mono: false,
+        });
+        // A 120 BPM y 48 kHz: 1 negra = 24 000 frames, 1 semicorchea (×4) = 6 000 frames.
+        let mut out = vec![0.0f32; 480];
+        let mut downbeat = 0.0f32;
+        let mut quarter = 0.0f32;
+        let mut subs = [0.0f32; 3];
+        let asignaciones = crate::alloc_probe::count_allocs(|| {
+            // 1 compás = 2 s = 96 000 frames (200 bloques de 480 frames).
+            for b in 0..200u64 {
+                let start = b * 480;
+                met.render_block(start, start + 480, 480, 48_000, &mut out);
+                let peak = out.iter().fold(0.0f32, |m, &x| m.max(x.abs()));
+                let sub = ((start / 6_000) % 4) as usize;
+                let beat = (start / 24_000) % 4;
+                if beat == 0 && sub == 0 {
+                    downbeat = downbeat.max(peak);
+                } else if beat == 1 && sub == 0 {
+                    quarter = quarter.max(peak);
+                } else if beat == 0 && sub > 0 {
+                    subs[sub - 1] = subs[sub - 1].max(peak);
+                }
+            }
+        });
+        assert_eq!(asignaciones, 0, "subdivisión ×4 asignó memoria");
+        assert!(downbeat > quarter, "el tiempo 1 ({downbeat}) debe sonar más fuerte que las demás negras ({quarter})");
+        for (i, &s) in subs.iter().enumerate() {
+            assert!(quarter > s, "la negra ({quarter}) debe sonar más fuerte que la semicorchea {} ({s})", i + 2);
+            assert!(s > 0.05, "la semicorchea {} debe sonar ({s})", i + 2);
+        }
     }
 
 }

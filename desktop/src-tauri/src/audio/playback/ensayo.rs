@@ -669,3 +669,132 @@ async fn ensayo_una_cancion_cargada_sin_play_no_cuenta_como_buffering_atascado()
     assert!(esperando.is_buffering && esperando.is_playing);
     assert!(esperando.buffering_ms >= 100, "con Play pedido y sin audio el atasco debe contarse: {} ms", esperando.buffering_ms);
 }
+
+#[tokio::test]
+async fn ensayo_modo_sin_pista_pad_y_click() {
+    use crate::audio::metronome::MetronomeConfig;
+    use crate::audio::pad::PadConfig;
+    use crate::audio::routing::{propose, RouteTable};
+
+    let engine = PlaybackEngine::new(Arc::new(AudioStreamStats::default()));
+    engine.routing.store(&RouteTable::from_config(&propose(2)));
+
+    let info = engine
+        .load_pad_project(
+            "pad-ensayo",
+            SR,
+            Some(120.0),
+            Some(4),
+            PadConfig { active_mode: true, enabled: true, note: 7, gain: 0.9, monitor: false },
+        )
+        .await
+        .expect("cargar canción sin secuencia");
+    assert_eq!(info.track_count, 0);
+    assert_eq!(info.total_frames, 0);
+
+    engine.set_metronome(MetronomeConfig {
+        enabled: true,
+        bpm: 120.0,
+        beats_per_bar: 4,
+        subdivision: 4,
+        gain: 0.9,
+        split_mono: false,
+    });
+
+    let estado = engine.get_playback_state();
+    assert!(estado.pad_active && estado.pad_enabled && estado.pad_note == 7);
+    assert_eq!(estado.click_subdivision, 4);
+    assert!(estado.track_controls.is_empty());
+
+    engine.begin_playback(|| async { Ok::<(), String>(()) }).await.unwrap();
+
+    let mut buf = vec![0.0f32; BLOQUE * 2];
+    // El primer bloque crea el BlockMixer (igual que al abrir la salida).
+    engine.simulate_callback_block(&mut buf, 2);
+
+    let mut prev_music = buf[(BLOQUE - 1) * 2 + 1];
+    let mut asignaciones = 0u64;
+    let mut max_step_music = 0.0f32;
+
+    let mut correr = |bloques: usize, reset_prev: bool, engine: &PlaybackEngine, prev: &mut f32, max_step: &mut f32, allocs: &mut u64| -> (f32, f32) {
+        if reset_prev {
+            *prev = 0.0;
+        }
+        let mut pk_ch0 = 0.0f32;
+        let mut pk_ch1 = 0.0f32;
+        for _ in 0..bloques {
+            *allocs += crate::alloc_probe::count_allocs(|| engine.simulate_callback_block(&mut buf, 2));
+            for f in 0..BLOQUE {
+                let c0 = buf[f * 2];
+                let c1 = buf[f * 2 + 1];
+                assert!(c0.is_finite() && c1.is_finite(), "muestra no finita");
+                assert!(c0.abs() <= 1.0 && c1.abs() <= 1.0, "muestra fuera de ±1");
+                *max_step = (*max_step).max((c1 - *prev).abs());
+                *prev = c1;
+                pk_ch0 = pk_ch0.max(c0.abs());
+                pk_ch1 = pk_ch1.max(c1.abs());
+            }
+        }
+        (pk_ch0, pk_ch1)
+    };
+
+    // 1. Suena continuamente sin parar solo (200 bloques = 2 s).
+    let (ch0, ch1) = correr(200, false, &engine, &mut prev_music, &mut max_step_music, &mut asignaciones);
+    assert!(ch0 > 0.1, "canal 0 debe llevar el click");
+    assert!(ch1 > 0.05, "canal 1 debe llevar el pad");
+    assert!(engine.is_playing.load(Ordering::SeqCst), "la canción sin pista no debe pararse sola");
+
+    // 2. Cambio de nota y transposición en vivo sin escalones (el click sigue en el canal 0).
+    engine.set_pad(PadConfig { active_mode: true, enabled: true, note: 2, gain: 0.9, monitor: false });
+    let (_, ch1_nota) = correr(60, false, &engine, &mut prev_music, &mut max_step_music, &mut asignaciones);
+    assert!(ch1_nota > 0.05);
+
+    engine.set_pitch(2).await;
+    let (_, ch1_pitch) = correr(50, false, &engine, &mut prev_music, &mut max_step_music, &mut asignaciones);
+    assert!(ch1_pitch > 0.05);
+
+    // 3. Silenciar el pad: canal 1 queda en silencio y el click sigue sonando en el canal 0.
+    engine.set_pad(PadConfig { active_mode: true, enabled: false, note: 2, gain: 0.9, monitor: false });
+    correr(20, false, &engine, &mut prev_music, &mut max_step_music, &mut asignaciones);
+    let (ch0_mute, ch1_mute) = correr(40, false, &engine, &mut prev_music, &mut max_step_music, &mut asignaciones);
+    assert!(ch0_mute > 0.1, "el click debe seguir sonando con el pad silenciado");
+    assert!(ch1_mute < 1e-4, "el pad silenciado debe quedar en silencio: {ch1_mute}");
+
+    // 4. Encender pad con envío a auriculares («Aur.») y ganancia NaN ignorada.
+    engine.set_pad(PadConfig { active_mode: true, enabled: true, note: 2, gain: f32::NAN, monitor: true });
+    let (ch0_mon, ch1_mon) = correr(60, false, &engine, &mut prev_music, &mut max_step_music, &mut asignaciones);
+    assert!(ch1_mon > 0.05, "ganancia NaN no debe borrar la ganancia válida del pad");
+    assert!(ch0_mon > 0.05);
+
+    // 5. Pausa y parada.
+    engine.pause().await;
+    assert!(!engine.is_playing.load(Ordering::SeqCst));
+    let reloj_pausa = engine.current_frame.load(Ordering::SeqCst);
+    let (p0, p1) = correr(10, true, &engine, &mut prev_music, &mut max_step_music, &mut asignaciones);
+    assert!(p0 == 0.0 && p1 == 0.0, "en pausa debe haber silencio");
+    assert_eq!(engine.current_frame.load(Ordering::SeqCst), reloj_pausa);
+
+    engine.stop().await;
+    assert_eq!(engine.current_frame.load(Ordering::SeqCst), 0, "stop debe reiniciar el reloj a 0");
+
+    // 6. Al montar después una canción normal con pistas, el modo pad se desactiva.
+    let dir = escribir_cache("tras_pad", &["pista-a"], 2 * SR as usize);
+    engine
+        .load_project_with_controls(
+            &dir,
+            "tras_pad",
+            SR,
+            Some(120.0),
+            Some(4),
+            Some(vec![seccion("a", 0.0, 2.0)]),
+            Some("1-bar".to_string()),
+            Some(vec![control_inicial("pista-a", false)]),
+        )
+        .await
+        .expect("cargar canción normal tras pad");
+    assert!(!engine.pad.is_active_mode());
+    assert!(!engine.get_playback_state().pad_active);
+
+    assert!(max_step_music <= ESCALON_MAXIMO, "escalón en canal de música del pad: {max_step_music}");
+    assert_eq!(asignaciones, 0, "el callback asignó memoria en modo pad: {asignaciones}");
+}

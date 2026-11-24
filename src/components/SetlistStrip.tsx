@@ -3,6 +3,7 @@ import {
   ChevronLeft,
   ChevronRight,
   ChevronsRight,
+  Disc3,
   GripHorizontal,
   MoreHorizontal,
   Pause,
@@ -15,6 +16,7 @@ import {
 } from 'lucide-react';
 import { SetlistTransitionMode, SongProject } from '../types/project';
 import { getSongWaveformPeaks } from '../utils/songWaveform';
+import { isPadOnlySong, noteIndexToLabel, parseKeyToNoteIndex, subdivisionBadge } from '../utils/padSong';
 import { resolveTransition, TRANSITION_LABELS } from '../utils/setlistTransition';
 import { describeLoudness, setlistReferenceLufs } from '../utils/loudness';
 import { formatMmSs } from './TransportDeck';
@@ -52,6 +54,7 @@ interface SetlistStripProps {
 const BARS = 22;
 
 function songDuration(song: SongProject): number {
+  if (isPadOnlySong(song)) return 0;
   return song.durationSec || ((song.totalBars || 24) * 4 * 60) / (song.bpm || 120);
 }
 
@@ -124,6 +127,7 @@ export const SetlistStrip: React.FC<SetlistStripProps> = ({
         const status = statusOf(song);
         const mode = resolveTransition(song, globalMode);
         const hasOwnTransition = Boolean(song.transitionToNext);
+        const padOnly = isPadOnlySong(song);
         const durSec = songDuration(song);
         const loudness = loudnessOf(song);
 
@@ -159,14 +163,18 @@ export const SetlistStrip: React.FC<SetlistStripProps> = ({
               onClick={() => {
                 if (!isCurrent) onSelect(song);
               }}
-              title={`${song.title}${status.title ? ' · ' + status.title : ''}\nEmpieza en ${formatMmSs(startOffsets[idx] ?? 0)}`}
+              title={
+                padOnly
+                  ? `${song.title} · Pad + Click`
+                  : `${song.title}${status.title ? ' · ' + status.title : ''}\nEmpieza en ${formatMmSs(startOffsets[idx] ?? 0)}`
+              }
             >
               <div className="lt-tile-top">
                 <span className="lt-tile-num">
                   <GripHorizontal className="w-3.5 h-3.5 cursor-grab" aria-hidden="true" />
                   {idx + 1}
                 </span>
-                <span className="lt-tile-dur">{formatMmSs(durSec)}</span>
+                <span className="lt-tile-dur">{padOnly ? 'Pad' : formatMmSs(durSec)}</span>
               </div>
               {loudness && (
                 <div className="lt-tile-loud" data-tone={loudness.tone} title={loudness.title}>
@@ -175,13 +183,22 @@ export const SetlistStrip: React.FC<SetlistStripProps> = ({
                 </div>
               )}
 
-              <TileWave song={song} active={isCurrent} />
+              {padOnly ? (
+                <div className="lt-tile-pad-wave" aria-hidden="true">
+                  <span className="lt-tile-pad-badge">
+                    <Disc3 size={13} />
+                    <span>Pad + Click</span>
+                  </span>
+                </div>
+              ) : (
+                <TileWave song={song} active={isCurrent} />
+              )}
 
               <strong className="lt-tile-title">{song.title}</strong>
 
               <div className="lt-tile-meta">
                 <span>
-                  {song.keySignature}
+                  {padOnly ? noteIndexToLabel(parseKeyToNoteIndex(song.keySignature)) : song.keySignature}
                   {song.pitchSemitones !== 0 && (
                     <em title="Transpuesta respecto al original">
                       {song.pitchSemitones > 0 ? '+' : ''}
@@ -189,6 +206,7 @@ export const SetlistStrip: React.FC<SetlistStripProps> = ({
                     </em>
                   )}{' '}
                   · {song.bpm}
+                  {padOnly && song.clickSubdivision > 1 ? ` ${subdivisionBadge(song.clickSubdivision)}` : ''}
                 </span>
                 <span className="lt-tile-status" data-tone={status.tone} title={status.title}>
                   {status.text}

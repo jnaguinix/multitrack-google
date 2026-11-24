@@ -3,6 +3,7 @@
 // dos decodificaciones a la vez del mismo proyecto. La usa `NativeAudioEngine`, que expone la misma API pública.
 
 import type { SongProject } from '../types/project';
+import { isPadOnlySong } from '../utils/padSong';
 import { loadProjectStemsFromDb, extractStemArrayBuffer } from '../storage/projectDb';
 import { pickNativeFolder, scanNativeFolder, checkFilesExist, importTrackBytesRaw } from '../utils/nativeDialog';
 import { matchScannedFilesToTracks } from '../utils/nativeImportPlan';
@@ -218,6 +219,11 @@ export class NativeCacheManager {
   }
 
   public async checkProjectCacheStatus(project: SongProject): Promise<CacheStatus> {
+    if (isPadOnlySong(project)) {
+      this.trackIdsByProject.set(project.id, []);
+      this.setNativeReady(project.id, true);
+      return { isReady: true, cachedCount: 0, totalCount: 0 };
+    }
     const trackIds = project.tracks.map((t) => t.id);
     this.trackIdsByProject.set(project.id, trackIds);
     try {
@@ -248,6 +254,10 @@ export class NativeCacheManager {
     onProgress?: (percent: number, text: string) => void,
     options: { askForFolder?: boolean } = {}
   ): Promise<boolean> {
+    if (isPadOnlySong(project)) {
+      this.setNativeReady(project.id, true);
+      return true;
+    }
     const inFlight = this.generatingCachePromises.get(project.id);
     if (inFlight) {
       const unsubscribe = this.forwardRealProgress(project.id, onProgress);

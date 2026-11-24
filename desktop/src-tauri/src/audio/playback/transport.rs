@@ -305,6 +305,8 @@ impl PlaybackEngine {
             Err(_) => Vec::new(),
         };
 
+        let pad_snap = self.pad.snapshot();
+
         PlaybackStateSnapshot {
             is_playing: self.is_playing.load(Ordering::SeqCst),
             is_buffering: self.is_buffering.load(Ordering::SeqCst),
@@ -340,6 +342,11 @@ impl PlaybackEngine {
             meters,
             track_controls,
             open_device: self.open_device.lock().unwrap().clone(),
+            pad_active: pad_snap.active_mode,
+            pad_enabled: pad_snap.enabled,
+            pad_note: pad_snap.note,
+            pad_gain: pad_snap.gain,
+            pad_monitor: pad_snap.monitor,
             // Solo cuenta con la reproducción pedida: sin Play no hay salida abierta ni callback que saque al motor de
             // buffering (la canción recién cargada lo está), y eso no es un atasco.
             buffering_ms: if self.is_buffering.load(Ordering::SeqCst) && self.is_playing.load(Ordering::SeqCst) {
@@ -355,7 +362,7 @@ impl PlaybackEngine {
     /// recorre la lista de control `tracks`. Si está ocupada (carga en curso), devuelve solo los
     /// buses; los picos de pista no se pierden, se leen en la siguiente consulta.
     pub fn take_meters(&self) -> MetersSnapshotDto {
-        let tracks = match self.tracks.try_lock() {
+        let mut tracks = match self.tracks.try_lock() {
             Ok(guard) => guard
                 .iter()
                 .map(|t| {
@@ -365,6 +372,10 @@ impl PlaybackEngine {
                 .collect(),
             Err(_) => Vec::new(),
         };
+        if self.pad.is_active_mode() {
+            let (l, r) = self.pad.meter.take();
+            tracks.push(TrackLevel { track_id: "__pad__".to_string(), l, r });
+        }
         let out: LevelPair = self.bus_meters.out.take().into();
         MetersSnapshotDto {
             tracks,

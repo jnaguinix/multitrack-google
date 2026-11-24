@@ -23,10 +23,11 @@ export function useStudioShortcuts(
         e.preventDefault();
         audioEngine.togglePlayPause();
       } else if (e.key.toLowerCase() === 'v') {
+        if (currentProjectRef.current.padOnly) return;
         e.preventDefault();
         audioEngine.toggleVamp();
       } else if (e.key >= '1' && e.key <= '9') {
-        if (jumpsLockedRef.current) return;
+        if (jumpsLockedRef.current || currentProjectRef.current.padOnly) return;
         const idx = Number(e.key) - 1;
         const sec = currentProjectRef.current.sections[idx];
         if (sec) {

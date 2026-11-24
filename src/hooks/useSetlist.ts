@@ -11,6 +11,7 @@ import {
   reorderDesktopSetlist,
 } from '../storage/desktopLibrary';
 import { songLacksPeaks, withSongPeaks } from '../utils/songPeaks';
+import { isPadOnlySong } from '../utils/padSong';
 
 interface UseSetlistDeps {
   projectsRef: React.MutableRefObject<SongProject[]>;
@@ -147,39 +148,61 @@ export function useSetlist({
     showToast('No se pudo guardar el cambio del Setlist en la biblioteca. Al reabrir la app puede volver el anterior.');
   };
 
+  const handleCreatePadSong = (song: SongProject) => {
+    const nextList = [...projectsRef.current, song];
+    projectsRef.current = nextList;
+    setProjects(nextList);
+    void projectSaves.saveNow(song);
+    void handleLoadProjectImmediately(song.id, false);
+    showToast(`"${song.title}" añadida al Setlist (Pad + Click)`);
+  };
+
   const handleRemoveFromSetlist = (projectId: string) => {
     const song = projectsRef.current.find((x) => x.id === projectId);
+    const padOnly = isPadOnlySong(song);
 
     // 1. If currently playing this song, stop playback first
     if (currentProjectRef.current?.id === projectId && transport.isPlaying) {
       audioEngine.stop();
     }
 
-    // 2. Clear native cache and RAM cache
-    audioEngine.evictSongFromRamCache(projectId);
-    if (isDesktopApp) {
-      deleteProjectNativeCache(projectId).catch((err: any) => {
-        console.warn('[Cache] Error eliminando caché al quitar del setlist:', err);
-      });
+    // 2. Clear native cache and RAM cache (pad-only songs have no disk cache)
+    if (!padOnly) {
+      audioEngine.evictSongFromRamCache(projectId);
+      if (isDesktopApp) {
+        deleteProjectNativeCache(projectId).catch((err: any) => {
+          console.warn('[Cache] Error eliminando caché al quitar del setlist:', err);
+        });
+      }
     }
 
-    // 3. Mark inSetlist = false (remains in library intact!). En escritorio lo guarda Rust (solo pertenencia y orden);
-    // en el navegador se guarda la canción como siempre.
-    setProjects((prev) =>
-      prev.map((p) => {
-        if (p.id !== projectId) return p;
-        const updated: SongProject = { ...p, inSetlist: false, setlistOrder: undefined };
-        if (!isDesktopApp) void projectSaves.saveNow(updated);
-        return updated;
-      })
-    );
-    if (isDesktopApp) {
-      // Antes se guarda lo pendiente de esa canción (un fader movido hace un instante): un guardado diferido que llegara
-      // después la volvería a marcar como parte del setlist.
-      projectSaves
-        .flush(projectId)
-        .then(() => removeSongFromDesktopSetlist(projectId))
-        .catch(warnSetlistNotSaved('quitar la canción del setlist en la biblioteca'));
+    // 3. Canciones sin secuencia viven solo en el Setlist (se eliminan también en memoria y en disco);
+    // las canciones normales siguen intactas en la Biblioteca.
+    if (padOnly) {
+      void projectSaves.cancel(projectId);
+      const nextList = projectsRef.current.filter((p) => p.id !== projectId);
+      projectsRef.current = nextList;
+      setProjects(nextList);
+      if (isDesktopApp) {
+        removeSongFromDesktopSetlist(projectId).catch(warnSetlistNotSaved('quitar la canción sin secuencia del setlist'));
+      }
+    } else {
+      setProjects((prev) =>
+        prev.map((p) => {
+          if (p.id !== projectId) return p;
+          const updated: SongProject = { ...p, inSetlist: false, setlistOrder: undefined };
+          if (!isDesktopApp) void projectSaves.saveNow(updated);
+          return updated;
+        })
+      );
+      if (isDesktopApp) {
+        // Antes se guarda lo pendiente de esa canción (un fader movido hace un instante): un guardado diferido que llegara
+        // después la volvería a marcar como parte del setlist.
+        projectSaves
+          .flush(projectId)
+          .then(() => removeSongFromDesktopSetlist(projectId))
+          .catch(warnSetlistNotSaved('quitar la canción del setlist en la biblioteca'));
+      }
     }
 
     if (currentProjectRef.current?.id === projectId) {
@@ -193,7 +216,9 @@ export function useSetlist({
 
     showToast(
       song
-        ? `"${song.title}" quitada de la sesión (conservada en biblioteca)`
+        ? padOnly
+          ? `"${song.title}" quitada del Setlist`
+          : `"${song.title}" quitada de la sesión (conservada en biblioteca)`
         : 'Canción quitada de la sesión'
     );
   };
@@ -207,32 +232,38 @@ export function useSetlist({
     const queue = [...setlistQueue];
     if (queue.length === 0) return;
 
-    // 2. Evict RAM cache and PCM cache for setlist songs on desktop
+    // 2. Evict RAM cache and PCM cache for normal setlist songs on desktop; cancel saves for padOnly songs
+    const normalQueue = queue.filter((song) => !isPadOnlySong(song));
     for (const song of queue) {
-      audioEngine.evictSongFromRamCache(song.id);
-      if (isDesktopApp) {
-        deleteProjectNativeCache(song.id).catch(logAsyncError('borrar la caché nativa de la canción'));
+      if (isPadOnlySong(song)) {
+        void projectSaves.cancel(song.id);
+      } else {
+        audioEngine.evictSongFromRamCache(song.id);
+        if (isDesktopApp) {
+          deleteProjectNativeCache(song.id).catch(logAsyncError('borrar la caché nativa de la canción'));
+        }
       }
     }
 
-    // 3. Mark inSetlist = false across projects
+    // 3. Quitar canciones sin secuencia de la lista y desmarcar las normales (siguen en la biblioteca)
     const idSet = new Set(queue.map((s) => s.id));
     setProjects((prev) =>
-      prev.map((p) => {
-        if (!idSet.has(p.id)) return p;
+      prev.flatMap((p) => {
+        if (!idSet.has(p.id)) return [p];
+        if (isPadOnlySong(p)) return [];
         const updated: SongProject = { ...p, inSetlist: false, setlistOrder: undefined };
         if (!isDesktopApp) void projectSaves.saveNow(updated);
-        return updated;
+        return [updated];
       })
     );
 
     setCurrentProject(null);
 
-    // 4. En escritorio, Rust vacía el setlist en la biblioteca del disco (solo pertenencia y orden).
+    // 4. En escritorio, Rust vacía el setlist en la biblioteca del disco (y borra las padOnly).
     if (isDesktopApp) {
       try {
-        // Lo pendiente de esas canciones se guarda antes: un guardado diferido posterior las volvería a marcar.
-        await Promise.all(queue.map((s) => projectSaves.flush(s.id)));
+        // Lo pendiente de las canciones normales se guarda antes: un guardado diferido posterior las volvería a marcar.
+        await Promise.all(normalQueue.map((s) => projectSaves.flush(s.id)));
         await clearDesktopSetlist();
       } catch (err) {
         warnSetlistNotSaved('vaciar el setlist en la biblioteca')(err);
@@ -297,6 +328,7 @@ export function useSetlist({
   };
 
   return {
+    handleCreatePadSong,
     handleAddToSetlist,
     handleRemoveFromSetlist,
     handleClearSetlist,

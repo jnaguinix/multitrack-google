@@ -33,6 +33,7 @@ fn main() {
             "audio_toggle_vamp",
             "audio_set_pitch",
             "audio_set_metronome",
+            "audio_set_pad",
             "audio_get_routing",
             "audio_set_routing",
             "audio_reset_routing",

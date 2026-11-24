@@ -39,6 +39,7 @@
     "allow-audio-toggle-vamp",
     "allow-audio-set-pitch",
     "allow-audio-set-metronome",
+    "allow-audio-set-pad",
     "allow-audio-get-routing",
     "allow-audio-set-routing",
     "allow-audio-reset-routing",

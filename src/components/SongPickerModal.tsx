@@ -1,10 +1,11 @@
 import React, { useMemo, useRef, useState } from 'react';
-import { Check, FolderPlus, Music, Plus, Search, Upload } from 'lucide-react';
+import { Check, Disc3, FolderPlus, Music, Plus, Search, Upload } from 'lucide-react';
 import { SongProject } from '../types/project';
 import { pickAudioSources } from '../storage/sourceFiles';
 import { isDesktopApp, pickNativeFiles, pickNativeFolder } from '../utils/nativeDialog';
 import { formatMmSs } from './TransportDeck';
 import { filterSongs } from '../utils/songSearch';
+import { filterLibrarySongs } from '../utils/padSong';
 import { useProgressiveList } from '../hooks/useProgressiveList';
 import { Dialog, DialogHeader } from './ui/Dialog';
 
@@ -17,6 +18,7 @@ interface SongPickerModalProps {
   onQuickImportNewSongFiles: (files: FileList | File[]) => void;
   onQuickImportNativeFolder?: (folderPath: string) => void;
   onQuickImportNativeFiles?: (filePaths: string[]) => void;
+  onOpenCreatePad?: () => void;
 }
 
 type SortKey = 'title' | 'recent' | 'bpm';
@@ -41,21 +43,24 @@ export const SongPickerModal: React.FC<SongPickerModalProps> = ({
   onQuickImportNewSongFiles,
   onQuickImportNativeFolder,
   onQuickImportNativeFiles,
+  onOpenCreatePad,
 }) => {
   const [query, setQuery] = useState('');
   const [sort, setSort] = useState<SortKey>('title');
   const filesInputRef = useRef<HTMLInputElement | null>(null);
   const folderInputRef = useRef<HTMLInputElement | null>(null);
 
+  const librarySongs = useMemo(() => filterLibrarySongs(songs), [songs]);
+
   const visible = useMemo(() => {
-    const filtered = filterSongs(songs, query);
+    const filtered = filterSongs(librarySongs, query);
     filtered.sort((a, b) => {
       if (sort === 'recent') return (b.updatedAt || 0) - (a.updatedAt || 0);
       if (sort === 'bpm') return (a.bpm || 0) - (b.bpm || 0);
       return a.title.localeCompare(b.title, 'es', { sensitivity: 'base' });
     });
     return filtered;
-  }, [songs, query, sort]);
+  }, [librarySongs, query, sort]);
 
   const { shown, hasMore, remaining, showMore, sentinelRef } = useProgressiveList(visible, `${query}|${sort}`);
 
@@ -87,7 +92,7 @@ export const SongPickerModal: React.FC<SongPickerModalProps> = ({
         title="Añadir al setlist"
         description={
           <>
-            {songs.length === 1 ? '1 canción en la biblioteca' : `${songs.length} canciones en la biblioteca`}
+            {librarySongs.length === 1 ? '1 canción en la biblioteca' : `${librarySongs.length} canciones en la biblioteca`}
             {inSetlistCount > 0 && ` · ${inSetlistCount} en el setlist`}
           </>
         }
@@ -122,10 +127,10 @@ export const SongPickerModal: React.FC<SongPickerModalProps> = ({
         </div>
 
         <div className="lt-picker-list" role="list">
-          {songs.length === 0 ? (
+          {librarySongs.length === 0 ? (
             <div className="lt-picker-empty">
               <Music size={22} aria-hidden="true" />
-              <p>Tu biblioteca está vacía. Importa los stems o una carpeta de canción para empezar.</p>
+              <p>Tu biblioteca está vacía. Importa los stems, una carpeta o añade una canción sin secuencia.</p>
             </div>
           ) : visible.length === 0 ? (
             <div className="lt-picker-empty">
@@ -191,6 +196,19 @@ export const SongPickerModal: React.FC<SongPickerModalProps> = ({
           <button type="button" onClick={importFolder} className="lt-control" title="Selecciona una carpeta completa de stems">
             <FolderPlus size={14} /> Carpeta
           </button>
+          {onOpenCreatePad && (
+            <button
+              type="button"
+              onClick={() => {
+                onClose();
+                onOpenCreatePad();
+              }}
+              className="lt-control"
+              title="Añadir una canción sin pistas (pad continuo de 12 notas y metrónomo)"
+            >
+              <Disc3 size={14} /> Canción sin secuencia
+            </button>
+          )}
           <button type="button" onClick={onClose} className="lt-primary lt-picker-done">Listo</button>
         </footer>
 

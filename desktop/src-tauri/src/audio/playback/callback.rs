@@ -4,12 +4,13 @@
 //! Corre en el hilo de audio en tiempo real: sin asignaciones, sin registros y sin bloqueos que esperen
 //! (solo `try_lock`; si un recurso está ocupado, ese bloque sale en silencio o la pista se resincroniza después).
 
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use crate::audio::metronome::MetronomeEngine;
 use crate::audio::output::AudioStreamStats;
+use crate::audio::pad::{PadControl, PadSynth};
 use crate::audio::routing::{music_mono, soft_limit, RoutingSlot, LIMITER_KNEE};
 
 use super::block::{
@@ -68,6 +69,8 @@ pub struct CallbackShared {
     pub master_gain: Arc<AtomicU32>,
     pub cue_master_gain: Arc<AtomicU32>,
     pub monitor_gain: Arc<AtomicU32>,
+    pub pitch_semitones: Arc<AtomicI32>,
+    pub pad: Arc<PadControl>,
     pub is_vamping: Arc<AtomicBool>,
     pub routing: Arc<RoutingSlot>,
     pub bus_meters: Arc<BusMeters>,
@@ -87,6 +90,7 @@ pub struct BlockMixer {
     mon_l: Vec<f32>,
     mon_r: Vec<f32>,
     click_buf: Vec<f32>,
+    pad_synth: PadSynth,
     /// Fotograma de la canción donde debería empezar el siguiente bloque si el reloj fuera continuo. Si no
     /// coincide (seek, salto de sección, vuelta de vamp) el metrónomo se recoloca.
     expected_start_frame: u64,
@@ -137,6 +141,7 @@ impl BlockMixer {
             mon_l: buf(),
             mon_r: buf(),
             click_buf: buf(),
+            pad_synth: PadSynth::new(),
             expected_start_frame: u64::MAX,
             track_smooth: vec![TrackSmooth { key: 0, gain: 1.0, pan: 0.0, cue: 1.0 }; MAX_SMOOTH_TRACKS],
             smooth_master: f32::NAN,
@@ -161,6 +166,7 @@ impl BlockMixer {
             mon_l,
             mon_r,
             click_buf,
+            pad_synth,
             expected_start_frame,
             track_smooth,
             smooth_master,
@@ -185,7 +191,8 @@ impl BlockMixer {
             }
         };
 
-        if tracks_guard.is_empty() {
+        let pad_mode = s.pad.is_active_mode();
+        if tracks_guard.is_empty() && !pad_mode {
             data.fill(0.0);
             return;
         }
@@ -370,6 +377,21 @@ impl BlockMixer {
             store_min(&s.stats.min_ring_buffer_level_ms, (callback_min_track_frames * 1000) / sr);
         }
 
+        if pad_mode {
+            pad_synth.render_block(
+                &s.pad,
+                s.pitch_semitones.load(Ordering::Relaxed),
+                frames,
+                sample_rate,
+                &mut main_l[..frames],
+                &mut main_r[..frames],
+                &mut mon_l[..frames],
+                &mut mon_r[..frames],
+            );
+        } else {
+            pad_synth.silence_reset();
+        }
+
         // Metrónomo sintético.
         let start_song_f = s.current_frame.load(Ordering::Relaxed);
         // El tono ya no altera la velocidad (lo cambia el feeder de cada pista sin tocar la duración): el reloj
@@ -481,7 +503,8 @@ impl BlockMixer {
 
         let vamping_now = s.is_vamping.load(Ordering::Relaxed);
         let clock_now = advance_clock(&s.current_frame, &s.clock_jumps, song_frames, vamping_now);
-        if clock_now >= s.total_frames.load(Ordering::Relaxed) && !vamping_now {
+        let total_after = s.total_frames.load(Ordering::Relaxed);
+        if total_after > 0 && clock_now >= total_after && !vamping_now {
             s.is_playing.store(false, Ordering::Relaxed);
         }
 

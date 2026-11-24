@@ -8,7 +8,8 @@ import {
 import { useLiveMeters } from '../audio/liveMeters';
 import { isClickTrack, isGuideTrack, sortInstrumentTracks } from '../utils/instrumentCatalog';
 import { groupToggleTargets } from '../utils/trackGroups';
-import { computeMixerLevels, trackLevels } from '../utils/mixerLevels';
+import { computeMixerLevels, padLevels, trackLevels } from '../utils/mixerLevels';
+import { DEFAULT_PAD_GAIN, isPadOnlySong, noteIndexToLabel, parseKeyToNoteIndex } from '../utils/padSong';
 import { SongMapStrip } from './SongMapStrip';
 
 const MIN_DB = -40;
@@ -357,6 +358,10 @@ export interface MultitrackMixerProps {
   /** Secuencia dividida: volumen y mute de su canal izquierdo (click y guía). */
   onChangeTrackCueGain?: (trackId: string, gain: number) => void;
   onToggleTrackCueMute?: (trackId: string) => void;
+  /** Controles del pad continuo en canciones sin secuencia. */
+  onTogglePad?: () => void;
+  onChangePadGain?: (gain: number) => void;
+  onTogglePadMonitor?: () => void;
   onResetMixer: () => void;
   onEditTracks?: () => void;
   /** Abre «Cambiar instrumento» para una pista (clic en su nombre). */
@@ -381,12 +386,18 @@ export const MultitrackMixer: React.FC<MultitrackMixerProps> = ({
   onChangeMonitorGain,
   onChangeTrackCueGain,
   onToggleTrackCueMute,
+  onTogglePad,
+  onChangePadGain,
+  onTogglePadMonitor,
   onResetMixer,
   onEditTracks,
   onPickInstrument,
   onSeekSeconds,
   onJumpSection,
 }) => {
+  const padOnly = isPadOnlySong(project);
+  const padEnabled = project.padEnabled !== false;
+  const padGain = project.padGain ?? DEFAULT_PAD_GAIN;
   const anySolo = project.tracks.some((t) => t.soloed);
   const activeSection = project.sections.find((s) => s.id === transport.activeSectionId);
   const live = transport.isPlaying;
@@ -399,6 +410,10 @@ export const MultitrackMixer: React.FC<MultitrackMixerProps> = ({
   // Pistas: el motor mide izquierda y derecha después del volumen y el paneo (escala dBFS).
   const trackLevelsOf = (trackId: string) => (m: MetersSnapshot): MeterLevels => ({
     ...trackLevels(project, transport, m, trackId),
+    dbScale: true,
+  });
+  const padLevelsOf = (m: MetersSnapshot): MeterLevels => ({
+    ...padLevels(project, transport, m),
     dbScale: true,
   });
 
@@ -428,7 +443,7 @@ export const MultitrackMixer: React.FC<MultitrackMixerProps> = ({
             <div className="text-sm font-semibold tracking-tight text-studio-ink tabular-nums">
               {String(transport.currentBar).padStart(3, '0')}
               <small className="text-xs font-medium text-studio-muted ml-2 font-sans">
-                {activeSection ? activeSection.name : 'Listo'}
+                {padOnly ? 'Pad + Click' : activeSection ? activeSection.name : 'Listo'}
               </small>
             </div>
             <span className="text-xs text-studio-muted hidden sm:inline">
@@ -437,7 +452,7 @@ export const MultitrackMixer: React.FC<MultitrackMixerProps> = ({
           </div>
 
           <div className="flex items-center gap-4">
-            {onEditTracks && (
+            {!padOnly && onEditTracks && (
               <button
                 type="button"
                 onClick={onEditTracks}
@@ -457,7 +472,7 @@ export const MultitrackMixer: React.FC<MultitrackMixerProps> = ({
         </div>
       )}
 
-      {!docked && onSeekSeconds && onJumpSection && (
+      {!docked && !padOnly && onSeekSeconds && onJumpSection && (
         <SongMapStrip project={project} transport={transport} onSeekSeconds={onSeekSeconds} onJumpSection={onJumpSection} />
       )}
 
@@ -465,7 +480,51 @@ export const MultitrackMixer: React.FC<MultitrackMixerProps> = ({
       <main className={`lt-console ${docked ? 'lt-docked' : 'lt-console-full'}`}>
         {/* Left: Scrollable Individual Channel Strips (#channels) */}
         <section className="lt-channels" aria-label="Canales">
-          {instrumentTracks.map((track: TrackChannel) => {
+          {padOnly && (
+            <div style={{ '--c': '#8dd6cd' } as React.CSSProperties} className={`lt-strip ${!padEnabled ? 'lt-dim' : ''}`}>
+              <div className="lt-cap" />
+              <div className="lt-name" title="Pad sintetizado continuo">
+                Pad · {noteIndexToLabel(parseKeyToNoteIndex(project.keySignature))}
+              </div>
+              <div className="lt-sub">Sintetizado</div>
+              <StudioFader
+                name="Pad"
+                gain={padGain}
+                live={live}
+                levelsOf={padLevelsOf}
+                onChangeGain={(nextGain) => onChangePadGain?.(nextGain)}
+              />
+              <div className="lt-ms">
+                <button
+                  type="button"
+                  className="lt-m"
+                  aria-pressed={!padEnabled}
+                  aria-label="Mute Pad"
+                  onClick={() => onTogglePad?.()}
+                >
+                  M
+                </button>
+              </div>
+              {onTogglePadMonitor && (
+                <button
+                  type="button"
+                  className="lt-route"
+                  data-bus={project.padMonitor ? 'cue-click' : 'main'}
+                  aria-pressed={Boolean(project.padMonitor)}
+                  aria-label="Enviar Pad a los auriculares"
+                  title={
+                    project.padMonitor
+                      ? 'El pad se oye también en los auriculares. Pulsa para quitarlo.'
+                      : 'Enviar el pad también a los auriculares (sigue sonando en la sala).'
+                  }
+                  onClick={onTogglePadMonitor}
+                >
+                  Aur.
+                </button>
+              )}
+            </div>
+          )}
+          {!padOnly && instrumentTracks.map((track: TrackChannel) => {
             const isDimmed = trackIsDimmed(track);
             const displayName = formatTrackDisplayName(track.name);
 
@@ -599,22 +658,24 @@ export const MultitrackMixer: React.FC<MultitrackMixerProps> = ({
               onRename={clickTrack && onPickInstrument ? () => onPickInstrument(clickTrack.id) : undefined}
             />
           )}
-          <FixedStrip
-            name="Guía"
-            sub={guideTrack ? 'Pista' : 'Sin pista de guía'}
-            color="#38bdf8"
-            live={live}
-            disabled={!guideTrack}
-            gain={guideTrack?.gain ?? 1}
-            muted={guideTrack?.muted ?? false}
-            dim={guideTrack ? trackIsDimmed(guideTrack) : true}
-            soloed={guideTrack?.soloed}
-            levelsOf={guideTrack ? trackLevelsOf(guideTrack.id) : undefined}
-            onChangeGain={(g) => guideTracks.forEach((t) => onChangeTrackGain(t.id, g))}
-            onToggleMute={() => groupToggleTargets(guideTracks, 'muted').forEach(onToggleTrackMute)}
-            onToggleSolo={guideTrack ? () => groupToggleTargets(guideTracks, 'soloed').forEach(onToggleTrackSolo) : undefined}
-            onRename={guideTrack && onPickInstrument ? () => onPickInstrument(guideTrack.id) : undefined}
-          />
+          {!padOnly && (
+            <FixedStrip
+              name="Guía"
+              sub={guideTrack ? 'Pista' : 'Sin pista de guía'}
+              color="#38bdf8"
+              live={live}
+              disabled={!guideTrack}
+              gain={guideTrack?.gain ?? 1}
+              muted={guideTrack?.muted ?? false}
+              dim={guideTrack ? trackIsDimmed(guideTrack) : true}
+              soloed={guideTrack?.soloed}
+              levelsOf={guideTrack ? trackLevelsOf(guideTrack.id) : undefined}
+              onChangeGain={(g) => guideTracks.forEach((t) => onChangeTrackGain(t.id, g))}
+              onToggleMute={() => groupToggleTargets(guideTracks, 'muted').forEach(onToggleTrackMute)}
+              onToggleSolo={guideTrack ? () => groupToggleTargets(guideTracks, 'soloed').forEach(onToggleTrackSolo) : undefined}
+              onRename={guideTrack && onPickInstrument ? () => onPickInstrument(guideTrack.id) : undefined}
+            />
+          )}
           {onChangeMonitorGain && (
             <FixedStrip
               name="Monitor"
@@ -623,7 +684,7 @@ export const MultitrackMixer: React.FC<MultitrackMixerProps> = ({
               live={live}
               gain={project.monitorGain ?? 1}
               muted={false}
-              dim={!project.tracks.some((tr) => tr.monitor)}
+              dim={padOnly ? !project.padMonitor : !project.tracks.some((tr) => tr.monitor)}
               noButtons
               levelsOf={busLevelsOf('monitor')}
               onChangeGain={onChangeMonitorGain}

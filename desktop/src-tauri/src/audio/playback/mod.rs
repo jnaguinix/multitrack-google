@@ -11,6 +11,7 @@ use tokio::sync::Mutex as TokioMutex;
 use crate::audio::cache::{get_project_cache_dir, read_track_metadata};
 use crate::audio::metronome::{MetronomeConfig, MetronomeEngine};
 use crate::audio::output::{get_device_name, resolve_output_config, stream_needs_reopen, AudioEngineState, AudioStreamStats};
+use crate::audio::pad::{PadConfig, PadControl};
 use crate::audio::pitch::{new_pitch_shifter, PitchShifter};
 use crate::audio::resampler::TrackResampler;
 use crate::audio::routing::{self, RouteTable, RoutingSlot};
@@ -93,6 +94,7 @@ pub struct PlaybackEngine {
     /// Volumen general del envío «Aur.» (f32 bits).
     pub monitor_gain: Arc<AtomicU32>,
     pub pitch_semitones: Arc<AtomicI32>,
+    pub pad: Arc<PadControl>,
     pub queued_jump: Arc<std::sync::Mutex<Option<QueuedJumpInfo>>>,
     pub metronome: Arc<std::sync::Mutex<MetronomeEngine>>,
     pub preloaded_project_id: TokioMutex<Option<String>>,
@@ -138,6 +140,7 @@ impl PlaybackEngine {
             cue_master_gain: Arc::new(AtomicU32::new(0.708f32.to_bits())),
             monitor_gain: Arc::new(AtomicU32::new(1.0f32.to_bits())),
             pitch_semitones: Arc::new(AtomicI32::new(0)),
+            pad: Arc::new(PadControl::new()),
             queued_jump: Arc::new(std::sync::Mutex::new(None)),
             metronome: Arc::new(std::sync::Mutex::new(MetronomeEngine::new(
                 MetronomeConfig::default(),
@@ -280,6 +283,7 @@ impl PlaybackEngine {
 
         // La caché es válida: ahora sí se detiene lo que sonaba y se aplican los datos de la canción nueva.
         self.stop().await;
+        self.pad.reset_for_load(PadConfig::inactive());
         self.is_buffering.store(true, Ordering::SeqCst);
         *self.buffering_start_time.lock().unwrap() = Some(Instant::now());
 
@@ -758,7 +762,80 @@ impl PlaybackEngine {
         if !config.bpm.is_finite() || config.bpm <= 0.0 {
             config.bpm = met.config.bpm;
         }
+        config.subdivision = match config.subdivision {
+            1 | 2 | 4 => config.subdivision,
+            _ => 1,
+        };
         met.config = config;
+    }
+
+    pub fn set_pad(&self, config: PadConfig) {
+        self.pad.apply(config);
+    }
+
+    /// Monta una canción sin pistas (pad continuo + click) sin abrir caché PCM ni hilos de lectura.
+    pub async fn load_pad_project(
+        &self,
+        project_id: &str,
+        device_sample_rate: u32,
+        bpm: Option<f32>,
+        beats_per_bar: Option<u32>,
+        pad_config: PadConfig,
+    ) -> Result<ProjectLoadInfo, String> {
+        let sr = crate::audio::output::effective_cache_rate(Some(device_sample_rate));
+        self.stop().await;
+        self.is_buffering.store(false, Ordering::SeqCst);
+        *self.buffering_start_time.lock().unwrap() = None;
+
+        if let Some(b) = bpm {
+            self.bpm.store(b.to_bits(), Ordering::SeqCst);
+            self.metronome.lock().unwrap().config.bpm = b;
+        }
+        if let Some(bpb) = beats_per_bar {
+            self.beats_per_bar.store(bpb, Ordering::SeqCst);
+            self.metronome.lock().unwrap().config.beats_per_bar = bpb;
+        }
+        self.sections.lock().unwrap().clear();
+        *self.quantize_mode.lock().unwrap() = "immediate".to_string();
+
+        self.sample_rate.store(sr, Ordering::SeqCst);
+        self.current_frame.store(0, Ordering::SeqCst);
+        self.reposition_metronome(0);
+        self.total_frames.store(0, Ordering::SeqCst);
+        self.is_vamping.store(false, Ordering::SeqCst);
+        self.clock_jumps.reset();
+        *self.fade.lock().unwrap() = FadeEnvelope::new(FADE_MS, sr);
+        *self.queued_jump.lock().unwrap() = None;
+
+        let mut cfg = pad_config;
+        cfg.active_mode = true;
+        self.pad.reset_for_load(cfg);
+
+        // Orden de adquisición: primero `loaded_project_id`, después `tracks`.
+        let mut loaded = self.loaded_project_id.lock().await;
+        let mut tracks_guard = self.tracks.lock().await;
+        for old in tracks_guard.iter() {
+            old.stop_signal.store(true, Ordering::Relaxed);
+        }
+        tracks_guard.clear();
+        self.stream_tracks.lock().unwrap().clear();
+        *loaded = Some(project_id.to_string());
+
+        tracing::info!(
+            "[NativeEngine] Loaded pad-only project '{}' (note {}, {} Hz)",
+            project_id,
+            cfg.note,
+            sr
+        );
+
+        Ok(ProjectLoadInfo {
+            project_id: project_id.to_string(),
+            sample_rate: sr,
+            track_count: 0,
+            duration_sec: 0.0,
+            total_frames: 0,
+            track_peaks: std::collections::HashMap::new(),
+        })
     }
 
     /// Cambia el ruteo del dispositivo abierto. No se permite mientras suena: mover canales en pleno directo
@@ -857,6 +934,7 @@ impl PlaybackEngine {
             }
             tracks.clear();
             self.stream_tracks.lock().unwrap().clear();
+            self.pad.reset_for_load(PadConfig::inactive());
             *loaded = None;
             tracing::info!("[NativeEngine] Unloaded project '{}'", project_id);
         }
@@ -912,13 +990,18 @@ impl PlaybackEngine {
             // (y a validar) el dispositivo antes de reproducir. Tampoco sirve uno abierto a otra frecuencia que
             // la caché cargada (p. ej. abierto antes de montar la canción): sonaría a otra velocidad.
             let open_rate = self.stream_rate.load(Ordering::SeqCst);
-            let cache_rate = if self.loaded_project_id.lock().await.is_some() {
+            let is_pad_mode = self.pad.is_active_mode();
+            let cache_rate = if !is_pad_mode && self.loaded_project_id.lock().await.is_some() {
                 Some(self.sample_rate.load(Ordering::SeqCst))
             } else {
                 None
             };
             let rate_mismatch = stream_needs_reopen((open_rate != 0).then_some(open_rate), cache_rate);
             if !self.device_disconnected.load(Ordering::SeqCst) && !rate_mismatch {
+                if is_pad_mode && open_rate != 0 {
+                    self.sample_rate.store(open_rate, Ordering::SeqCst);
+                    self.fade.lock().unwrap().set_sample_rate(FADE_MS, open_rate);
+                }
                 return Ok(());
             }
             *stream_guard = None;
@@ -961,9 +1044,9 @@ impl PlaybackEngine {
             .default_output_config()
             .map_err(|e| format!("Error en configuración de salida: {e}"))?;
 
-        // Con un proyecto cargado la salida debe abrirse a la frecuencia de su caché PCM (A08): los
-        // feeders producen audio a esa frecuencia y `self.sample_rate` la guarda desde `load_project`.
-        let cache_rate = if self.loaded_project_id.lock().await.is_some() {
+        // Con un proyecto con pistas cargado la salida debe abrirse a la frecuencia de su caché PCM (A08).
+        // En modo sin secuencia (`pad_only`), tanto el pad como el click se generan al instante a la frecuencia del dispositivo.
+        let cache_rate = if !self.pad.is_active_mode() && self.loaded_project_id.lock().await.is_some() {
             Some(self.sample_rate.load(Ordering::SeqCst))
         } else {
             None
@@ -976,6 +1059,7 @@ impl PlaybackEngine {
 
         let sample_rate_u32 = default_config.sample_rate();
         self.sample_rate.store(sample_rate_u32, Ordering::SeqCst);
+        self.fade.lock().unwrap().set_sample_rate(FADE_MS, sample_rate_u32);
 
         let channels = default_config.channels() as usize;
 
@@ -1050,6 +1134,8 @@ impl PlaybackEngine {
             master_gain: Arc::clone(&self.master_gain),
             cue_master_gain: Arc::clone(&self.cue_master_gain),
             monitor_gain: Arc::clone(&self.monitor_gain),
+            pitch_semitones: Arc::clone(&self.pitch_semitones),
+            pad: Arc::clone(&self.pad),
             is_vamping: Arc::clone(&self.is_vamping),
             routing: Arc::clone(&self.routing),
             bus_meters: Arc::clone(&self.bus_meters),

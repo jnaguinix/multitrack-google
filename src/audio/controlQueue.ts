@@ -17,6 +17,8 @@ export interface ControlOp {
   key: string;
   cmd: string;
   args: Record<string, unknown>;
+  /** Cambio continuo (fader o pan): se puede diferir al guardar en disco. */
+  continuous?: boolean;
 }
 
 export class ControlQueue {
