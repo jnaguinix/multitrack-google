@@ -4,6 +4,7 @@ pub mod import;
 pub mod loudness;
 pub mod metronome;
 pub mod output;
+pub mod pad;
 pub mod pitch;
 pub mod playback;
 pub mod resampler;
@@ -344,14 +345,24 @@ pub async fn audio_load_project(
     sections: Option<Vec<playback::NativeSongSection>>,
     quantize_mode: Option<String>,
     track_controls: Option<Vec<playback::InitialTrackControl>>,
+    pad_config: Option<pad::PadConfig>,
 ) -> Result<playback::ProjectLoadInfo, String> {
+    let sr = {
+        let settings = state.current_settings.lock().await;
+        settings.cache_rate()
+    };
+
+    if let Some(cfg) = pad_config.filter(|c| c.active_mode) {
+        return state
+            .playback
+            .load_pad_project(&project_id, sr, bpm, beats_per_bar, cfg)
+            .await;
+    }
+
     let local_data = app
         .path()
         .app_local_data_dir()
         .map_err(|e| format!("Error resolviendo app_local_data_dir: {e}"))?;
-
-    let settings = state.current_settings.lock().await;
-    let sr = settings.cache_rate();
 
     state
         .playback
@@ -471,6 +482,15 @@ pub async fn audio_set_metronome(
     config: metronome::MetronomeConfig,
 ) -> Result<(), String> {
     state.playback.set_metronome(config);
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn audio_set_pad(
+    state: State<'_, AudioEngineState>,
+    config: pad::PadConfig,
+) -> Result<(), String> {
+    state.playback.set_pad(config);
     Ok(())
 }
 

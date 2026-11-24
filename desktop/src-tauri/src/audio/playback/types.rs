@@ -257,6 +257,21 @@ pub struct PlaybackStateSnapshot {
     /// El dispositivo realmente abierto (`None` si todavía no hay salida abierta). Sin comas en este comentario: el verificador de IPC parte por comas.
     #[serde(default)]
     pub open_device: Option<OpenDeviceInfo>,
+    /// Modo sin secuencia activo
+    #[serde(default)]
+    pub pad_active: bool,
+    /// Pad encendido o en silencio
+    #[serde(default)]
+    pub pad_enabled: bool,
+    /// Nota base del pad (0 a 11)
+    #[serde(default)]
+    pub pad_note: u8,
+    /// Ganancia lineal del pad
+    #[serde(default)]
+    pub pad_gain: f32,
+    /// Envio del pad a auriculares
+    #[serde(default)]
+    pub pad_monitor: bool,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]

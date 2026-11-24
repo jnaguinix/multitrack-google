@@ -31,6 +31,10 @@ impl FadeEnvelope {
         self.current_frame = 0;
     }
 
+    pub fn set_sample_rate(&mut self, fade_ms: f32, sample_rate: u32) {
+        self.fade_frames = ((fade_ms / 1000.0) * sample_rate.max(1) as f32).round().max(1.0) as usize;
+    }
+
     pub fn start_fade_out(&mut self) {
         self.fade_type = FadeType::FadeOut;
         self.current_frame = 0;

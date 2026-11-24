@@ -213,6 +213,14 @@ pub struct LibrarySong {
     /// Es un dato derivado de la caché: el sidecar no lo lleva y un guardado de la interfaz que no lo trae no lo borra.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub loudness: Option<SongLoudness>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pad_only: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pad_enabled: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pad_gain: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pad_monitor: Option<bool>,
     pub updated_at: u64,
 }
 
@@ -772,7 +780,8 @@ fn apply_setlist_order(lib: &mut LibraryFile, ordered: &[String]) {
     lib.active_setlist = ordered.to_vec();
 }
 
-/// Saca una canción del setlist (sigue en la biblioteca). `false` si ya no estaba.
+/// Saca una canción del setlist (sigue en la biblioteca, salvo si es una canción sin secuencia `pad_only`,
+/// que vive solo en el setlist y se elimina al quitarla). `false` si ya no estaba.
 pub fn setlist_remove(local_data: &Path, song_id: &str) -> Result<bool, String> {
     let _guard = lock_library();
     let mut lib = load_library_internal(local_data)?;
@@ -780,9 +789,13 @@ pub fn setlist_remove(local_data: &Path, song_id: &str) -> Result<bool, String> 
     let mut resto = setlist_ids_in_order(&lib);
     let estaba = resto.iter().any(|id| id == song_id) || lib.active_setlist.iter().any(|id| id == song_id);
     resto.retain(|id| id != song_id);
-    if let Some(song) = lib.songs.iter_mut().find(|s| s.id == song_id) {
-        song.in_setlist = Some(false);
-        song.setlist_order = None;
+    if let Some(pos) = lib.songs.iter().position(|s| s.id == song_id) {
+        if lib.songs[pos].pad_only == Some(true) {
+            lib.songs.remove(pos);
+        } else {
+            lib.songs[pos].in_setlist = Some(false);
+            lib.songs[pos].setlist_order = None;
+        }
     }
     apply_setlist_order(&mut lib, &resto);
     if lib != antes {
@@ -792,11 +805,12 @@ pub fn setlist_remove(local_data: &Path, song_id: &str) -> Result<bool, String> 
     Ok(estaba)
 }
 
-/// Saca todas las canciones del setlist. Devuelve cuántas estaban.
+/// Saca todas las canciones del setlist (y elimina las canciones sin secuencia `pad_only`). Devuelve cuántas estaban.
 pub fn setlist_clear(local_data: &Path) -> Result<usize, String> {
     let _guard = lock_library();
     let mut lib = load_library_internal(local_data)?;
     let estaban = setlist_ids_in_order(&lib);
+    lib.songs.retain(|song| !(estaban.contains(&song.id) && song.pad_only == Some(true)));
     for song in lib.songs.iter_mut() {
         if estaban.contains(&song.id) {
             song.in_setlist = Some(false);
@@ -1556,6 +1570,37 @@ mod tests {
         assert_eq!(b.master_gain, Some(0.5));
         // Vaciar uno ya vacío no hace nada.
         assert_eq!(setlist_clear(&dir).unwrap(), 0);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_cancion_sin_secuencia_se_elimina_al_quitar_o_vaciar_setlist() {
+        let dir = carpeta_de_prueba("setlist_pad_only");
+        let mut normal = en_setlist("normal", "Normal", 0);
+        normal.pad_only = None;
+        let mut pad1 = en_setlist("pad-1", "Pad Oración", 1);
+        pad1.pad_only = Some(true);
+        pad1.pad_enabled = Some(true);
+        pad1.pad_gain = Some(0.8);
+        let mut pad2 = en_setlist("pad-2", "Pad Cierre", 2);
+        pad2.pad_only = Some(true);
+        let lib = LibraryFile {
+            songs: vec![normal, pad1, pad2],
+            active_setlist: vec!["normal".to_string(), "pad-1".to_string(), "pad-2".to_string()],
+            ..Default::default()
+        };
+        save_library_internal(&dir, &lib).unwrap();
+
+        assert!(setlist_remove(&dir, "pad-1").unwrap());
+        let tras_quitar = load_library_internal(&dir).unwrap();
+        assert!(!tras_quitar.songs.iter().any(|s| s.id == "pad-1"), "pad-1 debe desaparecer de library.json");
+        assert!(tras_quitar.songs.iter().any(|s| s.id == "pad-2"));
+        assert!(tras_quitar.songs.iter().any(|s| s.id == "normal"));
+
+        assert_eq!(setlist_clear(&dir).unwrap(), 2);
+        let tras_vaciar = load_library_internal(&dir).unwrap();
+        assert!(!tras_vaciar.songs.iter().any(|s| s.id == "pad-2"), "pad-2 debe desaparecer al vaciar el setlist");
+        assert!(tras_vaciar.songs.iter().any(|s| s.id == "normal"), "las canciones normales permanecen en la biblioteca");
         let _ = fs::remove_dir_all(&dir);
     }
 
