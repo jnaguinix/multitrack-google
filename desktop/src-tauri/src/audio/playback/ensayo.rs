@@ -685,7 +685,7 @@ async fn ensayo_modo_sin_pista_pad_y_click() {
             SR,
             Some(120.0),
             Some(4),
-            PadConfig { active_mode: true, enabled: true, note: 7, gain: 0.9, monitor: false },
+            PadConfig { active_mode: true, enabled: true, note: 7, gain: 0.9, monitor: false, harmony: 0, style: 0 },
         )
         .await
         .expect("cargar canción sin secuencia");
@@ -756,17 +756,20 @@ async fn ensayo_modo_sin_pista_pad_y_click() {
     let (ch0_x1, _) = correr(70, false, &engine, &mut prev_music, &mut max_step_music, &mut asignaciones);
     assert!(ch0_x1 > 0.1, "al bajar de ×2 a ×1 sin parar el click debe seguir sonando: {ch0_x1}");
 
-    // 2. Cambio de nota y transposición en vivo sin escalones (el click sigue en el canal 0).
-    engine.set_pad(PadConfig { active_mode: true, enabled: true, note: 2, gain: 0.9, monitor: false });
+    // 2. Cambio de nota, armonía, timbre y transposición en vivo sin escalones (el click sigue en el canal 0).
+    engine.set_pad(PadConfig { active_mode: true, enabled: true, note: 2, gain: 0.9, monitor: false, harmony: 1, style: 1 });
     let (_, ch1_nota) = correr(60, false, &engine, &mut prev_music, &mut max_step_music, &mut asignaciones);
     assert!(ch1_nota > 0.05);
+
+    engine.set_pad(PadConfig { active_mode: true, enabled: true, note: 2, gain: 0.9, monitor: false, harmony: 2, style: 2 });
+    let _ = correr(40, false, &engine, &mut prev_music, &mut max_step_music, &mut asignaciones);
 
     engine.set_pitch(2).await;
     let (_, ch1_pitch) = correr(50, false, &engine, &mut prev_music, &mut max_step_music, &mut asignaciones);
     assert!(ch1_pitch > 0.05);
 
     // 3. Apagar el pad (`enabled: false`): decrece progresivamente en ~3 s mientras el click sigue sonando.
-    engine.set_pad(PadConfig { active_mode: true, enabled: false, note: 2, gain: 0.9, monitor: false });
+    engine.set_pad(PadConfig { active_mode: true, enabled: false, note: 2, gain: 0.9, monitor: false, harmony: 2, style: 2 });
     let _ = correr(50, false, &engine, &mut prev_music, &mut max_step_music, &mut asignaciones);
     // 55 bloques = 0,55 s (> 0,5 s de una negra a 120 BPM en ×1) para garantizar al menos un pulso en la ventana.
     let (ch0_mid1, ch1_mid1) = correr(55, false, &engine, &mut prev_music, &mut max_step_music, &mut asignaciones);
@@ -780,14 +783,14 @@ async fn ensayo_modo_sin_pista_pad_y_click() {
     assert!(ch1_mute < 1e-4, "el pad silenciado debe quedar en silencio tras 3 s: {ch1_mute}");
 
     // 4. Encender pad con envío a auriculares («Aur.») y ganancia NaN ignorada (sube progresivo).
-    engine.set_pad(PadConfig { active_mode: true, enabled: true, note: 2, gain: f32::NAN, monitor: true });
+    engine.set_pad(PadConfig { active_mode: true, enabled: true, note: 2, gain: f32::NAN, monitor: true, harmony: 1, style: 0 });
     let _ = correr(240, false, &engine, &mut prev_music, &mut max_step_music, &mut asignaciones);
     let (ch0_mon, ch1_mon) = correr(55, false, &engine, &mut prev_music, &mut max_step_music, &mut asignaciones);
     assert!(ch1_mon > 0.05, "ganancia NaN no debe borrar la ganancia válida del pad");
     assert!(ch0_mon > 0.05);
 
     // 5. Pausa: el click calla de inmediato y el reloj se detiene, mientras el pad decrece suavemente.
-    engine.set_pad(PadConfig { active_mode: true, enabled: true, note: 2, gain: 0.9, monitor: false });
+    engine.set_pad(PadConfig { active_mode: true, enabled: true, note: 2, gain: 0.9, monitor: false, harmony: 1, style: 0 });
     let _ = correr(10, false, &engine, &mut prev_music, &mut max_step_music, &mut asignaciones);
     engine.pause().await;
     assert!(!engine.is_playing.load(Ordering::SeqCst));

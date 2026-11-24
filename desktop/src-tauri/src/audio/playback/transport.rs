@@ -350,6 +350,8 @@ impl PlaybackEngine {
             pad_note: pad_snap.note,
             pad_gain: pad_snap.gain,
             pad_monitor: pad_snap.monitor,
+            pad_harmony: pad_snap.harmony,
+            pad_style: pad_snap.style,
             // Solo cuenta con la reproducción pedida: sin Play no hay salida abierta ni callback que saque al motor de
             // buffering (la canción recién cargada lo está), y eso no es un atasco.
             buffering_ms: if self.is_buffering.load(Ordering::SeqCst) && self.is_playing.load(Ordering::SeqCst) {

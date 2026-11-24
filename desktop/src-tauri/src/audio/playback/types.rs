@@ -272,6 +272,12 @@ pub struct PlaybackStateSnapshot {
     /// Envio del pad a auriculares
     #[serde(default)]
     pub pad_monitor: bool,
+    /// Caracter armonico del pad (0 = abierto 1 = mayor 2 = menor)
+    #[serde(default)]
+    pub pad_harmony: u8,
+    /// Timbre del pad (0 = calido 1 = ambiente 2 = cuerdas)
+    #[serde(default)]
+    pub pad_style: u8,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
