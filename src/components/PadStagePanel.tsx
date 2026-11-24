@@ -46,10 +46,11 @@ export const PadStagePanel: React.FC<PadStagePanelProps> = ({
   const bpb = Math.max(2, Math.min(12, project.beatsPerBar || 4));
   const beatUnit = project.beatUnit || (bpb === 6 ? 8 : 4);
   const bpm = Math.max(40, Math.min(240, Math.round(project.bpm || 120)));
+  const subdivisionBadge = CLICK_SUBDIVISION_OPTIONS.find((o) => o.value === subdivision)?.badge ?? '×1';
 
   return (
     <section
-      className={`lt-pad-stage ${isLive ? 'lt-pad-stage-live' : ''}`}
+      className={`lt-pad-stage ${isLive ? 'lt-pad-stage-live' : 'lt-pad-stage-prepare'}`}
       aria-label={isLive ? 'Pad y metrónomo en vivo (solo lectura)' : 'Preparar pad y metrónomo'}
     >
       {/* Bloque izquierdo: 12 notas del pad */}
@@ -124,7 +125,9 @@ export const PadStagePanel: React.FC<PadStagePanelProps> = ({
             <h2>Metrónomo</h2>
             <p className="lt-pad-sub">
               {project.clickEnabled
-                ? `Click en auriculares · ${bpb}/${beatUnit}`
+                ? isLive
+                  ? `Click en auriculares · ${bpb}/${beatUnit}`
+                  : `${bpm} BPM · ${bpb}/${beatUnit} · Pulso ${subdivisionBadge}`
                 : 'Click desactivado'}
             </p>
           </div>
@@ -164,18 +167,20 @@ export const PadStagePanel: React.FC<PadStagePanelProps> = ({
           })}
         </div>
 
-        {/* Lectura de BPM + multiplicador */}
-        <div className="lt-metro-readout">
-          <div className="lt-metro-bpm">
-            <strong>{bpm}</strong>
-            <span>BPM</span>
+        {/* Lectura grande solo en En vivo (en Setlist los controles ya muestran BPM, compás y pulso) */}
+        {isLive && (
+          <div className="lt-metro-readout">
+            <div className="lt-metro-bpm">
+              <strong>{bpm}</strong>
+              <span>BPM</span>
+            </div>
+            <div className="lt-metro-meta">
+              <span>Compás {bpb}/{beatUnit}</span>
+              <span>·</span>
+              <span>Pulso {subdivisionBadge}</span>
+            </div>
           </div>
-          <div className="lt-metro-meta">
-            <span>Compás {bpb}/{beatUnit}</span>
-            <span>·</span>
-            <span>Pulso {CLICK_SUBDIVISION_OPTIONS.find((o) => o.value === subdivision)?.badge}</span>
-          </div>
-        </div>
+        )}
 
         {isLive ? (
           <div className="lt-metro-sub-badges" aria-label="Subdivisión del click">

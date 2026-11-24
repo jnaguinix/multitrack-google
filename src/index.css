@@ -2069,6 +2069,20 @@ html { zoom: var(--ui-zoom); }
 .lt-metro-row { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr); gap: 10px; }
 .lt-metro-bpm-edit { display: grid; grid-template-columns: 36px minmax(0, 1fr) 36px; gap: 6px; }
 .lt-metro-bpm-edit input { text-align: center; font-variant-numeric: tabular-nums; font-weight: 650; }
+/* Versión compacta en Setlist para que quepa completa en 1366×768 sin scroll (En vivo conserva el tamaño grande). */
+.lt-pad-stage-prepare { gap: 10px; }
+.lt-pad-stage-prepare .lt-pad-card,
+.lt-pad-stage-prepare .lt-metro-card { gap: 8px; padding: 10px 14px; }
+.lt-pad-stage-prepare .lt-pad-grid { grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 6px; }
+.lt-pad-stage-prepare .lt-pad-note { min-height: 44px; padding: 6px 4px; gap: 1px; }
+.lt-pad-stage-prepare .lt-pad-note-label { font-size: 15px; }
+.lt-pad-stage-prepare .lt-metro-beat { height: 28px; font-size: 12px; }
+.lt-pad-stage-prepare .lt-metro-controls { gap: 8px; }
+.lt-pad-stage-prepare .lt-metro-row { gap: 8px; }
+.lt-pad-stage-prepare .lt-metro-bpm-edit { grid-template-columns: 32px minmax(0, 1fr) 32px; }
+.lt-pad-stage-prepare .lt-field select,
+.lt-pad-stage-prepare .lt-field input,
+.lt-pad-stage-prepare .lt-metro-controls .lt-control { min-height: 32px; padding-top: 3px; padding-bottom: 3px; }
 .lt-tile-pad-wave { display: flex; align-items: center; justify-content: flex-start; height: 34px; }
 .lt-tile-pad-badge {
   display: inline-flex;
