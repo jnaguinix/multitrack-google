@@ -2,7 +2,7 @@
 
 Este documento es para quien audite el código (persona o asistente). Léelo junto con `CLAUDE.md` (reglas y mapa de módulos), `docs/ARQUITECTURA.md` (flujos) y `docs/PLAN_CORRECCIONES.md` (qué se corrigió y cómo se comprobó). Si algo aquí contradice el código, manda el código: dilo en el informe.
 
-Última actualización: 2026-11-23, sobre `main` tras las olas 2 a 5 del plan de correcciones y una limpieza de código sin uso.
+Última actualización: 2026-11-23, sobre `main` tras las olas 2 a 6 del plan de correcciones y una limpieza de código sin uso. Cómo correr las pruebas, el servidor local y compilar el `.exe`: `docs/GUIA_RETOMAR.md`.
 
 ## 1. Qué es y por qué importa
 OmniTracks es un reproductor de multitracks para cultos y música en vivo. **Un fallo en directo es peor que una función que falte**: un chasquido, un corte, un salto a la sección equivocada o un cuelgue durante el servicio. Prioriza lo que puede provocar eso.
@@ -42,6 +42,7 @@ Cada punto tiene su prueba, que falla sin el arreglo (comprobado quitándolo); s
 - **Control remoto (ola 3)**: el puente ya no apaga el servidor ante un error pasajero (3.1); el contador de rechazos decae y el cliente distingue 1008 de 4403 (3.2); la confirmación `applied` espera el acuse del motor (3.3); expulsar un dispositivo renueva el enlace del rol y hay límite de emparejamientos por origen (3.4); pánico por UTF-8 al limpiar títulos (3.5).
 - **Datos (ola 4)**: setlist por comandos de Rust (4.1); reemplazo seguro de `library.json` y sidecar, con el fallo del sidecar visible (4.2); guardado diferido frente a borrado y cierre de la ventana (4.3); un error de lectura de la biblioteca ya no es «biblioteca vacía» (4.4); reimportar sin cruzar los controles de las pistas (4.5); importar a la biblioteca no detiene el audio que suena (4.6); IDs del sidecar emparejados por nombre de archivo (4.7).
 - **Robustez de uso (ola 5)**: `ErrorBoundary` en la raíz (5.1); `generateNativeCacheForProject` no abre el selector de carpetas por su cuenta (5.2); el aviso de dispositivo desconectado dura hasta que reabrir tenga éxito (5.3); Ajustes de audio con el `Dialog` común (5.4).
+- **Robustez de uso (ola 6, triaje de la segunda auditoría de Antigravity)**: entrar en vamp cerca del final de la sección reposiciona en el sitio y se rechaza en secciones de menos de 0,5 s (6.1); un PCM truncado se regenera (6.2); montar en consola conserva el setlist (6.3); regenerar la caché con otra carpeta empareja por archivo y nombre, sin cruzar pistas (6.4); borrar la caché descarga antes y avisa si falla (6.5, 6.10); `stop` desactiva el vamp (6.6); los guardados directos pasan por `projectSaves` (6.7); «Audio» conserva un dispositivo desconectado (6.8); el cliente remoto reconecta al volver la pantalla o la red (6.9); los faders de Click y Guía gobiernan todas las pistas de ese tipo (6.11); una carga que falla no toca la canción montada y cambiar de canción espera el `audio_stop` (6.12). Nada medido en el `.exe`.
 - **Otros**: la onda de una canción recién importada deja de salir plana; la última activación de canción manda y Play espera la mezcla (H01, H04); el modo diagnóstico (`src/utils/debugMode.ts`) registra comandos, alarmas y errores.
 
 ## 5. Lo ya conocido y abierto (no lo reportes como hallazgo nuevo; sí puedes dar su gravedad real)
