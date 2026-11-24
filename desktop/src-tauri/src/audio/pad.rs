@@ -16,6 +16,12 @@ const MAX_PAD_VOICES: usize = 4;
 const VOICE_OSCS: usize = 8;
 /// Duración del fundido cruzado al cambiar de nota o transponer (segundos).
 const CROSSFADE_SEC: f32 = 0.45;
+/// Entrada progresiva del pad al pulsar Play o encenderlo (segundos).
+pub const PAD_FADE_IN_SEC: f32 = 2.5;
+/// Salida decreciente del pad al apagarlo, pausar o parar (segundos).
+pub const PAD_FADE_OUT_SEC: f32 = 3.0;
+/// Corte rápido de emergencia (doble Stop o cambio a canción normal): 8 ms sin chasquido.
+const PAD_FAST_CUT_SEC: f32 = 0.008;
 /// Escala de salida conservadora: deja margen amplio bajo `LIMITER_KNEE` (0.9) y evita saturación.
 const PAD_OUTPUT_SCALE: f32 = 0.25;
 
@@ -89,6 +95,8 @@ pub struct PadControl {
     gain: AtomicU32,
     monitor: AtomicBool,
     generation: AtomicU64,
+    fast_cut_gen: AtomicU64,
+    tail_active: AtomicBool,
     pub meter: PeakMeter,
 }
 
@@ -107,6 +115,8 @@ impl PadControl {
             gain: AtomicU32::new(0.8f32.to_bits()),
             monitor: AtomicBool::new(false),
             generation: AtomicU64::new(0),
+            fast_cut_gen: AtomicU64::new(0),
+            tail_active: AtomicBool::new(false),
             meter: PeakMeter::default(),
         }
     }
@@ -126,6 +136,34 @@ impl PadControl {
     pub fn reset_for_load(&self, cfg: PadConfig) {
         self.apply(cfg);
         self.generation.fetch_add(1, Ordering::SeqCst);
+    }
+
+    /// Desactiva el modo pad al cambiar a una canción normal o descargar, cortando limpio en 8 ms si quedaba cola.
+    pub fn deactivate_for_song_change(&self) {
+        self.active_mode.store(false, Ordering::SeqCst);
+        self.enabled.store(false, Ordering::SeqCst);
+        self.monitor.store(false, Ordering::SeqCst);
+        self.request_fast_cut();
+    }
+
+    /// Solicita cortar rápido en 8 ms una cola de salida activa (segundo Stop de emergencia o cambio de canción).
+    pub fn request_fast_cut(&self) {
+        self.fast_cut_gen.fetch_add(1, Ordering::SeqCst);
+    }
+
+    #[inline]
+    pub fn fast_cut_generation(&self) -> u64 {
+        self.fast_cut_gen.load(Ordering::Relaxed)
+    }
+
+    #[inline]
+    pub fn set_tail_active(&self, active: bool) {
+        self.tail_active.store(active, Ordering::Relaxed);
+    }
+
+    #[inline]
+    pub fn is_tail_active(&self) -> bool {
+        self.tail_active.load(Ordering::Relaxed)
     }
 
     #[inline]
@@ -254,6 +292,11 @@ pub struct PadSynth {
     voices: [PadVoice; MAX_PAD_VOICES],
     current_note: u8,
     last_generation: u64,
+    last_fast_cut_gen: u64,
+    fast_cutting: bool,
+    /// Envolvente musical lenta (`0.0..=1.0`): sube en `PAD_FADE_IN_SEC` y baja en `PAD_FADE_OUT_SEC`.
+    env_level: f32,
+    /// Ganancia suavizada del fader de volumen (rampa rápida de ~10 ms sin clics).
     smooth_gain: f32,
     lp_l: f32,
     lp_r: f32,
@@ -272,11 +315,20 @@ impl PadSynth {
             voices: [PadVoice::default(); MAX_PAD_VOICES],
             current_note: 0,
             last_generation: u64::MAX,
+            last_fast_cut_gen: 0,
+            fast_cutting: false,
+            env_level: 0.0,
             smooth_gain: 0.0,
             lp_l: 0.0,
             lp_r: 0.0,
             lfo_phase: 0.0,
         }
+    }
+
+    /// Indica si el pad aún tiene energía sonando (p. ej. bajando suavemente tras pausar o parar).
+    #[inline]
+    pub fn has_active_tail(&self) -> bool {
+        self.env_level > 0.0
     }
 
     /// Silencia y limpia el estado del sintetizador al pasar a una canción normal con pistas.
@@ -285,6 +337,8 @@ impl PadSynth {
             v.level = 0.0;
             v.target_level = 0.0;
         }
+        self.env_level = 0.0;
+        self.fast_cutting = false;
         self.smooth_gain = 0.0;
         self.lp_l = 0.0;
         self.lp_r = 0.0;
@@ -336,6 +390,7 @@ impl PadSynth {
     }
 
     /// Suma `frames` muestras estéreo del pad en `out_l`/`out_r` (y en `mon_l`/`mon_r` si `monitor` está activo).
+    /// Devuelve `true` si emitió audio en este bloque (incluyendo cola decreciente) y `false` si ya está en silencio.
     /// Cero asignaciones dinámicas, cero bloqueos, cero registro.
     #[allow(clippy::too_many_arguments)]
     pub fn render_block(
@@ -348,31 +403,50 @@ impl PadSynth {
         out_r: &mut [f32],
         mon_l: &mut [f32],
         mon_r: &mut [f32],
-    ) {
-        if frames == 0 || !ctl.is_active_mode() {
-            ctl.meter.record(0.0, 0.0);
-            return;
+        transport_playing: bool,
+    ) -> bool {
+        if frames == 0 {
+            return false;
+        }
+
+        let active_mode = ctl.is_active_mode();
+        let want_on = transport_playing && active_mode && ctl.is_enabled();
+
+        let fc_gen = ctl.fast_cut_generation();
+        if fc_gen != self.last_fast_cut_gen {
+            self.last_fast_cut_gen = fc_gen;
+            if !want_on && self.env_level > 0.0 {
+                self.fast_cutting = true;
+            }
+        }
+        if want_on {
+            self.fast_cutting = false;
         }
 
         let target_note = transpose_note(ctl.note(), pitch_semitones);
         let gen = ctl.generation();
         if gen != self.last_generation {
             self.last_generation = gen;
-            self.current_note = target_note;
-            self.smooth_gain = 0.0;
-            self.lp_l = 0.0;
-            self.lp_r = 0.0;
-            for (i, v) in self.voices.iter_mut().enumerate() {
-                if i == 0 {
-                    v.configure(target_note, sample_rate, true);
-                    v.level = 1.0;
-                    v.target_level = 1.0;
-                } else {
-                    v.level = 0.0;
-                    v.target_level = 0.0;
+            if self.env_level == 0.0 {
+                self.current_note = target_note;
+                self.smooth_gain = sanitize_gain(ctl.gain()).unwrap_or(0.0);
+                self.lp_l = 0.0;
+                self.lp_r = 0.0;
+                self.fast_cutting = false;
+                for (i, v) in self.voices.iter_mut().enumerate() {
+                    if i == 0 {
+                        v.configure(target_note, sample_rate, true);
+                        v.level = 1.0;
+                        v.target_level = 1.0;
+                    } else {
+                        v.level = 0.0;
+                        v.target_level = 0.0;
+                    }
                 }
+            } else if active_mode && self.current_note != target_note {
+                self.switch_note(target_note, sample_rate);
             }
-        } else if self.current_note != target_note {
+        } else if active_mode && self.current_note != target_note {
             self.switch_note(target_note, sample_rate);
         } else {
             for v in &mut self.voices {
@@ -382,22 +456,43 @@ impl PadSynth {
             }
         }
 
-        let raw_gain = if ctl.is_enabled() { ctl.gain() } else { 0.0 };
-        let g_target = sanitize_gain(raw_gain).unwrap_or(0.0);
+        if !want_on && self.env_level == 0.0 {
+            self.lp_l = 0.0;
+            self.lp_r = 0.0;
+            self.fast_cutting = false;
+            ctl.set_tail_active(false);
+            ctl.meter.record(0.0, 0.0);
+            return false;
+        }
+
+        // El fader de volumen se suaviza rápido (~10 ms); la entrada/salida musical la gobierna `env_level`.
+        // Si el modo pad acaba de desactivarse (cambio de canción), conservamos la ganancia anterior para que
+        // los 8 ms de bajada de `env_level` sean lisos sin saltos.
+        let g_target = if active_mode {
+            sanitize_gain(ctl.gain()).unwrap_or(self.smooth_gain)
+        } else {
+            self.smooth_gain
+        };
         let g0 = self.smooth_gain;
         let alpha = smoothing_alpha(frames, sample_rate);
         let g1 = smooth_toward(g0, g_target, alpha);
         self.smooth_gain = g1;
 
-        if g0 == 0.0 && g1 == 0.0 {
+        if g0 == 0.0 && g1 == 0.0 && !want_on {
+            self.env_level = 0.0;
+            self.fast_cutting = false;
             self.lp_l = 0.0;
             self.lp_r = 0.0;
+            ctl.set_tail_active(false);
             ctl.meter.record(0.0, 0.0);
-            return;
+            return false;
         }
 
         let sr = sample_rate.max(1) as f32;
         let crossfade_step = 1.0 / (CROSSFADE_SEC * sr).max(1.0);
+        let env_step_in = 1.0 / (PAD_FADE_IN_SEC * sr).max(1.0);
+        let fade_out_sec = if self.fast_cutting { PAD_FAST_CUT_SEC } else { PAD_FADE_OUT_SEC };
+        let env_step_out = 1.0 / (fade_out_sec * sr).max(1.0);
         let inv_frames = 1.0 / frames.max(1) as f32;
         let d_gain = (g1 - g0) * inv_frames;
 
@@ -411,6 +506,15 @@ impl PadSynth {
         let mut pk_r = 0.0f32;
 
         for f in 0..frames {
+            if want_on {
+                self.env_level = (self.env_level + env_step_in).min(1.0);
+            } else {
+                self.env_level = (self.env_level - env_step_out).max(0.0);
+            }
+            let e = self.env_level;
+            // Curva S suave: arranque y llegada progresivos sin escalones.
+            let env = e * e * (3.0 - 2.0 * e);
+
             let mut sum_l = 0.0f32;
             let mut sum_r = 0.0f32;
             for v in &mut self.voices {
@@ -433,7 +537,7 @@ impl PadSynth {
             self.lp_l += lp_alpha * (sum_l - self.lp_l);
             self.lp_r += lp_alpha * (sum_r - self.lp_r);
 
-            let g = g0 + d_gain * (f + 1) as f32;
+            let g = (g0 + d_gain * (f + 1) as f32) * env;
             let raw_l = self.lp_l * PAD_OUTPUT_SCALE * g;
             let raw_r = self.lp_r * PAD_OUTPUT_SCALE * g;
             let sl = if raw_l.is_finite() { raw_l } else { 0.0 };
@@ -450,7 +554,12 @@ impl PadSynth {
             }
         }
 
+        if self.env_level == 0.0 {
+            self.fast_cutting = false;
+        }
+        ctl.set_tail_active(!transport_playing && self.env_level > 0.0);
         ctl.meter.record(pk_l, pk_r);
+        true
     }
 }
 
@@ -503,7 +612,15 @@ mod tests {
                 out_r.fill(0.0);
                 mon_l.fill(0.0);
                 mon_r.fill(0.0);
-                synth.render_block(&ctl, 1, 480, 48_000, &mut out_l, &mut out_r, &mut mon_l, &mut mon_r);
+                synth.render_block(&ctl, 1, 480, 48_000, &mut out_l, &mut out_r, &mut mon_l, &mut mon_r, true);
+            }
+            // Cola decreciente tras pausar/parar también con cero asignaciones.
+            for _ in 0..320u32 {
+                out_l.fill(0.0);
+                out_r.fill(0.0);
+                mon_l.fill(0.0);
+                mon_r.fill(0.0);
+                synth.render_block(&ctl, 1, 480, 48_000, &mut out_l, &mut out_r, &mut mon_l, &mut mon_r, false);
             }
         });
         assert_eq!(asignaciones, 0, "PadSynth asignó memoria dentro del bloque de audio");
@@ -530,19 +647,19 @@ mod tests {
         let mut max_step = 0.0f32;
         let mut peak = 0.0f32;
 
-        for b in 0..350 {
-            if b == 60 {
+        for b in 0..500 {
+            if b == 120 {
                 ctl.apply(PadConfig { active_mode: true, enabled: true, note: 7, gain: 1.0, monitor: false });
-            } else if b == 120 {
+            } else if b == 200 {
                 ctl.apply(PadConfig { active_mode: true, enabled: true, note: 5, gain: 0.4, monitor: false });
-            } else if b == 180 {
+            } else if b == 280 {
                 ctl.apply(PadConfig { active_mode: true, enabled: false, note: 5, gain: 0.4, monitor: false });
-            } else if b == 240 {
+            } else if b == 380 {
                 ctl.apply(PadConfig { active_mode: true, enabled: true, note: 11, gain: 1.0, monitor: false });
             }
             out_l.fill(0.0);
             out_r.fill(0.0);
-            synth.render_block(&ctl, 0, 480, 48_000, &mut out_l, &mut out_r, &mut mon_l, &mut mon_r);
+            synth.render_block(&ctl, 0, 480, 48_000, &mut out_l, &mut out_r, &mut mon_l, &mut mon_r, true);
             for i in 0..480 {
                 assert!(out_l[i].is_finite() && out_r[i].is_finite());
                 max_step = max_step.max((out_l[i] - prev_l).abs()).max((out_r[i] - prev_r).abs());
@@ -553,6 +670,73 @@ mod tests {
         }
         assert!(peak > 0.05 && peak < 0.9, "nivel inesperado del pad: {peak}");
         assert!(max_step <= 0.01, "escalón demasiado grande en el pad: {max_step}");
+    }
+
+    #[test]
+    fn test_pad_entrada_incremental_salida_decreciente_y_corte_rapido() {
+        let ctl = PadControl::new();
+        ctl.reset_for_load(PadConfig {
+            active_mode: true,
+            enabled: true,
+            note: 7,
+            gain: 1.0,
+            monitor: false,
+        });
+        let mut synth = PadSynth::new();
+        let mut out_l = vec![0.0f32; 480];
+        let mut out_r = vec![0.0f32; 480];
+        let mut mon_l = vec![0.0f32; 480];
+        let mut mon_r = vec![0.0f32; 480];
+
+        let mut prev_l = 0.0f32;
+        let mut max_step = 0.0f32;
+        let mut correr = |synth: &mut PadSynth, bloques: usize, playing: bool| -> f32 {
+            let mut pk = 0.0f32;
+            for _ in 0..bloques {
+                out_l.fill(0.0);
+                out_r.fill(0.0);
+                mon_l.fill(0.0);
+                mon_r.fill(0.0);
+                synth.render_block(&ctl, 0, 480, 48_000, &mut out_l, &mut out_r, &mut mon_l, &mut mon_r, playing);
+                for &x in &out_l {
+                    max_step = max_step.max((x - prev_l).abs());
+                    prev_l = x;
+                    pk = pk.max(x.abs());
+                }
+            }
+            pk
+        };
+
+        // Entrada incremental (2,5 s): primeros 0,3 s mucho más suaves que 1,0..1,3 s y que asentado tras 2,6 s.
+        let pk_inicio = correr(&mut synth, 30, true);
+        let _ = correr(&mut synth, 70, true);
+        let pk_medio = correr(&mut synth, 30, true);
+        let _ = correr(&mut synth, 130, true);
+        let pk_lleno = correr(&mut synth, 30, true);
+        assert!(pk_inicio < pk_medio * 0.4, "el pad debe entrar suave, no de golpe: inicio={pk_inicio}, medio={pk_medio}");
+        assert!(pk_medio < pk_lleno * 0.85, "el pad debe seguir subiendo hasta 2,5 s: medio={pk_medio}, lleno={pk_lleno}");
+        assert!(pk_lleno > 0.1, "el pad lleno debe sonar claro: {pk_lleno}");
+
+        // Salida decreciente al pausar/parar (`playing = false`): a los 0,5 s aún suena, a los 1,8 s es más bajo, a los 3,1 s silencio.
+        let _ = correr(&mut synth, 50, false);
+        let pk_out_1 = correr(&mut synth, 20, false);
+        assert!(ctl.is_tail_active(), "debe quedar cola activa durante la bajada");
+        let _ = correr(&mut synth, 110, false);
+        let pk_out_2 = correr(&mut synth, 20, false);
+        assert!(pk_out_1 > pk_out_2 && pk_out_2 > 0.005, "la bajada debe ser progresiva: {pk_out_1} -> {pk_out_2}");
+        let _ = correr(&mut synth, 120, false);
+        let pk_silencio = correr(&mut synth, 10, false);
+        assert!(pk_silencio == 0.0 && !synth.has_active_tail() && !ctl.is_tail_active(), "tras 3 s debe quedar en silencio: {pk_silencio}");
+
+        // Freno de emergencia (`request_fast_cut`): vuelve a subir y luego corta en 8 ms sin escalones.
+        let _ = correr(&mut synth, 260, true);
+        let _ = correr(&mut synth, 5, false);
+        assert!(ctl.is_tail_active());
+        ctl.request_fast_cut();
+        let _ = correr(&mut synth, 2, false); // 20 ms > 8 ms
+        let pk_tras_corte = correr(&mut synth, 5, false);
+        assert_eq!(pk_tras_corte, 0.0, "corte rápido debe silenciar en < 20 ms");
+        assert!(max_step <= 0.01, "escalón demasiado grande durante entrada/salida/corte: {max_step}");
     }
 
     #[test]

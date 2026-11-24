@@ -283,7 +283,7 @@ impl PlaybackEngine {
 
         // La caché es válida: ahora sí se detiene lo que sonaba y se aplican los datos de la canción nueva.
         self.stop().await;
-        self.pad.reset_for_load(PadConfig::inactive());
+        self.pad.deactivate_for_song_change();
         self.is_buffering.store(true, Ordering::SeqCst);
         *self.buffering_start_time.lock().unwrap() = Some(Instant::now());
 
@@ -766,7 +766,14 @@ impl PlaybackEngine {
             1 | 2 | 4 => config.subdivision,
             _ => 1,
         };
+        let timing_changed = met.config.subdivision != config.subdivision
+            || met.config.bpm.to_bits() != config.bpm.to_bits();
         met.config = config;
+        if timing_changed {
+            let cur = self.current_frame.load(Ordering::SeqCst);
+            let sr = self.sample_rate.load(Ordering::SeqCst).max(1);
+            met.resync_to_frame(cur, sr);
+        }
     }
 
     pub fn set_pad(&self, config: PadConfig) {
@@ -934,7 +941,7 @@ impl PlaybackEngine {
             }
             tracks.clear();
             self.stream_tracks.lock().unwrap().clear();
-            self.pad.reset_for_load(PadConfig::inactive());
+            self.pad.deactivate_for_song_change();
             *loaded = None;
             tracing::info!("[NativeEngine] Unloaded project '{}'", project_id);
         }

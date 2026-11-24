@@ -134,6 +134,9 @@ impl PlaybackEngine {
         if self.is_playing.load(Ordering::SeqCst) {
             self.fade_out_and_wait().await;
             self.is_playing.store(false, Ordering::SeqCst);
+        } else if self.pad.is_tail_active() {
+            // Segundo Stop mientras el pad decrece suavemente: freno de emergencia (corte limpio en 8 ms).
+            self.pad.request_fast_cut();
         }
 
         // Parar vuelve al inicio: el bucle del vamp (de otra sección) ya no tiene sentido y, con él activo, tras
@@ -372,7 +375,7 @@ impl PlaybackEngine {
                 .collect(),
             Err(_) => Vec::new(),
         };
-        if self.pad.is_active_mode() {
+        if self.pad.is_active_mode() || self.pad.is_tail_active() {
             let (l, r) = self.pad.meter.take();
             tracks.push(TrackLevel { track_id: "__pad__".to_string(), l, r });
         }
