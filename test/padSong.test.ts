@@ -5,8 +5,14 @@ import {
   effectivePadNoteIndex,
   filterLibrarySongs,
   isPadOnlySong,
+  normalizePadHarmony,
+  normalizePadStyle,
   noteIndexToLabel,
   padConfigFromProject,
+  padHarmonyLabel,
+  padHarmonyToEngine,
+  padStyleLabel,
+  padStyleToEngine,
   parseKeyToNoteIndex,
   subdivisionBadge,
 } from '../src/utils/padSong';
@@ -52,9 +58,21 @@ assert.equal(padSong.inSetlist, true);
 assert.equal(padSong.setlistOrder, 3);
 assert.equal(padSong.padEnabled, true);
 assert.equal(padSong.padGain, DEFAULT_PAD_GAIN);
+assert.equal(padSong.padHarmony, 'open');
+assert.equal(padSong.padStyle, 'warm');
 assert.equal(subdivisionBadge(padSong.clickSubdivision), '×2');
 assert.equal(subdivisionBadge(4), '×4');
 assert.equal(subdivisionBadge(1), '×1');
+
+// 3b. Armonía y timbre del pad
+assert.equal(normalizePadHarmony(undefined), 'open');
+assert.equal(normalizePadHarmony('minor'), 'minor');
+assert.equal(normalizePadStyle('shimmer'), 'shimmer');
+assert.equal(padHarmonyToEngine('major'), 1);
+assert.equal(padHarmonyToEngine('minor'), 2);
+assert.equal(padStyleToEngine('strings'), 2);
+assert.equal(padHarmonyLabel('minor'), 'Menor');
+assert.equal(padStyleLabel('shimmer'), 'Ambiente');
 
 // 4. Configuración para el motor
 const cfg = padConfigFromProject(padSong);
@@ -64,6 +82,27 @@ assert.deepEqual(cfg, {
   note: 7,
   gain: DEFAULT_PAD_GAIN,
   monitor: false,
+  harmony: 0,
+  style: 0,
+});
+
+const shimmerMajorSong = createPadOnlySong({
+  id: 'pad-2',
+  title: 'Digno',
+  keySignature: 'Bb',
+  bpm: 68,
+  padHarmony: 'major',
+  padStyle: 'shimmer',
+  now: 123457,
+});
+assert.deepEqual(padConfigFromProject(shimmerMajorSong), {
+  activeMode: true,
+  enabled: true,
+  note: 10,
+  gain: DEFAULT_PAD_GAIN,
+  monitor: false,
+  harmony: 1,
+  style: 1,
 });
 
 const normalSong: SongProject = {
@@ -79,7 +118,20 @@ assert.deepEqual(padConfigFromProject(normalSong), {
   note: 0,
   gain: 0,
   monitor: false,
+  harmony: 0,
+  style: 0,
 });
+
+assert.equal(padSong.padPackId, null, 'por defecto una canción sin secuencia arranca con sintetizador interno');
+const packSong = createPadOnlySong({
+  id: 'pad-pack-1',
+  title: 'Gloria',
+  keySignature: 'D',
+  bpm: 70,
+  padPackId: 'pack-warm-01',
+  now: 123458,
+});
+assert.equal(packSong.padPackId, 'pack-warm-01', 'debe conservar el pack elegido al crear la canción');
 
 // 5. Exclusión de la biblioteca: las canciones sin secuencia no salen en Biblioteca
 const visible = filterLibrarySongs([padSong, normalSong]);

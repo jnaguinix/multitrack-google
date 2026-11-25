@@ -6,6 +6,10 @@ export type SplitRoutingMode = 'stereo' | 'split-mono';
 
 export type SetlistTransitionMode = 'stop' | 'cue-next' | 'auto-play';
 
+export type PadHarmony = 'open' | 'major' | 'minor';
+
+export type PadStyle = 'warm' | 'shimmer' | 'strings';
+
 export interface TrackPcmMetadata {
   sampleRate: number;
   channels: number;
@@ -121,6 +125,12 @@ export interface SongProject {
   padGain?: number;
   /** «Aur.»: envía el pad también a los auriculares. */
   padMonitor?: boolean;
+  /** Carácter armónico del pad: Abierto (sin 3ª), Mayor o Menor. */
+  padHarmony?: PadHarmony;
+  /** Timbre del pad: Cálido, Ambiente o Cuerdas. */
+  padStyle?: PadStyle;
+  /** ID del pack de audio real en disco (`null`/ausente = sintetizador interno). */
+  padPackId?: string | null;
   updatedAt: number;
 }
 

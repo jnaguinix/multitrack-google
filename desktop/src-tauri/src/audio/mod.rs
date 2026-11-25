@@ -5,6 +5,7 @@ pub mod loudness;
 pub mod metronome;
 pub mod output;
 pub mod pad;
+pub mod pad_packs;
 pub mod pitch;
 pub mod playback;
 pub mod resampler;
@@ -346,6 +347,7 @@ pub async fn audio_load_project(
     quantize_mode: Option<String>,
     track_controls: Option<Vec<playback::InitialTrackControl>>,
     pad_config: Option<pad::PadConfig>,
+    pad_pack_id: Option<String>,
 ) -> Result<playback::ProjectLoadInfo, String> {
     let sr = {
         let settings = state.current_settings.lock().await;
@@ -353,9 +355,10 @@ pub async fn audio_load_project(
     };
 
     if let Some(cfg) = pad_config.filter(|c| c.active_mode) {
+        let local_data = app.path().app_local_data_dir().ok();
         return state
             .playback
-            .load_pad_project(&project_id, sr, bpm, beats_per_bar, cfg)
+            .load_pad_project(&project_id, sr, bpm, beats_per_bar, cfg, local_data.as_deref(), pad_pack_id)
             .await;
     }
 
@@ -490,8 +493,70 @@ pub async fn audio_set_pad(
     state: State<'_, AudioEngineState>,
     config: pad::PadConfig,
 ) -> Result<(), String> {
-    state.playback.set_pad(config);
-    Ok(())
+    state.playback.set_pad_with_pack(config).await
+}
+
+#[tauri::command]
+pub async fn audio_list_pad_packs(
+    app: tauri::AppHandle,
+) -> Result<Vec<pad_packs::PadPackInfo>, String> {
+    let local_data = app
+        .path()
+        .app_local_data_dir()
+        .map_err(|e| format!("Error resolviendo app_local_data_dir: {e}"))?;
+    pad_packs::list_pad_packs(&local_data)
+}
+
+#[tauri::command]
+pub async fn audio_import_pad_pack(
+    app: tauri::AppHandle,
+    state: State<'_, AudioEngineState>,
+    name: String,
+    folder_path: String,
+) -> Result<pad_packs::PadPackInfo, String> {
+    let local_data = app
+        .path()
+        .app_local_data_dir()
+        .map_err(|e| format!("Error resolviendo app_local_data_dir: {e}"))?;
+    let sr = {
+        let settings = state.current_settings.lock().await;
+        settings.cache_rate()
+    };
+    let folder = PathBuf::from(folder_path);
+    tokio::task::spawn_blocking(move || pad_packs::import_pad_pack_folder(&local_data, &name, &folder, sr))
+        .await
+        .map_err(|e| format!("Error importando pack de pads: {e}"))?
+}
+
+#[tauri::command]
+pub async fn audio_delete_pad_pack(
+    app: tauri::AppHandle,
+    state: State<'_, AudioEngineState>,
+    pack_id: String,
+) -> Result<(), String> {
+    let local_data = app
+        .path()
+        .app_local_data_dir()
+        .map_err(|e| format!("Error resolviendo app_local_data_dir: {e}"))?;
+    if state.playback.pad_pack.active_pack_id().as_deref() == Some(pack_id.as_str()) {
+        state.playback.pad_pack.clear_pack();
+    }
+    tokio::task::spawn_blocking(move || pad_packs::delete_pad_pack(&local_data, &pack_id))
+        .await
+        .map_err(|e| format!("Error eliminando pack de pads: {e}"))?
+}
+
+#[tauri::command]
+pub async fn audio_set_pad_pack(
+    app: tauri::AppHandle,
+    state: State<'_, AudioEngineState>,
+    pack_id: Option<String>,
+) -> Result<(), String> {
+    let local_data = app
+        .path()
+        .app_local_data_dir()
+        .map_err(|e| format!("Error resolviendo app_local_data_dir: {e}"))?;
+    state.playback.set_pad_pack(&local_data, pack_id).await
 }
 
 /// Estado del ruteo de salidas de un dispositivo, para la pantalla de Ajustes de audio.

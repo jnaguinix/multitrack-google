@@ -144,11 +144,15 @@ pub struct MetronomeEngine {
     pub config: MetronomeConfig,
     active_pulses: Vec<ActiveClickPulse>,
     last_substep: i64,
+    last_bpm_bits: u32,
+    last_subdivision: u32,
 }
 
 impl MetronomeEngine {
     pub fn new(config: MetronomeConfig) -> Self {
         Self {
+            last_bpm_bits: config.bpm.to_bits(),
+            last_subdivision: config.subdivision.max(1),
             config,
             // Capacidad fija reservada aquí, fuera del callback: render_block nunca la amplía.
             active_pulses: Vec::with_capacity(MAX_ACTIVE_PULSES),
@@ -159,10 +163,13 @@ impl MetronomeEngine {
     pub fn reset(&mut self) {
         self.active_pulses.clear();
         self.last_substep = -1;
+        self.last_bpm_bits = self.config.bpm.to_bits();
+        self.last_subdivision = self.config.subdivision.max(1);
     }
 
-    pub fn seek_to_frame(&mut self, song_frame: u64, sample_rate: u32) {
-        self.active_pulses.clear();
+    /// Recalcula `last_substep` para el `song_frame` actual con el BPM y la subdivisión vigentes
+    /// **sin** cortar los clics que ya están sonando. Se usa al cambiar `×4 → ×2 → ×1` o el BPM en vivo.
+    pub fn resync_to_frame(&mut self, song_frame: u64, sample_rate: u32) {
         let bpm = self.config.bpm.max(10.0);
         let subdiv = self.config.subdivision.max(1);
         let sec_per_substep = 60.0 / (bpm * subdiv as f32);
@@ -175,6 +182,13 @@ impl MetronomeEngine {
         } else {
             self.last_substep = substep_index;
         }
+        self.last_bpm_bits = self.config.bpm.to_bits();
+        self.last_subdivision = subdiv;
+    }
+
+    pub fn seek_to_frame(&mut self, song_frame: u64, sample_rate: u32) {
+        self.active_pulses.clear();
+        self.resync_to_frame(song_frame, sample_rate);
     }
 
     /// Renders click into a buffer of `frames` length, given current start and end song frames.
@@ -195,6 +209,9 @@ impl MetronomeEngine {
 
         let bpm = self.config.bpm.max(10.0);
         let subdiv = self.config.subdivision.max(1);
+        if self.config.bpm.to_bits() != self.last_bpm_bits || subdiv != self.last_subdivision {
+            self.resync_to_frame(start_song_frame, sample_rate);
+        }
         let bpb = self.config.beats_per_bar.max(1);
         let sec_per_substep = 60.0 / (bpm * subdiv as f32);
         let frames_per_substep = (sec_per_substep * sample_rate as f32).max(1.0);
@@ -313,6 +330,57 @@ mod tests {
             assert!(quarter > s, "la negra ({quarter}) debe sonar más fuerte que la semicorchea {} ({s})", i + 2);
             assert!(s > 0.05, "la semicorchea {} debe sonar ({s})", i + 2);
         }
+    }
+
+    #[test]
+    fn test_bajar_subdivision_de_cuadruple_a_doble_y_simple_sigue_sonando() {
+        let mut met = MetronomeEngine::new(MetronomeConfig {
+            enabled: true,
+            bpm: 120.0,
+            beats_per_bar: 4,
+            subdivision: 4,
+            gain: 1.0,
+            split_mono: false,
+        });
+        let mut out = vec![0.0f32; 480];
+        let mut frame = 0u64;
+
+        let mut correr = |met: &mut MetronomeEngine, bloques: usize, f: &mut u64| -> (f32, u64) {
+            let mut pk = 0.0f32;
+            let allocs = crate::alloc_probe::count_allocs(|| {
+                for _ in 0..bloques {
+                    met.render_block(*f, *f + 480, 480, 48_000, &mut out);
+                    for &x in &out {
+                        pk = pk.max(x.abs());
+                    }
+                    *f += 480;
+                }
+            });
+            (pk, allocs)
+        };
+
+        // 5 segundos en ×4 (120 BPM → ~40 subpasos).
+        let (pk4, a4) = correr(&mut met, 500, &mut frame);
+        assert!(pk4 > 0.1, "×4 debe sonar ({pk4})");
+        assert_eq!(a4, 0);
+
+        // Baja a ×2 sin parar: en los siguientes 0,5 s (50 bloques) debe sonar enseguida.
+        met.config.subdivision = 2;
+        let (pk2, a2) = correr(&mut met, 50, &mut frame);
+        assert!(pk2 > 0.1, "al bajar de ×4 a ×2 sin parar el click se quedó mudo ({pk2})");
+        assert_eq!(a2, 0);
+
+        // Baja a ×1 sin parar: en los siguientes 0,6 s (60 bloques) debe sonar enseguida.
+        met.config.subdivision = 1;
+        let (pk1, a1) = correr(&mut met, 60, &mut frame);
+        assert!(pk1 > 0.1, "al bajar de ×2 a ×1 sin parar el click se quedó mudo ({pk1})");
+        assert_eq!(a1, 0);
+
+        // Baja también el BPM de 120 a 80 sin parar: en los siguientes 0,85 s (85 bloques) debe sonar.
+        met.config.bpm = 80.0;
+        let (pk_bpm, a_bpm) = correr(&mut met, 85, &mut frame);
+        assert!(pk_bpm > 0.1, "al bajar BPM sin parar el click se quedó mudo ({pk_bpm})");
+        assert_eq!(a_bpm, 0);
     }
 
 }

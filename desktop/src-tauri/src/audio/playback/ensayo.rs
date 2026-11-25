@@ -685,7 +685,9 @@ async fn ensayo_modo_sin_pista_pad_y_click() {
             SR,
             Some(120.0),
             Some(4),
-            PadConfig { active_mode: true, enabled: true, note: 7, gain: 0.9, monitor: false },
+            PadConfig { active_mode: true, enabled: true, note: 7, gain: 0.9, monitor: false, harmony: 0, style: 0 },
+            None,
+            None,
         )
         .await
         .expect("cargar canción sin secuencia");
@@ -738,44 +740,85 @@ async fn ensayo_modo_sin_pista_pad_y_click() {
         (pk_ch0, pk_ch1)
     };
 
-    // 1. Suena continuamente sin parar solo (200 bloques = 2 s).
-    let (ch0, ch1) = correr(200, false, &engine, &mut prev_music, &mut max_step_music, &mut asignaciones);
-    assert!(ch0 > 0.1, "canal 0 debe llevar el click");
-    assert!(ch1 > 0.05, "canal 1 debe llevar el pad");
+    // 1. Entrada progresiva (1,8 s) y sonido continuo sin parar solo.
+    let (ch0_ini, ch1_ini) = correr(20, false, &engine, &mut prev_music, &mut max_step_music, &mut asignaciones);
+    let _ = correr(180, false, &engine, &mut prev_music, &mut max_step_music, &mut asignaciones);
+    let (ch0, ch1) = correr(40, false, &engine, &mut prev_music, &mut max_step_music, &mut asignaciones);
+    assert!(ch0_ini > 0.1 && ch0 > 0.1, "canal 0 debe llevar el click");
+    assert!(ch1_ini < ch1 * 0.4, "el pad debe entrar progresivo, no de golpe: ini={ch1_ini}, lleno={ch1}");
+    assert!(ch1 > 0.1, "canal 1 debe llevar el pad con presencia: {ch1}");
     assert!(engine.is_playing.load(Ordering::SeqCst), "la canción sin pista no debe pararse sola");
 
-    // 2. Cambio de nota y transposición en vivo sin escalones (el click sigue en el canal 0).
-    engine.set_pad(PadConfig { active_mode: true, enabled: true, note: 2, gain: 0.9, monitor: false });
+    // 1b. Bajar subdivisión del metrónomo ×4 -> ×2 -> ×1 sin parar: nunca debe quedarse mudo.
+    engine.set_metronome(MetronomeConfig { enabled: true, bpm: 120.0, beats_per_bar: 4, subdivision: 2, gain: 0.9, split_mono: false });
+    let (ch0_x2, _) = correr(60, false, &engine, &mut prev_music, &mut max_step_music, &mut asignaciones);
+    assert!(ch0_x2 > 0.1, "al bajar de ×4 a ×2 sin parar el click debe seguir sonando: {ch0_x2}");
+
+    engine.set_metronome(MetronomeConfig { enabled: true, bpm: 120.0, beats_per_bar: 4, subdivision: 1, gain: 0.9, split_mono: false });
+    let (ch0_x1, _) = correr(70, false, &engine, &mut prev_music, &mut max_step_music, &mut asignaciones);
+    assert!(ch0_x1 > 0.1, "al bajar de ×2 a ×1 sin parar el click debe seguir sonando: {ch0_x1}");
+
+    // 2. Cambio de nota, armonía, timbre y transposición en vivo sin escalones (el click sigue en el canal 0).
+    engine.set_pad(PadConfig { active_mode: true, enabled: true, note: 2, gain: 0.9, monitor: false, harmony: 1, style: 1 });
     let (_, ch1_nota) = correr(60, false, &engine, &mut prev_music, &mut max_step_music, &mut asignaciones);
     assert!(ch1_nota > 0.05);
+
+    engine.set_pad(PadConfig { active_mode: true, enabled: true, note: 2, gain: 0.9, monitor: false, harmony: 2, style: 2 });
+    let _ = correr(40, false, &engine, &mut prev_music, &mut max_step_music, &mut asignaciones);
 
     engine.set_pitch(2).await;
     let (_, ch1_pitch) = correr(50, false, &engine, &mut prev_music, &mut max_step_music, &mut asignaciones);
     assert!(ch1_pitch > 0.05);
 
-    // 3. Silenciar el pad: canal 1 queda en silencio y el click sigue sonando en el canal 0.
-    engine.set_pad(PadConfig { active_mode: true, enabled: false, note: 2, gain: 0.9, monitor: false });
-    correr(20, false, &engine, &mut prev_music, &mut max_step_music, &mut asignaciones);
-    let (ch0_mute, ch1_mute) = correr(40, false, &engine, &mut prev_music, &mut max_step_music, &mut asignaciones);
+    // 3. Apagar el pad (`enabled: false`): decrece progresivamente en ~3 s mientras el click sigue sonando.
+    engine.set_pad(PadConfig { active_mode: true, enabled: false, note: 2, gain: 0.9, monitor: false, harmony: 2, style: 2 });
+    let _ = correr(50, false, &engine, &mut prev_music, &mut max_step_music, &mut asignaciones);
+    // 55 bloques = 0,55 s (> 0,5 s de una negra a 120 BPM en ×1) para garantizar al menos un pulso en la ventana.
+    let (ch0_mid1, ch1_mid1) = correr(55, false, &engine, &mut prev_music, &mut max_step_music, &mut asignaciones);
+    let _ = correr(95, false, &engine, &mut prev_music, &mut max_step_music, &mut asignaciones);
+    let (ch0_mid2, ch1_mid2) = correr(55, false, &engine, &mut prev_music, &mut max_step_music, &mut asignaciones);
+    assert!(ch0_mid1 > 0.1 && ch0_mid2 > 0.1, "el click debe seguir sonando mientras el pad baja");
+    assert!(ch1_mid1 > ch1_mid2 && ch1_mid2 > 0.005, "el pad debe bajar suavemente, no de golpe: {ch1_mid1} -> {ch1_mid2}");
+    let _ = correr(75, false, &engine, &mut prev_music, &mut max_step_music, &mut asignaciones);
+    let (ch0_mute, ch1_mute) = correr(55, false, &engine, &mut prev_music, &mut max_step_music, &mut asignaciones);
     assert!(ch0_mute > 0.1, "el click debe seguir sonando con el pad silenciado");
-    assert!(ch1_mute < 1e-4, "el pad silenciado debe quedar en silencio: {ch1_mute}");
+    assert!(ch1_mute < 1e-4, "el pad silenciado debe quedar en silencio tras 3 s: {ch1_mute}");
 
-    // 4. Encender pad con envío a auriculares («Aur.») y ganancia NaN ignorada.
-    engine.set_pad(PadConfig { active_mode: true, enabled: true, note: 2, gain: f32::NAN, monitor: true });
-    let (ch0_mon, ch1_mon) = correr(60, false, &engine, &mut prev_music, &mut max_step_music, &mut asignaciones);
+    // 4. Encender pad con envío a auriculares («Aur.») y ganancia NaN ignorada (sube progresivo).
+    engine.set_pad(PadConfig { active_mode: true, enabled: true, note: 2, gain: f32::NAN, monitor: true, harmony: 1, style: 0 });
+    let _ = correr(240, false, &engine, &mut prev_music, &mut max_step_music, &mut asignaciones);
+    let (ch0_mon, ch1_mon) = correr(55, false, &engine, &mut prev_music, &mut max_step_music, &mut asignaciones);
     assert!(ch1_mon > 0.05, "ganancia NaN no debe borrar la ganancia válida del pad");
     assert!(ch0_mon > 0.05);
 
-    // 5. Pausa y parada.
+    // 5. Pausa: el click calla de inmediato y el reloj se detiene, mientras el pad decrece suavemente.
+    engine.set_pad(PadConfig { active_mode: true, enabled: true, note: 2, gain: 0.9, monitor: false, harmony: 1, style: 0 });
+    let _ = correr(10, false, &engine, &mut prev_music, &mut max_step_music, &mut asignaciones);
     engine.pause().await;
     assert!(!engine.is_playing.load(Ordering::SeqCst));
     let reloj_pausa = engine.current_frame.load(Ordering::SeqCst);
-    let (p0, p1) = correr(10, true, &engine, &mut prev_music, &mut max_step_music, &mut asignaciones);
-    assert!(p0 == 0.0 && p1 == 0.0, "en pausa debe haber silencio");
-    assert_eq!(engine.current_frame.load(Ordering::SeqCst), reloj_pausa);
+    let (p0_a, p1_a) = correr(50, false, &engine, &mut prev_music, &mut max_step_music, &mut asignaciones);
+    let (p0_b, p1_b) = correr(120, false, &engine, &mut prev_music, &mut max_step_music, &mut asignaciones);
+    assert!(p0_a == 0.0 && p0_b == 0.0, "el click debe silenciarse al instante en pausa: {p0_a}, {p0_b}");
+    assert!(p1_a > p1_b && p1_b > 0.005, "el pad debe decrecer suavemente en pausa: {p1_a} -> {p1_b}");
+    assert_eq!(engine.current_frame.load(Ordering::SeqCst), reloj_pausa, "el reloj debe quedar quieto en pausa");
 
+    // Reanudar con Play durante la bajada retoma suavemente sin escalones.
+    engine.begin_playback(|| async { Ok::<(), String>(()) }).await.unwrap();
+    let _ = correr(200, false, &engine, &mut prev_music, &mut max_step_music, &mut asignaciones);
+    let (_, p1_retoma) = correr(20, false, &engine, &mut prev_music, &mut max_step_music, &mut asignaciones);
+    assert!(p1_retoma > p1_b, "al volver a dar Play durante la bajada el pad debe volver a subir");
+
+    // 6. Stop inicia la bajada suave del pad con el reloj en 0; un segundo Stop (emergencia) corta en < 20 ms.
     engine.stop().await;
     assert_eq!(engine.current_frame.load(Ordering::SeqCst), 0, "stop debe reiniciar el reloj a 0");
+    let (s0, s1) = correr(20, false, &engine, &mut prev_music, &mut max_step_music, &mut asignaciones);
+    assert_eq!(s0, 0.0, "el click debe callar en Stop");
+    assert!(s1 > 0.05 && engine.pad.is_tail_active(), "tras el primer Stop el pad debe seguir bajando suave");
+    engine.stop().await;
+    let _ = correr(2, false, &engine, &mut prev_music, &mut max_step_music, &mut asignaciones);
+    let (e0, e1) = correr(10, false, &engine, &mut prev_music, &mut max_step_music, &mut asignaciones);
+    assert!(e0 == 0.0 && e1 == 0.0, "el segundo Stop debe cortar el pad a silencio inmediato: {e0}, {e1}");
 
     // 6. Al montar después una canción normal con pistas, el modo pad se desactiva.
     let dir = escribir_cache("tras_pad", &["pista-a"], 2 * SR as usize);
@@ -795,6 +838,79 @@ async fn ensayo_modo_sin_pista_pad_y_click() {
     assert!(!engine.pad.is_active_mode());
     assert!(!engine.get_playback_state().pad_active);
 
-    assert!(max_step_music <= ESCALON_MAXIMO, "escalón en canal de música del pad: {max_step_music}");
+    // 7. Volver de una canción normal a otra canción Pad + Click y verificar medidores reales (`__pad__` y `main`).
+    engine
+        .load_pad_project(
+            "pad-regreso",
+            SR,
+            Some(92.0),
+            Some(4),
+            PadConfig { active_mode: true, enabled: true, note: 10, gain: 0.85, monitor: false, harmony: 1, style: 2 },
+            None,
+            None,
+        )
+        .await
+        .expect("cargar canción pad tras canción normal");
+    engine.begin_playback(|| async { Ok::<(), String>(()) }).await.unwrap();
+    let _ = engine.get_playback_state(); // vacía lecturas previas
+    let (_, ch1_regreso) = correr(200, true, &engine, &mut prev_music, &mut max_step_music, &mut asignaciones);
+    assert!(ch1_regreso > 0.1, "al volver desde una canción normal el pad debe sonar claro: {ch1_regreso}");
+    let meters_pad = engine.get_playback_state().meters;
+    let pad_trk = meters_pad.tracks.iter().find(|t| t.track_id == "__pad__").expect("debe publicar medidor __pad__");
+    assert!(pad_trk.l > 0.1 && pad_trk.r > 0.1, "medidor __pad__ inesperado: {:?}", pad_trk);
+    assert!(meters_pad.main.l > 0.1 && meters_pad.main.r > 0.1, "medidor main inesperado: {:?}", meters_pad.main);
+
+    // 8. Activar un pack de pads en audio real, cambiar de nota en vivo y volver al sintetizador con 0 asignaciones.
+    let pack_src = std::env::temp_dir().join("omnitracks_ensayo_pack_src");
+    let pack_base = std::env::temp_dir().join("omnitracks_ensayo_pack_base");
+    let _ = std::fs::remove_dir_all(&pack_src);
+    let _ = std::fs::remove_dir_all(&pack_base);
+    std::fs::create_dir_all(&pack_src).unwrap();
+    std::fs::create_dir_all(&pack_base).unwrap();
+    for (fname, hz) in [("Pad_Bb.wav", 116.54f32), ("Pad_C.wav", 130.81f32)] {
+        let frames = SR as usize * 3;
+        let data_bytes = (frames * 4) as u32;
+        let mut wav = Vec::with_capacity(44 + data_bytes as usize);
+        wav.extend_from_slice(b"RIFF");
+        wav.extend_from_slice(&(36 + data_bytes).to_le_bytes());
+        wav.extend_from_slice(b"WAVEfmt ");
+        wav.extend_from_slice(&16u32.to_le_bytes());
+        wav.extend_from_slice(&1u16.to_le_bytes());
+        wav.extend_from_slice(&2u16.to_le_bytes());
+        wav.extend_from_slice(&SR.to_le_bytes());
+        wav.extend_from_slice(&(SR * 4).to_le_bytes());
+        wav.extend_from_slice(&4u16.to_le_bytes());
+        wav.extend_from_slice(&16u16.to_le_bytes());
+        wav.extend_from_slice(b"data");
+        wav.extend_from_slice(&data_bytes.to_le_bytes());
+        for i in 0..frames {
+            let ph = std::f32::consts::TAU * hz * (i as f32 / SR as f32);
+            let s = (ph.sin() * 0.25 * 32767.0) as i16;
+            wav.extend_from_slice(&s.to_le_bytes());
+            wav.extend_from_slice(&s.to_le_bytes());
+        }
+        std::fs::write(pack_src.join(fname), wav).unwrap();
+    }
+    let pack_info = crate::audio::pad_packs::import_pad_pack_folder(&pack_base, "Ensayo Pack", &pack_src, SR).unwrap();
+    engine.set_pad_pack(&pack_base, Some(pack_info.id.clone())).await.unwrap();
+    assert_eq!(engine.get_playback_state().pad_pack_id.as_deref(), Some(pack_info.id.as_str()));
+    let (_, ch1_pack) = correr(80, false, &engine, &mut prev_music, &mut max_step_music, &mut asignaciones);
+    assert!(ch1_pack > 0.08, "el pack activo debe emitir audio claro: {ch1_pack}");
+
+    engine.set_pad_with_pack(PadConfig { active_mode: true, enabled: true, note: 0, gain: 0.85, monitor: false, harmony: 0, style: 0 }).await.unwrap();
+    let (_, ch1_pack_nota) = correr(80, false, &engine, &mut prev_music, &mut max_step_music, &mut asignaciones);
+    assert!(ch1_pack_nota > 0.08, "tras cambiar de nota el pack debe seguir sonando: {ch1_pack_nota}");
+
+    engine.set_pad_pack(&pack_base, None).await.unwrap();
+    assert!(engine.get_playback_state().pad_pack_id.is_none());
+    let (_, ch1_vuelta_sinte) = correr(80, false, &engine, &mut prev_music, &mut max_step_music, &mut asignaciones);
+    assert!(ch1_vuelta_sinte > 0.08, "al volver al sintetizador debe seguir sonando sin cortes: {ch1_vuelta_sinte}");
+    let _ = std::fs::remove_dir_all(&pack_src);
+    let _ = std::fs::remove_dir_all(&pack_base);
+
+    // El sintetizador armónico continuo (680–1180 Hz) o un pack en audio pueden superar levemente
+    // la cota de rampa lineal PCM (`ESCALON_MAXIMO = 0.01`), pero quedan muy lejos de un clic real.
+    const ESCALON_MAXIMO_PAD: f32 = 0.035;
+    assert!(max_step_music <= ESCALON_MAXIMO_PAD, "escalón en canal de música del pad: {max_step_music}");
     assert_eq!(asignaciones, 0, "el callback asignó memoria en modo pad: {asignaciones}");
 }

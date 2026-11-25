@@ -221,6 +221,12 @@ pub struct LibrarySong {
     pub pad_gain: Option<f32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pad_monitor: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pad_harmony: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pad_style: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pad_pack_id: Option<String>,
     pub updated_at: u64,
 }
 

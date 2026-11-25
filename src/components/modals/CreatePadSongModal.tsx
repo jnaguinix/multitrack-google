@@ -1,17 +1,21 @@
 import React, { useState } from 'react';
 import { Disc3 } from 'lucide-react';
-import { SongProject } from '../../types/project';
+import { PadHarmony, PadStyle, SongProject } from '../../types/project';
 import {
   CLICK_SUBDIVISION_OPTIONS,
   createPadOnlySong,
+  PAD_HARMONY_OPTIONS,
   PAD_NOTES,
+  PAD_STYLE_OPTIONS,
   TIME_SIGNATURE_OPTIONS,
 } from '../../utils/padSong';
+import type { PadPackInfo } from '../../utils/padPacks';
 import { Dialog, DialogBody, DialogFooter, DialogHeader } from '../ui/Dialog';
 
 interface CreatePadSongModalProps {
   isOpen: boolean;
   nextSetlistOrder: number;
+  packs?: PadPackInfo[];
   onClose: () => void;
   onCreate: (song: SongProject) => void;
 }
@@ -20,6 +24,7 @@ interface CreatePadSongModalProps {
 export const CreatePadSongModal: React.FC<CreatePadSongModalProps> = ({
   isOpen,
   nextSetlistOrder,
+  packs = [],
   onClose,
   onCreate,
 }) => {
@@ -29,6 +34,9 @@ export const CreatePadSongModal: React.FC<CreatePadSongModalProps> = ({
   const [bpm, setBpm] = useState(72);
   const [timeSig, setTimeSig] = useState('4/4');
   const [subdivision, setSubdivision] = useState<1 | 2 | 4>(1);
+  const [harmony, setHarmony] = useState<PadHarmony>('open');
+  const [style, setStyle] = useState<PadStyle>('warm');
+  const [padPackId, setPadPackId] = useState<string>('');
 
   if (!isOpen) return null;
 
@@ -45,6 +53,9 @@ export const CreatePadSongModal: React.FC<CreatePadSongModalProps> = ({
       beatsPerBar: Number(bpbStr) || 4,
       beatUnit: Number(unitStr) || 4,
       clickSubdivision: subdivision,
+      padHarmony: harmony,
+      padStyle: style,
+      padPackId: padPackId || null,
       setlistOrder: nextSetlistOrder,
     });
     onCreate(song);
@@ -141,6 +152,57 @@ export const CreatePadSongModal: React.FC<CreatePadSongModalProps> = ({
               </div>
             </div>
           </div>
+
+          <div className="lt-pad-options-row">
+            <div className="lt-field">
+              <span>Carácter</span>
+              <div className="lt-segmented" role="group" aria-label="Carácter armónico del pad">
+                {PAD_HARMONY_OPTIONS.map((opt) => (
+                  <button
+                    key={opt.value}
+                    type="button"
+                    className="lt-control"
+                    aria-pressed={harmony === opt.value}
+                    title={opt.hint}
+                    onClick={() => setHarmony(opt.value)}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="lt-field">
+              <span>Timbre</span>
+              <div className="lt-segmented" role="group" aria-label="Timbre del pad">
+                {PAD_STYLE_OPTIONS.map((opt) => (
+                  <button
+                    key={opt.value}
+                    type="button"
+                    className="lt-control"
+                    aria-pressed={style === opt.value}
+                    title={opt.hint}
+                    onClick={() => setStyle(opt.value)}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          {packs.length > 0 && (
+            <label className="lt-field">
+              <span>Fuente del pad</span>
+              <select value={padPackId} onChange={(e) => setPadPackId(e.target.value)}>
+                <option value="">Sintetizador interno (constante)</option>
+                {packs.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    Pack: {p.name} ({p.availableNotes.length}/12 notas)
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
         </DialogBody>
         <DialogFooter>
           <button type="button" onClick={onClose} className="lt-control">

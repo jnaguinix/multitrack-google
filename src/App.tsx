@@ -24,7 +24,9 @@ import { useTrackInstruments } from './hooks/useTrackInstruments';
 import { useSongEditing } from './hooks/useSongEditing';
 import { useRelinkProject } from './hooks/useRelinkProject';
 import { useLibraryDeletion } from './hooks/useLibraryDeletion';
+import { usePadPacks } from './hooks/usePadPacks';
 import { syncProjectSidecarNow } from './storage/projectDb';
+import { projectSaves } from './storage/projectSaves';
 import { SetlistTransitionMode, SongProject, TransportState } from './types/project';
 import { TopBar, WorkspaceView } from './components/TopBar';
 import { TransportDeck } from './components/TransportDeck';
@@ -313,6 +315,9 @@ export default function App() {
     handleTogglePad,
     handleChangePadGain,
     handleTogglePadMonitor,
+    handleChangePadHarmony,
+    handleChangePadStyle,
+    handleChangePadPack,
     handleToggleTrackMute,
     handleToggleTrackSolo,
     handleToggleTrackMonitor,
@@ -330,6 +335,26 @@ export default function App() {
     showToast,
     syncProjectSidecarNow,
   });
+
+  const { padPacks, isImportingPack, importPackFromFolder, removePack } = usePadPacks();
+
+  const handleDeletePadPack = async (packId: string) => {
+    await removePack(packId);
+    const affected = projectsRef.current.filter((p) => p.padPackId === packId);
+    if (affected.length === 0) return;
+    if (currentProjectRef.current?.padPackId === packId) {
+      handleChangePadPack(null);
+    }
+    const now = Date.now();
+    const otherAffected = affected.filter((p) => p.id !== currentProjectRef.current?.id);
+    if (otherAffected.length > 0) {
+      const updatedOthers = new Map(
+        otherAffected.map((p) => [p.id, { ...p, padPackId: null, updatedAt: now }])
+      );
+      setProjects((prev) => prev.map((p) => updatedOthers.get(p.id) ?? p));
+      updatedOthers.forEach((proj) => void projectSaves.saveNow(proj));
+    }
+  };
 
   // Las mismas acciones de consola para Mezcla, el Setlist y la consola flotante del Arreglo.
   const mixerHandlers: MixerHandlers = {
@@ -521,7 +546,14 @@ export default function App() {
               onChangeKeySignature={handleChangeKeySignature}
               onChangeBeatsPerBar={handleChangeBeatsPerBar}
               onChangeClickSubdivision={handleChangeClickSubdivision}
+              onChangePadHarmony={handleChangePadHarmony}
+              onChangePadStyle={handleChangePadStyle}
               onCreatePadSong={handleCreatePadSong}
+              padPacks={padPacks}
+              isImportingPack={isImportingPack}
+              onChangePadPack={handleChangePadPack}
+              onImportPadPack={importPackFromFolder}
+              onDeletePadPack={handleDeletePadPack}
               onSeekSeconds={handleSeekSeconds}
               onJumpSection={handleJumpSection}
               onCancelQueuedJump={handleCancelQueuedJump}
@@ -546,6 +578,7 @@ export default function App() {
             <LiveSetView
               project={currentProject}
               transport={transport}
+              padPacks={padPacks}
               setlistQueue={setlistQueue}
               setlistTransitionMode={setlistTransitionMode}
               onPlayPause={handlePlayPause}

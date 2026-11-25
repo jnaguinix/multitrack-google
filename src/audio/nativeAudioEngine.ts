@@ -64,6 +64,9 @@ export interface NativePlaybackSnapshot {
   padNote?: number;
   padGain?: number;
   padMonitor?: boolean;
+  padHarmony?: number;
+  padStyle?: number;
+  padPackId?: string | null;
   /** Picos reales medidos por el motor desde la consulta anterior. */
   meters?: NativeMetersSnapshot;
 }
@@ -635,6 +638,7 @@ export class NativeAudioEngine {
           // La mezcla de cada pista viaja con la carga: ninguna nace a ganancia 1 ni con el bus deducido del ID.
           trackControls: project.tracks.map(initialTrackControl),
           padConfig: padConfigFromProject(project),
+          padPackId: padOnly ? project.padPackId ?? null : null,
         });
 
         // El motor tiene ahora esta canción (aunque ya no sea la elegida): `loadedProjectId` dice la verdad y Play

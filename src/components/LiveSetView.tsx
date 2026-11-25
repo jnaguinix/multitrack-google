@@ -17,6 +17,7 @@ import { nativeAudioEngine } from '../audio/nativeAudioEngine';
 import { isDesktopApp } from '../utils/nativeDialog';
 import { drawSectionWaveBars, getSongWaveformPeaks } from '../utils/songWaveform';
 import { isPadOnlySong, noteIndexToLabel, parseKeyToNoteIndex, subdivisionBadge } from '../utils/padSong';
+import type { PadPackInfo } from '../utils/padPacks';
 import { PadStagePanel } from './PadStagePanel';
 
 /**
@@ -45,6 +46,7 @@ interface LiveSetViewProps {
   onToggleJumps: (enabled: boolean) => void;
   onChangeTransitionMode: (mode: SetlistTransitionMode) => void;
   onGoToSetlist: () => void;
+  padPacks?: PadPackInfo[];
 }
 
 const QUANTIZE_OPTIONS: { value: QuantizeMode; label: string; hint: string }[] = [
@@ -144,6 +146,7 @@ export const LiveSetView: React.FC<LiveSetViewProps> = ({
   onToggleJumps,
   onChangeTransitionMode,
   onGoToSetlist,
+  padPacks,
 }) => {
   const currentIdx = project ? setlistQueue.findIndex((s) => s.id === project.id) : -1;
   const nextSong =
@@ -236,7 +239,12 @@ export const LiveSetView: React.FC<LiveSetViewProps> = ({
           </header>
 
           {project && padOnly && (
-            <PadStagePanel mode="live" project={project} transport={transport} />
+            <PadStagePanel
+              mode="live"
+              project={project}
+              transport={transport}
+              activePack={project.padPackId ? (padPacks ?? []).find((p) => p.id === project.padPackId) ?? null : null}
+            />
           )}
 
           {project && !padOnly && (

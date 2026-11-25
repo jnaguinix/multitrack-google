@@ -1,6 +1,6 @@
 import { logAsyncError } from '../utils/asyncErrors';
 import { audioEngine as defaultAudioEngine } from '../audio/audioEngine';
-import { SongProject, QuantizeMode, SongSection } from '../types/project';
+import { SongProject, QuantizeMode, SongSection, PadHarmony, PadStyle } from '../types/project';
 import { DEFAULT_PAD_GAIN, isPadOnlySong } from '../utils/padSong';
 
 interface UseMixerActionsDeps {
@@ -66,6 +66,18 @@ export function useMixerActions({
 
   const handleTogglePadMonitor = () => {
     updateCurrentProject((p) => ({ ...p, padMonitor: !p.padMonitor }));
+  };
+
+  const handleChangePadHarmony = (padHarmony: PadHarmony) => {
+    updateCurrentProject((p) => ({ ...p, padHarmony }));
+  };
+
+  const handleChangePadStyle = (padStyle: PadStyle) => {
+    updateCurrentProject((p) => ({ ...p, padStyle }));
+  };
+
+  const handleChangePadPack = (padPackId: string | null) => {
+    updateCurrentProject((p) => ({ ...p, padPackId }));
   };
 
   const handleToggleTrackMute = (trackId: string) => {
@@ -184,6 +196,9 @@ export function useMixerActions({
     handleTogglePad,
     handleChangePadGain,
     handleTogglePadMonitor,
+    handleChangePadHarmony,
+    handleChangePadStyle,
+    handleChangePadPack,
     handleToggleTrackMute,
     handleToggleTrackSolo,
     handleToggleTrackMonitor,
